@@ -725,6 +725,15 @@
     }
   }
 
+  // Сообщаем нативу, является ли сотрудник водителем (me.isDriver из /api/state).
+  // Трекер геолокации нативный запускает ТОЛЬКО у водителей — для всех остальных
+  // местоположение не запрашивается.
+  function syncDriverToNative() {
+    if (window.AndroidBridge && typeof window.AndroidBridge.setDriver === "function") {
+      try { window.AndroidBridge.setDriver(!!state.isDriver); } catch (_) { /* натив недоступен */ }
+    }
+  }
+
   async function startWork() {
     if (state.phase === "working") return;
     // A finished day is closed: you cannot start (or "resume") it again today.
@@ -735,7 +744,9 @@
     }
     state.segments.push({ start: Date.now(), end: null, kind: "work", id: uid() });
     state.phase = "working";
-    syncWorkActiveToNative(true);
+    // Трекер запускается только у водителя (не-водители не шлют координаты).
+    syncDriverToNative();
+    if (state.isDriver) syncWorkActiveToNative(true);
     render();
     toast("Работа начата");
     postLog("начало работы");
@@ -5599,11 +5610,14 @@
       el.userChip.hidden = false;
     }
 
+    // Роль «водитель» одинакова на весь вход — сообщаем нативу однократно, чтобы
+    // не-водители ни при каких условиях не запрашивали геолокацию.
+    syncDriverToNative();
     // Синхронизируем с нативом фактический статус рабочего дня: если приложение
     // (или процесс Android) перезапустилось посреди дня, трекер геолокации должен
     // снова заработать — натив узнаёт, что день ещё активен. Если день завершён
     // (или не начат) — натив трекер не запускает.
-    syncWorkActiveToNative(state.phase === "working" || state.phase === "paused");
+    syncWorkActiveToNative(state.isDriver && (state.phase === "working" || state.phase === "paused"));
 
     // Show/hide the admin gear based on the real role from the server.
     el.settingsBtn.classList.toggle("hidden", !(state.isAdmin || state.isModerator));
