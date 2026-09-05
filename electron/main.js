@@ -146,9 +146,6 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // Постоянная partition: cookies и сессия шлюза (вход в личную учётку)
-      // сохраняются в userData и держатся между перезапусками приложения.
-      partition: "persist:biotime",
     },
   });
 
