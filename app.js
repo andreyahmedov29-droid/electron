@@ -1292,7 +1292,13 @@
       for (let o = 1; o <= daysInMonth; o += 1) {
         const dKey = `${y}-${String(m0 + 1).padStart(2, "0")}-${String(o).padStart(2, "0")}`;
         const wk = dayClosedWorkMs(st.id, dKey);
-        if (wk > 0) overMsVal += Math.max(0, wk - normDayMs);
+        // Переработка по тем же правилам, что и в расчёте ЗП (computeMonth /
+        // employeeSalaryCalc): в выходной день закрытый таймер пишется ВЕСЬ в
+        // подработку (без вычитания дневной нормы), в рабочий — сверх нормы.
+        if (wk > 0) {
+          if (isBizDay(y, m0, o)) overMsVal += Math.max(0, wk - normDayMs);
+          else overMsVal += wk;
+        }
       }
       // "Часы" follow the hours flag; "сумма" (money) follows its OWN flag, so a
       // group granted hours but not the money is not charged for overtime.
