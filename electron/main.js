@@ -146,6 +146,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Постоянная partition: cookies и сессия шлюза (вход в личную учётку)
+      // сохраняются в userData и держатся между перезапусками приложения.
+      partition: "persist:biotime",
     },
   });
 
@@ -185,32 +188,18 @@ function createWindow() {
   });
 }
 
-// В режиме A добавляет access-токен платформы (Authorization: Bearer) ко
-// ВСЕМ HTTP-запросам окна к адресу веб-версии. Без этого шлюз Black Hole
-// вернёт 401 и внешний клиент не увидит приложение.
+// В режиме A окно открывает веб-версию КАК ОБЫЧНЫЙ БРАУЗЕР — никакой общий
+// access-токен НЕ подставляется. Шлюз Black Hole сам проводит вход каждого
+// пользователя: открывает экран входа в личную учётку, выдаёт сессию и
+// запоминает её в userData. Так каждый входит под своей учёткой, и
+// `Authorization: Bearer vibe_app_local_...` (который шлюз не принимает и
+// отвечает BH_LOGIN_REQUIRED / malformed) больше не отправляется.
 function applyWebToken() {
-  if (!useWebMode || !ACCESS_TOKEN) {
-    console.warn("[web] Режим веб-версии активен, но BIOTIME_ACCESS_TOKEN не задан — "
-      + "шлюз вернёт 401. Задайте токен переменной окружения.");
-    return;
-  }
-  const ses = session.defaultSession;
-  try {
-    ses.webRequest.onBeforeSendHeaders((details, callback) => {
-      // Только запросы к нашей веб-версии (и его поддомены при переадресациях).
-      const url = details.url || "";
-      if (url.startsWith(WEB_APP_URL) || url.includes("vibecode.bitrix24.tech")) {
-        const h = Object.assign({}, details.requestHeaders);
-        h["Authorization"] = "Bearer " + ACCESS_TOKEN;
-        callback({ requestHeaders: h });
-      } else {
-        callback({});
-      }
-    });
-    console.log("[web] Токен доступа к веб-версии установлен.");
-  } catch (e) {
-    console.error("[web] Не удалось установить токен:", e && e.message ? e.message : e);
-  }
+  // Ничего не подставляем в заголовки: полагаемся на шлюзовую сессию.
+  // Сессию (cookies) шлюза сохраняем в persistent partition, чтобы вход
+  // не терялся между запусками приложения.
+  console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
+    + "кто войдёт в учётку — тот и используется.");
 }
 
 // Останавливает локальный сервер при завершении приложения.
