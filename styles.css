@@ -4875,6 +4875,14 @@ button.icon-btn svg,
   }
 }
 
+/* Мобильный: сумма за переработку (и другие метрики месяца) не должны
+   обрезаться по горизонтали — разрешаем перенос внутри плашки, чтобы
+   «за переработку 13 022 ₽» было видно целиком. */
+@media (max-width: 900px) {
+  .folder-stat { white-space: normal; }
+  .folder-stat .fs-label { white-space: normal; overflow-wrap: anywhere; }
+}
+
 /* --- Широкие десктопы / MacBook --- */
 @media (min-width: 1200px) {
   #page-timer .clock-card { max-width: 680px; }
