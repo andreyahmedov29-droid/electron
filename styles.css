@@ -216,31 +216,6 @@ body {
   text-transform: uppercase;
 }
 
-.app-version {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: var(--ink-dim);
-  background: rgba(152, 164, 173, 0.14);
-  border: 1px solid rgba(152, 164, 173, 0.28);
-  white-space: nowrap;
-  user-select: none;
-  line-height: 1;
-}
-.app-version[hidden] { display: none; }
-.app-version .app-version-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--amber-bright);
-  margin-right: 6px;
-  box-shadow: 0 0 6px rgba(233, 170, 74, 0.7);
-}
-
 .tabs {
   display: flex;
   gap: 4px;

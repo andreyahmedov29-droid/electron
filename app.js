@@ -672,7 +672,6 @@
     routeConfirmOk: $("routeConfirmOk"), routeConfirmCancel: $("routeConfirmCancel"), routeConfirmClose: $("routeConfirmClose"),
     updateModal: $("updateModal"), updateText: $("updateText"),
     updateClose: $("updateClose"), updateLater: $("updateLater"), updateDownload: $("updateDownload"),
-    appVersion: $("appVersion"),
     postponeModal: $("postponeModal"), postponeClose: $("postponeClose"), postponeTiles: $("postponeTiles"),
     adminClose: $("adminClose"), adminTabs: $("adminTabs"),
     staffCountNote: $("staffCountNote"), newStaffName: $("newStaffName"), addStaffBtn: $("addStaffBtn"),
@@ -5555,20 +5554,15 @@
   if (el.updateLater) el.updateLater.addEventListener("click", () => el.updateModal.close());
 
   // ---- Номер версии приложения (бейдж в шапке) ----
-  // Показываем актуальную версию из /api/app/update-info (единый источник —
-  // version.json). Тихо скрываем бейдж, если сервер пока не ответил.
+  // Загружаем актуальную версию из /api/app/update-info (единый источник —
+  // version.json) в кэш appVersionName для карточки «Учётная запись». Сам номер
+  // версии на главной странице больше не показывается (перенесён в профиль).
   function showAppVersion() {
-    const badge = el.appVersion;
-    if (!badge) return;
     api("/api/app/update-info")
       .then((info) => {
         const vn = info && info.versionName;
         if (!vn) return;
         appVersionName = String(vn).replace(/<[^>]*>/g, "");
-        badge.innerHTML =
-          '<span class="app-version-dot"></span>Версия ' +
-          appVersionName;
-        badge.hidden = false;
       })
       .catch(() => { /* нет сети — версию не показываем */ });
   }
