@@ -618,11 +618,13 @@
     const ratePerHour = rateMonthMs > 0 ? salary / (rateMonthMs / 3600000) : 0;
     const multiplier = currentMultiplier();
     const overEarn = (totalOverMs / 3600000) * ratePerHour * multiplier;
-    // Автокомпенсация: месячная норма = рабочие дни × дневная норма (9 ч).
-    // Если за месяц недобор, но в какие-то дни была переработка — она
-    // засчитывается в недобор (не оплачивается как переработка). Оплачивается
-    // только остаток переработки сверх месячной нормы. Оклад — полный.
-    const normMonthMs = bizDays * normDayMs;
+    // Автокомпенсация: месячная норма = 22 рабочих дня × 8 ч = 176 ч
+    // (по ТК — стандартная норма полного месяца; обед 1 ч не входит в часовую
+    // норму). Если за месяц недобор, но в какие-то дни была переработка — она
+    // засчитывается в недобор (не оплачивается). Оплачивается только остаток
+    // переработки сверх месячной нормы. Оклад — полный.
+    const NORM_MONTH_DAYS = 22;
+    const normMonthMs = NORM_MONTH_DAYS * RATE_BASE_HOURS * 3600000; // 176 ч
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
     const usedMs = Math.min(totalOverMs, deficitMs); // зачтено в недобор
     const effectiveOverMs = Math.max(0, totalOverMs - usedMs); // к оплате
@@ -632,7 +634,11 @@
     // "Заработано" = оклад + подработка + премия − неоплаченные дни; подработка считается ТОЛЬКО от оклада.
     const earned = salary + (effectiveOverMs / 3600000) * ratePerHour * multiplier + bonus + extraBonus - unpaidDeduct;
     const overRate = ratePerHour * multiplier;
-    return { year, m0, key: monthKey(year, m0), label: monthLabel(year, m0), isLast, bizDays, salary, bonus, extraBonus, totalWorkMs, totalOverMs, normMonthMs, deficitMs, usedMs, effectiveOverMs, ratePerHour, overEarn: (effectiveOverMs / 3600000) * ratePerHour * multiplier, earned, unpaidDays, unpaidDeduct, unpaidDates, dayRate, rows };
+    // Месяц считается завершённым (расчёт окончателен), когда наступило 1-е число
+    // следующего месяца — именно тогда для сотрудника показывается итог/блок
+    // автокомпенсации за этот месяц (например, по сентябрю — 1 октября).
+    const isComplete = new Date(year, m0 + 1, 1) <= new Date();
+    return { year, m0, key: monthKey(year, m0), label: monthLabel(year, m0), isLast, isComplete, bizDays, salary, bonus, extraBonus, totalWorkMs, totalOverMs, normMonthMs, deficitMs, usedMs, effectiveOverMs, ratePerHour, overEarn: (effectiveOverMs / 3600000) * ratePerHour * multiplier, earned, unpaidDays, unpaidDeduct, unpaidDates, dayRate, rows };
   }
 
   // ------------- DOM refs -------------
@@ -999,7 +1005,7 @@
         : "";
       // Отдельный блок: автокомпенсация переработки в месячный недобор.
       const compBadge = calc.usedMs > 0 ? "✓" : "i";
-      const compNote = (calc.deficitMs > 0 || calc.usedMs > 0)
+      const compNote = (calc.deficitMs > 0 || calc.usedMs > 0) && calc.isComplete
         ? `<div class="month-comp-note">
             <span class="mcn-badge" aria-hidden="true">${compBadge}</span>
             <div class="mcn-body">
@@ -1578,7 +1584,8 @@
     const normDayMs = state.norm * 3600000;
     const daysInMonth = new Date(year, m0 + 1, 0).getDate();
     const bizDays = businessDaysInMonth(year, m0);
-    const normMonthMs = bizDays * normDayMs;
+    const NORM_MONTH_DAYS = 22;
+    const normMonthMs = NORM_MONTH_DAYS * RATE_BASE_HOURS * 3600000; // 22 × 8 = 176 ч
     let totalWorkMs = 0;
     let totalOverMs = 0;
     let unpaidDays = 0;
