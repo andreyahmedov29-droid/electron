@@ -637,7 +637,7 @@
     settingsBtn: $("settingsBtn"), settingsModal: $("settingsModal"), toast: $("toast"), tabs: $("tabs"),
     userChip: $("userChip"), userName: $("userName"), userAvatar: $("userAvatar"),
     accountModal: $("accountModal"), accountClose: $("accountClose"),
-    acctName: $("acctName"), acctId: $("acctId"), acctIdKind: $("acctIdKind"), acctRole: $("acctRole"), acctAdmin: $("acctAdmin"), acctReason: $("acctReason"),
+    acctName: $("acctName"), acctId: $("acctId"), acctIdKind: $("acctIdKind"), acctRole: $("acctRole"), acctAdmin: $("acctAdmin"), acctVersion: $("acctVersion"), acctReason: $("acctReason"),
     monthList: $("monthList"), calSalaryChip: $("calSalaryChip"),
     pageTimer: $("page-timer"), pageCalendar: $("page-calendar"), pageLive: $("page-live"), pageReport: $("page-report"), pageDrivers: $("page-drivers"),
     pageMyRoutes: $("page-myroutes"), myroutesList: $("myroutesList"), myroutesCount: $("myroutesCount"), myroutesDateFilter: $("myroutesDateFilter"),
@@ -702,6 +702,9 @@
   };
 
   let toastTimer = null;
+  // Кэш актуальной версии приложения (из /api/app/update-info → version.json).
+  // Используется бейджем в шапке и карточкой «Учётная запись».
+  let appVersionName = "";
   // Активная подвкладка панели администратора — нужна, чтобы фоновое обновление
   // перерисовывало именно открытый экран (например «Время работы») без кнопки
   // «Обновить».
@@ -5457,6 +5460,21 @@
     el.acctRole.textContent = roleLabel;
     el.acctAdmin.textContent = d.isAdmin ? "Да" : "Нет";
     el.acctAdmin.style.color = d.isAdmin ? "var(--ok, #16a34a)" : "var(--danger, #dc2626)";
+    if (el.acctVersion) {
+      // Показываем актуальную версию приложения (единый источник — version.json,
+      // отдаёт /api/app/update-info). Если ещё не получена — дозапрашиваем.
+      if (appVersionName) {
+        el.acctVersion.textContent = appVersionName;
+      } else {
+        api("/api/app/update-info")
+          .then((info) => {
+            const vn = info && info.versionName;
+            if (!vn || !el.acctVersion) return;
+            el.acctVersion.textContent = String(vn).replace(/<[^>]*>/g, "");
+          })
+          .catch(() => { /* нет сети — версию не показываем */ });
+      }
+    }
     if (d.reason) {
       el.acctReason.hidden = false;
       el.acctReason.textContent = d.reason;
@@ -5546,9 +5564,10 @@
       .then((info) => {
         const vn = info && info.versionName;
         if (!vn) return;
+        appVersionName = String(vn).replace(/<[^>]*>/g, "");
         badge.innerHTML =
           '<span class="app-version-dot"></span>Версия ' +
-          String(vn).replace(/<[^>]*>/g, "");
+          appVersionName;
         badge.hidden = false;
       })
       .catch(() => { /* нет сети — версию не показываем */ });
