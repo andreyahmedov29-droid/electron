@@ -1704,12 +1704,40 @@ function dayKey(ts) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// ---- Производственный календарь РФ (серверная копия) ----
+// Рабочие дни месяца = пн–пт минус праздничные нерабочие будни, плюс
+// перенесённые рабочие субботы. Праздник, выпавший на вых., не отнимает день.
+const RUS_HOLIDAYS = {
+  0: [1, 2, 3, 4, 5, 6, 7, 8],  // новогодние каникулы + Рождество
+  1: [23],                       // День защитника Отечества
+  2: [8],                        // 8 Марта
+  3: [1, 2],                     // Праздник Весны и Труда
+  4: [9],                        // День Победы
+  5: [12],                       // День России
+  10: [4],                       // День народного единства
+};
+const RUS_SHIFTS = {
+  "2026-1":  { add: [3],  off: [9] },
+  "2026-12": { add: [],   off: [31] },
+  "2027-1":  { add: [2],  off: [] },
+  "2027-2":  { add: [20], off: [22] },
+  "2027-11": { add: [],   off: [5] },
+  "2027-12": { add: [],   off: [31] },
+};
 function businessDays(year, m0) {
   let count = 0;
   const days = new Date(year, m0 + 1, 0).getDate();
+  const shift = RUS_SHIFTS[`${year}-${m0 + 1}`] || { add: [], off: [] };
+  const holidays = RUS_HOLIDAYS[m0] || [];
   for (let d = 1; d <= days; d++) {
     const dow = new Date(year, m0, d).getDay();
-    if (dow >= 1 && dow <= 5) count++;
+    const isWeekend = dow === 0 || dow === 6;
+    const isHoliday = holidays.includes(d);
+    if (isWeekend && shift.add.includes(d)) { count++; continue; }
+    if (isWeekend) continue;
+    if (isHoliday && !shift.off.includes(d)) continue;
+    if (shift.off.includes(d)) continue;
+    count++;
   }
   return count;
 }
