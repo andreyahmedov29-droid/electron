@@ -238,6 +238,22 @@ function applyWebToken() {
   // Ничего не подставляем в заголовки: полагаемся на шлюзовую сессию.
   // Сессию (cookies) шлюза сохраняем в persistent partition, чтобы вход
   // не терялся между запусками приложения.
+  // Важно: шлюз Black Hole отвечает 401 (BH_LOGIN_REQUIRED) вместо экрана
+  // входа, если видит в User-Agent "Electron" — он считает запрос
+  // автоматизированным, а не браузером пользователя. Поэтому подменяем
+  // User-Agent окна на обычный Chrome (тот же, что в обычном браузере), чтобы
+  // шлюз повёл нас через экран входа и выдал cookie сессии.
+  try {
+    const s = session.fromPartition("persist:biotime");
+    // Обычный Chrome без метки Electron — гарантированно убирает все вхождения
+    // Electron/эмуляции из заголовка.
+    s.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    );
+    console.log("[web] User-Agent окна заменён на обычный Chrome (без Electron)");
+  } catch (err) {
+    console.error("[web] Не удалось подменить User-Agent:", err && (err.message || err));
+  }
   console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
     + "кто войдёт в учётку — тот и используется.");
 }
