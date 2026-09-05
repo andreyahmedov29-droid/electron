@@ -219,7 +219,8 @@ function createWindow() {
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
     if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
       const ua = (details.requestHeaders && details.requestHeaders["User-Agent"]) || "";
-      logWeb("ИСХОДЯЩИЙ User-Agent:", JSON.stringify(ua));
+      logWeb("ПЕРЕХВАТ onBeforeSendHeaders", details.method, details.url);
+      logWeb("  UA БЫЛО:", JSON.stringify(ua));
       // Принудительно заменяем User-Agent на обычный Chrome. Это ПЕРЕЗАПИСЬ
       // заголовка перед отправкой — надёжнее session.setUserAgent: тот мог не
       // примениться к окну, а здесь гарантированно уходит нужный UA (без
@@ -227,6 +228,7 @@ function createWindow() {
       details.requestHeaders["User-Agent"] =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
       details.requestHeaders["Sec-CH-UA"] = '"Chromium";v="126", "Google Chrome";v="126", "Not.A/Brand";v="8"';
+      logWeb("  UA СТАЛО:", JSON.stringify(details.requestHeaders["User-Agent"]));
     }
     callback({ requestHeaders: details.requestHeaders });
   });
