@@ -43,6 +43,17 @@ const WEB_APP_URL =
   (_cfg.appUrl && String(_cfg.appUrl)) ||
   "https://app-0cd4491f8939.vibecode.bitrix24.tech";
 const ACCESS_TOKEN = process.env.BIOTIME_ACCESS_TOKEN || (_cfg.accessToken || "");
+// Личный вход «под своей учёткой» (рекомендуется): окно ведёт себя как обычный
+// браузер, шлюз проводит вход каждого пользователя и запоминает ЕГО личную
+// сессию в userData. Общий access-токен при этом НЕ подставляется.
+//
+// Если нужно вернуть прежнее поведение (один общий токен на всех) — включите
+// запасной режим: поле "useSharedToken": true в biotime.config.json либо
+// переменную окружения BIOTIME_USE_SHARED_TOKEN=1. Это полезно на время, пока
+// личный вход не проверен на всех устройствах.
+const useSharedToken =
+  (process.env.BIOTIME_USE_SHARED_TOKEN === "1" || process.env.BIOTIME_USE_SHARED_TOKEN === "true") ||
+  _cfg.useSharedToken === true;
 // Имя принтера для прямой печати этикеток (без диалога). Если не задано —
 // печатаем на принтер по умолчанию Windows. Пропишите в biotime.config.json
 // поле "printerName": "HP...", чтобы печать шла всегда на нужный принтер.
@@ -185,10 +196,18 @@ function createWindow() {
   });
 }
 
-// В режиме A добавляет access-токен платформы (Authorization: Bearer) ко
-// ВСЕМ HTTP-запросам окна к адресу веб-версии. Без этого шлюз Black Hole
-// вернёт 401 и внешний клиент не увидит приложение.
+// В режиме A по умолчанию никакой токен НЕ подставляется: окно открывает
+// веб-версию как обычный браузер, и шлюз проводит личный вход каждого
+// пользователя (его сессия сохраняется в userData). Только при явно включённом
+// запасном режиме (useSharedToken) добавляем общий access-токен ко всем
+// запросам окна — так шлюз всегда видит одного субъекта.
 function applyWebToken() {
+  if (!useSharedToken) {
+    console.log("[web] Личный вход через шлюз (без общего токена). "
+      + "Каждый пользователь войдёт под своей учёткой. "
+      + "Запасной режим: BIOTIME_USE_SHARED_TOKEN=1 или useSharedToken:true в конфиге.");
+    return;
+  }
   if (!useWebMode || !ACCESS_TOKEN) {
     console.warn("[web] Режим веб-версии активен, но BIOTIME_ACCESS_TOKEN не задан — "
       + "шлюз вернёт 401. Задайте токен переменной окружения.");
