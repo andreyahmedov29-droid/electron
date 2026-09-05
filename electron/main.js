@@ -146,6 +146,12 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Постоянная partition: cookies и сессия шлюза (вход в личную учётку)
+      // сохраняются в userData и держатся между перезапусками приложения.
+      // Не путать с изолированной (persist: — постоянная, а не in-memory):
+      // без неё окно использует непостоянную defaultSession, вход теряется на
+      // каждом запуске и шлюз отвечает BH_LOGIN_REQUIRED при старте.
+      partition: "persist:biotime",
     },
   });
 
