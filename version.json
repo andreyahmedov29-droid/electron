@@ -1,5 +1,5 @@
 {
-  "versionCode": 7,
-  "versionName": "1.0.6",
-  "notes": "test"
+  "versionCode": 8,
+  "versionName": "1.0.7",
+  "notes": "Стабильная авторизация на Android после сворачивания/свайпов; логотип клиента и кнопка закрытия в оверлее сканирования; сборка desktop на Windows-раннере"
 }
