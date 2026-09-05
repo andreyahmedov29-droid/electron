@@ -2511,6 +2511,80 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 }
 
 /* ============================================================
+   Раздел «Отчёт» — переключатель «Табель» / «Расчёты ЗП»
+   ============================================================ */
+.report-subtabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 16px;
+}
+.report-subtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
+}
+.report-subtab:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+.report-subtab.active {
+  color: var(--amber-ink);
+  background: var(--amber);
+  border-color: transparent;
+  box-shadow: 0 8px 22px rgba(255, 171, 56, 0.28);
+}
+.report-subpanel { animation: subtab-in var(--t-med) var(--ease); }
+
+/* Карточки расчёта ЗП по сотрудникам */
+.salary-calc-list { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.salary-calc-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px 18px;
+  background: var(--panel-soft);
+}
+.salary-calc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.salary-calc-head strong { font-size: 15px; }
+.salary-calc-total { font-family: var(--font-mono); font-weight: 700; color: var(--amber-ink); }
+.salary-calc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 14px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+.salary-calc-grid b { color: var(--ink); font-family: var(--font-mono); }
+.salary-calc-expl {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+/* ============================================================
    Адаптивность раздела «Маршрутизация»
    ============================================================ */
 

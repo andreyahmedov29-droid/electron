@@ -200,6 +200,14 @@
           </div>
         </div>
 
+        <!-- Переключатель разделов отчёта: Табель / Расчёты ЗП -->
+        <div class="report-subtabs" role="tablist" aria-label="Разделы отчёта">
+          <button type="button" class="report-subtab active" data-rsub="timesheet" role="tab">Табель</button>
+          <button type="button" class="report-subtab" data-rsub="salary" role="tab">Расчёты ЗП</button>
+        </div>
+
+        <!-- Подпанель: Табель (существующая разметка) -->
+        <div class="report-subpanel" data-rsubpanel="timesheet" role="tabpanel">
         <div class="report-form" id="reportForm">
           <!-- Параметры периода -->
           <div class="report-controls">
@@ -254,6 +262,20 @@
             <table class="report-table" id="reportTable"></table>
           </div>
         </div>
+        </div><!-- /report-subpanel timesheet -->
+
+        <!-- Подпанель: Расчёты ЗП (по каждому сотруднику, кроме группы 'god') -->
+        <div class="report-subpanel" data-rsubpanel="salary" role="tabpanel" hidden>
+          <div class="report-form">
+            <div class="report-controls">
+              <label class="report-field">
+                <span class="report-field-label">Месяц расчёта ЗП</span>
+                <select id="salaryCalcMonth" class="select-input"></select>
+              </label>
+            </div>
+          </div>
+          <div class="salary-calc-list" id="salaryCalcList"></div>
+        </div><!-- /report-subpanel salary -->
       </section>
     </section>
 

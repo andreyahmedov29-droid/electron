@@ -666,6 +666,7 @@
     reportExportBtn: $("reportExportBtn"),
     reportWorkDays: $("reportWorkDays"), reportStaffCount: $("reportStaffCount"), reportTotalOver: $("reportTotalOver"),
     reportTableWrap: $("reportTableWrap"), reportTable: $("reportTable"),
+    salaryCalcMonth: $("salaryCalcMonth"), salaryCalcList: $("salaryCalcList"),
     statusModal: $("statusModal"), statusClose: $("statusClose"), statusWho: $("statusWho"),
     statusOptions: $("statusOptions"), statusClear: $("statusClear"),
     routeConfirmModal: $("routeConfirmModal"), routeConfirmText: $("routeConfirmText"),
@@ -1510,6 +1511,159 @@
     });
   }
 
+  // ------------- Расчёты ЗП (вкладка «Отчёт» → «Расчёты ЗП») -------------
+  // Считает зарплату каждого сотрудника (кроме группы «god») за выбранный месяц
+  // по правилу автокомпенсации:
+  //   месячная норма = рабочие дни месяца × 9 ч (8 по ТК + 1 обед);
+  //   если по итогу месяца недобор, но в какие-то дни была переработка — она
+  //   засчитывается в недобор (не оплачивается как переработка); доплачивается
+  //   только остаток переработки СВЕРХ месячной нормы. Оклад выплачивается
+  //   полностью всегда (автокомпенсация лишь убирает переработку из оплаты).
+  function isInGodGroup(staffId) {
+    return (state.groups || []).some(
+      (g) => /god/i.test(String(g.name || "")) && (g.memberIds || []).includes(staffId)
+    );
+  }
+
+  function renderSalaryCalcMonthSelect() {
+    if (!el.salaryCalcMonth) return;
+    if (el.salaryCalcMonth.options.length === 0) {
+      const months = monthRange();
+      if (months.length === 0) return;
+      [...months].reverse().forEach(({ year, month }) => {
+        const opt = document.createElement("option");
+        opt.value = monthKey(year, month);
+        opt.textContent = monthLabel(year, month);
+        el.salaryCalcMonth.appendChild(opt);
+      });
+    }
+    const now = new Date();
+    const cur = monthKey(now.getFullYear(), now.getMonth());
+    if (!el.salaryCalcMonth.value) {
+      if ([...el.salaryCalcMonth.options].some((o) => o.value === cur)) {
+        el.salaryCalcMonth.value = cur;
+      } else if (el.salaryCalcMonth.options.length) {
+        el.salaryCalcMonth.value = el.salaryCalcMonth.options[0].value;
+      }
+    }
+  }
+
+  // Расчёт зарплаты одного сотрудника за месяц (year, m0) с автокомпенсацией.
+  function employeeSalaryCalc(staffId, year, m0) {
+    const normDayMs = state.norm * 3600000;
+    const daysInMonth = new Date(year, m0 + 1, 0).getDate();
+    const bizDays = businessDaysInMonth(year, m0);
+    const normMonthMs = bizDays * normDayMs;
+    let totalWorkMs = 0;
+    let totalOverMs = 0;
+    let unpaidDays = 0;
+    for (let d = 1; d <= daysInMonth; d += 1) {
+      const key = `${year}-${String(m0 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      totalWorkMs += reportDayWorkMs(staffId, key);
+      // Переработка — только по закрытым дням (как в табеле).
+      const closed = dayClosedWorkMs(staffId, key);
+      if (closed > 0) totalOverMs += Math.max(0, closed - normDayMs);
+      // Неоплачиваемые статусы (НН/ДО) для этого сотрудника.
+      const rec = state.days[key];
+      const st = rec && rec.statuses ? rec.statuses[staffId] : undefined;
+      if (st === "НН" || st === "ДО") unpaidDays++;
+    }
+    const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
+    // Зачёт сверху вниз: переработка сначала закрывает месячный недобор.
+    const usedMs = Math.min(totalOverMs, deficitMs);
+    const effectiveOverMs = Math.max(0, totalOverMs - usedMs);
+    const st = state.staff.find((x) => String(x.id) === String(staffId));
+    const salary = st && st.salary != null ? st.salary : 50000;
+    const extraBonus = st && st.extraBonus != null ? st.extraBonus : 0;
+    const rateMonthH = bizDays * RATE_BASE_HOURS;
+    const ratePerHour = rateMonthH > 0 ? salary / rateMonthH : 0;
+    const multiplier = currentMultiplier();
+    const overEarn = (effectiveOverMs / 3600000) * ratePerHour * multiplier;
+    const dayRate = bizDays > 0 ? salary / bizDays : 0;
+    const unpaidDeduct = unpaidDays * dayRate;
+    const earned = salary + extraBonus + overEarn - unpaidDeduct;
+    return {
+      id: staffId,
+      name: st ? st.name : "—",
+      bizDays, normMonthMs, totalWorkMs, totalOverMs,
+      deficitMs, usedMs, effectiveOverMs,
+      salary, extraBonus, ratePerHour, overEarn, earned,
+      unpaidDays, unpaidDeduct, dayRate,
+    };
+  }
+
+  function fmtCalcHours(ms) {
+    const totalMin = Math.round(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const min = totalMin % 60;
+    return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  }
+
+  function fmtCalcMoney(a) { return `${Math.round(a).toLocaleString("ru-RU")} ₽`; }
+
+  function buildSalaryExplanation(r) {
+    const hs = fmtCalcHours;
+    const parts = [];
+    parts.push(`Норма месяца: ${r.bizDays} раб. дн. × ${state.norm} ч = ${hs(r.normMonthMs)}.`);
+    if (r.deficitMs > 0) {
+      parts.push(`Отработано ${hs(r.totalWorkMs)} — недобор ${hs(r.deficitMs)}.`);
+      if (r.usedMs > 0) {
+        parts.push(`Переработка ${hs(r.totalOverMs)}, из них ${hs(r.usedMs)} засчитаны в недобор (не оплачиваются), к оплате ${hs(r.effectiveOverMs)}.`);
+      } else {
+        parts.push(`Переработки нет — недобор ${hs(r.deficitMs)} остаётся некомпенсированным.`);
+      }
+    } else if (r.totalOverMs > 0) {
+      parts.push(`Недобора нет, переработка ${hs(r.totalOverMs)} — вся к оплате.`);
+    } else {
+      parts.push(`Недобора и переработки нет.`);
+    }
+    parts.push(`Оклад выплачивается полностью.`);
+    const overPaid = r.effectiveOverMs > 0 ? r.overEarn : 0;
+    parts.push(`Итог: ${fmtCalcMoney(r.earned)} (оклад ${fmtCalcMoney(r.salary)}${r.extraBonus ? ` + надбавка ${fmtCalcMoney(r.extraBonus)}` : ""} + переработка к оплате ${fmtCalcMoney(overPaid)}${r.unpaidDeduct ? ` − неоплаченные дни ${fmtCalcMoney(r.unpaidDeduct)}` : ""}).`);
+    return parts.join(" ");
+  }
+
+  function renderSalaryCalc() {
+    renderSalaryCalcMonthSelect();
+    const val = el.salaryCalcMonth.value;
+    if (!val || !el.salaryCalcList) return;
+    const [y, m] = val.split("-").map(Number);
+    const m0 = m - 1;
+    const hs = fmtCalcHours;
+
+    const calcRows = state.staff
+      .filter((s) => !isInGodGroup(s.id))
+      .map((s) => employeeSalaryCalc(s.id, y, m0))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+
+    const list = el.salaryCalcList;
+    if (calcRows.length === 0) {
+      list.innerHTML = `<div class="salary-calc-none">Нет сотрудников для расчёта.</div>`;
+      return;
+    }
+    list.innerHTML = calcRows.map((r) => `
+      <article class="salary-calc-card">
+        <header class="salary-calc-head">
+          <strong>${escapeHtml(r.name)}</strong>
+          <span class="salary-calc-total">Зарплата: ${fmtCalcMoney(r.earned)}</span>
+        </header>
+        <div class="salary-calc-grid">
+          <div>Отработано: <b>${hs(r.totalWorkMs)}</b></div>
+          <div>Норма месяца: <b>${hs(r.normMonthMs)}</b></div>
+          <div>Недобор: <b>${hs(r.deficitMs)}</b></div>
+          <div>Переработка (суммарно): <b>${hs(r.totalOverMs)}</b></div>
+          <div>Зачтено в недобор: <b>${hs(r.usedMs)}</b></div>
+          <div>Переработка к оплате: <b>${hs(r.effectiveOverMs)}</b></div>
+          <div>Оклад: <b>${fmtCalcMoney(r.salary)}</b></div>
+          ${r.extraBonus ? `<div>Надбавка: <b>${fmtCalcMoney(r.extraBonus)}</b></div>` : ""}
+          ${r.unpaidDays ? `<div>Не оплачены (${r.unpaidDays} дн.): <b>−${fmtCalcMoney(r.unpaidDeduct)}</b></div>` : ""}
+          <div>Переработка к оплате, ₽: <b>${fmtCalcMoney(r.overEarn)}</b></div>
+          <div>Ставка/час: <b>${fmtCalcMoney(r.ratePerHour)}</b></div>
+        </div>
+        <p class="salary-calc-expl">${escapeHtml(buildSalaryExplanation(r))}</p>
+      </article>`).join("");
+  }
+
   // ------------- Tabs -------------
   function switchTab(name) {
     // Запоминаем активную вкладку, чтобы после перезагрузки страницы остаться
@@ -1537,7 +1691,7 @@
     el.tabs.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
     if (name === "calendar") renderCalendar();
     if (name === "live") { loadLive(); startLivePolling(); } else { stopLivePolling(); }
-    if (name === "report") renderReport();
+    if (name === "report") switchReportSubtab(state.reportSubtab || "timesheet");
     if (name === "drivers") renderDrivers();
     if (name === "myroutes") { renderMyRoutes(); startMyRoutesPolling(); } else { stopMyRoutesPolling(); }
     if (name === "shipment") loadShipments();
@@ -5366,6 +5520,22 @@
   });
   el.reportMonth.addEventListener("change", () => { state.reportMonthKey = el.reportMonth.value; renderReport(); });
   el.reportShowOver.addEventListener("change", renderReport);
+  // Переключение разделов вкладки «Отчёт» (Табель / Расчёты ЗП).
+  function switchReportSubtab(name) {
+    state.reportSubtab = name;
+    document.querySelectorAll("#page-report .report-subtab").forEach((b) =>
+      b.classList.toggle("active", b.dataset.rsub === name)
+    );
+    document.querySelectorAll("#page-report .report-subpanel").forEach((p) =>
+      p.hidden = p.dataset.rsubpanel !== name
+    );
+    if (name === "salary") renderSalaryCalc();
+    else renderReport();
+  }
+  document.querySelectorAll("#page-report .report-subtab").forEach((b) => {
+    b.addEventListener("click", () => switchReportSubtab(b.dataset.rsub));
+  });
+  if (el.salaryCalcMonth) el.salaryCalcMonth.addEventListener("change", renderSalaryCalc);
   // Download the timesheet for the selected month as an .xlsx file (admin).
   el.reportExportBtn.addEventListener("click", async () => {
     const month = el.reportMonth.value;
