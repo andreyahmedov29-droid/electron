@@ -5535,3 +5535,42 @@ button.icon-btn svg,
   font-size: 13px;
   color: var(--ink-dim);
 }
+.scan-overlay-inner { position: relative; }
+.scan-overlay-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink-dim);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.scan-overlay-close:hover { background: rgba(255, 255, 255, 0.16); color: var(--ink); }
+.scan-overlay-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.scan-overlay-logo[hidden] { display: none; }
+.scan-overlay-logo img {
+  max-width: 140px;
+  max-height: 80px;
+  object-fit: contain;
+  border-radius: 10px;
+}
+.scan-overlay-logo-text {
+  font-size: 42px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  color: var(--amber-bright);
+  line-height: 1;
+}

@@ -25,7 +25,11 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Собираем Windows-установщик (NSIS) на Windows-раннере: electron-builder
+    # для цели --win требует Wine только при сборке на Linux, а на windows-latest
+    # NSIS-инсталлятор собирается нативно, без Wine. Это избавляет от ошибки
+    # APP_BUILDER_CANNOT_EXECUTE («требуется wine») на ubuntu-раннере.
+    runs-on: windows-latest
     permissions:
       contents: write # нужен для публикации Release системным GITHUB_TOKEN
 

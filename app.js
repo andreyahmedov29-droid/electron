@@ -690,7 +690,7 @@
     printModal: $("printModal"), printClientSelect: $("printClientSelect"),
     printPlacesQty: $("printPlacesQty"), printConfirm: $("printConfirm"),
     printCancel: $("printCancel"), printClose: $("printClose"), printArea: $("printArea"),
-    scanLoadBtn: $("scanLoadBtn"),
+    scanLoadBtn: $("scanLoadBtn"), scanOverlayClose: $("scanOverlayClose"),
     printScanStatus: $("printScanStatus"), printLabelsList: $("printLabelsList"),
     multiplierVal: $("multiplierVal"), multiplierFrom: $("multiplierFrom"), multiplierTo: $("multiplierTo"),
     multiplierStatus: $("multiplierStatus"), normVal: $("normVal"), paramsSave: $("paramsSave"),
@@ -2603,25 +2603,66 @@
     return {
       wrap: document.getElementById("scanOverlay"),
       client: document.getElementById("scanOverlayClient"),
+      logo: document.getElementById("scanOverlayLogo"),
       done: document.getElementById("scanOverlayDone"),
       need: document.getElementById("scanOverlayNeed"),
       note: document.getElementById("scanOverlayNote"),
     };
   }
 
-  // Имя текущего клиента в окне «Печать этикеток» (или у водителя — из маршрута).
-  function scanClientName() {
+  // Данные текущего клиента окна «Печать этикеток» (или у водителя — из маршрута):
+  // имя, адрес и логотип (logo — изображение, logoText — буквенная аббревиатура).
+  // Логотип нужен, чтобы показывать бренд клиента в оверлее прогресса (как «AVI»
+  // у Авилона). Если логотипа нет — оверлей показывает имя + адрес как раньше.
+  function scanClientInfo() {
+    const info = { name: "—", address: "", logo: "", logoText: "" };
     const sel = el.printClientSelect;
     if (sel && sel.selectedOptions && sel.selectedOptions[0]) {
-      return sel.selectedOptions[0].textContent || "—";
+      info.name = sel.selectedOptions[0].textContent || "—";
     }
-    return "—";
+    // Достаём «сырого» клиента из кэша отгрузок — там есть logo/logoText/address.
+    try {
+      const r = shipmentsCache.find((x) => String(x.id) === String(printRouteId));
+      const cl = r && Array.isArray(r.clients) ? r.clients[currentPrintClientIndex()] : null;
+      if (cl) {
+        if (cl.client) info.name = cl.client;
+        if (cl.address) info.address = cl.address;
+        if (cl.logo) info.logo = cl.logo;
+        if (cl.logoText) info.logoText = String(cl.logoText);
+      }
+    } catch (e) { /* не критично */ }
+    return info;
+  }
+
+  // Имя текущего клиента в окне «Печать этикеток» (или у водителя — из маршрута)
+  // для передачи в нативный сканер.
+  function scanClientName() {
+    return scanClientInfo().name;
   }
 
   function showScanOverlay(prog, note) {
     const o = scanOverlay();
     if (!o.wrap) return;
-    o.client.textContent = scanClientName();
+    const info = scanClientInfo();
+    // Логотип клиента: если задано изображение (logo) — показываем картинку;
+    // иначе если задана буквенная аббревиатура (logoText, напр. «AVI») — блок
+    // с текстом. Если логотипа нет — как раньше: имя и адрес текстом.
+    if (info.logo || info.logoText) {
+      if (o.logo) {
+        if (info.logo) {
+          o.logo.innerHTML = `<img src="${info.logo}" alt="лого" crossorigin="anonymous" />`;
+        } else {
+          o.logo.innerHTML = `<div class="scan-overlay-logo-text">${escapeHtml(info.logoText)}</div>`;
+        }
+        o.logo.hidden = false;
+      }
+      if (o.client) {
+        o.client.textContent = info.name + (info.address ? " — " + info.address : "");
+      }
+    } else {
+      if (o.logo) o.logo.hidden = true;
+      if (o.client) o.client.textContent = info.name + (info.address ? " — " + info.address : "");
+    }
     o.done.textContent = String(prog.done || 0);
     o.need.textContent = String(prog.need || 0);
     o.note.textContent = note || "";
@@ -2629,6 +2670,7 @@
   }
 
   function hideScanOverlay() {
+    scanAuto = false;
     const o = scanOverlay();
     if (o.wrap) o.wrap.hidden = true;
   }
