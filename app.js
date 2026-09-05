@@ -618,13 +618,21 @@
     const ratePerHour = rateMonthMs > 0 ? salary / (rateMonthMs / 3600000) : 0;
     const multiplier = currentMultiplier();
     const overEarn = (totalOverMs / 3600000) * ratePerHour * multiplier;
+    // Автокомпенсация: месячная норма = рабочие дни × дневная норма (9 ч).
+    // Если за месяц недобор, но в какие-то дни была переработка — она
+    // засчитывается в недобор (не оплачивается как переработка). Оплачивается
+    // только остаток переработки сверх месячной нормы. Оклад — полный.
+    const normMonthMs = bizDays * normDayMs;
+    const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
+    const usedMs = Math.min(totalOverMs, deficitMs); // зачтено в недобор
+    const effectiveOverMs = Math.max(0, totalOverMs - usedMs); // к оплате
     // Unpaid days (НН/ДО) are not paid: deduct their share of the monthly salary.
     const dayRate = bizDays > 0 ? salary / bizDays : 0;
     const unpaidDeduct = unpaidDays * dayRate;
     // "Заработано" = оклад + подработка + премия − неоплаченные дни; подработка считается ТОЛЬКО от оклада.
-    const earned = salary + overEarn + bonus + extraBonus - unpaidDeduct;
+    const earned = salary + (effectiveOverMs / 3600000) * ratePerHour * multiplier + bonus + extraBonus - unpaidDeduct;
     const overRate = ratePerHour * multiplier;
-    return { year, m0, key: monthKey(year, m0), label: monthLabel(year, m0), isLast, bizDays, salary, bonus, extraBonus, totalWorkMs, totalOverMs, ratePerHour, overEarn, earned, unpaidDays, unpaidDeduct, unpaidDates, dayRate, rows };
+    return { year, m0, key: monthKey(year, m0), label: monthLabel(year, m0), isLast, bizDays, salary, bonus, extraBonus, totalWorkMs, totalOverMs, normMonthMs, deficitMs, usedMs, effectiveOverMs, ratePerHour, overEarn: (effectiveOverMs / 3600000) * ratePerHour * multiplier, earned, unpaidDays, unpaidDeduct, unpaidDates, dayRate, rows };
   }
 
   // ------------- DOM refs -------------
@@ -989,8 +997,24 @@
             </div>
           </div>`
         : "";
+      // Отдельный блок: автокомпенсация переработки в месячный недобор.
+      const compBadge = calc.usedMs > 0 ? "✓" : "i";
+      const compNote = (calc.deficitMs > 0 || calc.usedMs > 0)
+        ? `<div class="month-comp-note">
+            <span class="mcn-badge" aria-hidden="true">${compBadge}</span>
+            <div class="mcn-body">
+              <div class="mcn-title">${calc.usedMs > 0 ? "Переработка засчитана в недобор" : "Недобор по месячной норме"}</div>
+              <div class="mcn-text">Норма месяца: ${calc.bizDays} раб. дн. × ${state.norm} ч = ${fmtHours(calc.normMonthMs)}.
+                Отработано ${fmtHours(calc.totalWorkMs)} — недобор ${fmtHours(calc.deficitMs)}.
+                Переработка суммарно ${fmtHours(calc.totalOverMs)}${calc.usedMs > 0
+                  ? `, из них ${fmtHours(calc.usedMs)} засчитаны в недобор (не оплачиваются), к оплате ${fmtHours(calc.effectiveOverMs)}`
+                  : ", переработки нет — недобор не компенсируется"}.
+                Оклад выплачен полностью: ${fmtMoney(calc.salary)}.</div>
+            </div>
+          </div>`
+        : "";
       if (!hasRows) {
-        inner.innerHTML = unpaidNote + `<div class="month-empty">${calc.unpaidDays > 0 ? "Отработанных дней не было, а неоплачиваемые дни учтены выше." : "Нет отработанных дней в этом месяце."}</div>`;
+        inner.innerHTML = compNote + unpaidNote + `<div class="month-empty">${calc.unpaidDays > 0 ? "Отработанных дней не было, а неоплачиваемые дни учтены выше." : "Нет отработанных дней в этом месяце."}</div>`;
       } else {
         const rowsHtml = calc.rows.map((r) => {
           const dateStr = r.date.toLocaleDateString("ru-RU", { day: "numeric", month: "short", weekday: "short" });
@@ -1012,6 +1036,7 @@
         wrap.className = "month-table-wrap";
         wrap.innerHTML = tbody;
         inner.appendChild(wrap);
+        if (compNote) inner.insertAdjacentHTML("afterbegin", compNote);
         if (unpaidNote) inner.insertAdjacentHTML("afterbegin", unpaidNote);
       }
       body.appendChild(inner);

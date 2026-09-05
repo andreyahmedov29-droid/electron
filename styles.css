@@ -4342,6 +4342,53 @@ dialog.admin-modal[open] {
   color: var(--red-soft);
 }
 
+/* Блок пояснения «Переработка засчитана в недобор» (вкладка «Зарплата») */
+.month-comp-note {
+  margin: 6px 0 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 171, 56, 0.32);
+  background:
+    linear-gradient(180deg, rgba(255, 171, 56, 0.09), rgba(255, 171, 56, 0.04)),
+    var(--panel-soft);
+  color: var(--amber-ink);
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+.mcn-badge {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 15px;
+  color: #fff;
+  background: linear-gradient(155deg, var(--amber), #e09a2a);
+  box-shadow: 0 4px 10px rgba(255, 171, 56, 0.35);
+}
+.mcn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.mcn-title {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--amber-ink);
+  opacity: 0.85;
+}
+.mcn-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink);
+  opacity: 0.95;
+}
+
 /* ==========================================================================
    Адаптация под iOS / macOS (Safari, WebKit)
    ========================================================================== */
