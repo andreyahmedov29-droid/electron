@@ -41,7 +41,7 @@ try {
 const WEB_APP_URL =
   process.env.BIOTIME_APP_URL ||
   (_cfg.appUrl && String(_cfg.appUrl)) ||
-  "https://app-0cd4491f8939.vibecode.bitrix24.tech";
+  "https://app-22aae7dc61f1.vibecode.bitrix24.tech";
 const ACCESS_TOKEN = process.env.BIOTIME_ACCESS_TOKEN || (_cfg.accessToken || "");
 // Личный вход «под своей учёткой» (рекомендуется): окно ведёт себя как обычный
 // браузер, шлюз проводит вход каждого пользователя и запоминает ЕГО личную
