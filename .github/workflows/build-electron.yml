@@ -72,3 +72,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run publish
+
+      # electron-builder иногда оставляет release в статусе «черновик» (draft),
+      # если прерывается загрузка артефактов (Setup exe / latest.yml). GitHub
+      # не считает черновики «Последней версией», поэтому автообновление
+      # (electron-updater по latest.yml) их не видит. Явно снимаем черновик и
+      # помечаем релиз как Latest, чтобы новая версия публиковалась сама.
+      - name: Опубликовать релиз (снять черновик)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./version.json').versionName.replace(/^v/,'')")
+          echo "Публикуем релиз v$VERSION"
+          gh release edit "v$VERSION" --draft=false --latest 2>/dev/null || \
+            gh release edit "v$VERSION" --draft=false
