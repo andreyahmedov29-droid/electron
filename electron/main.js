@@ -216,6 +216,13 @@ function createWindow() {
   });
   // Снимаем Set-Cookie при ответе шлюза на главный запрос (без разбора значений).
   const ses = mainWindow.webContents.session;
+  ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
+      const ua = (details.requestHeaders && details.requestHeaders["User-Agent"]) || "";
+      logWeb("ИСХОДЯЩИЙ User-Agent:", JSON.stringify(ua));
+    }
+    callback({ requestHeaders: details.requestHeaders });
+  });
   ses.webRequest.onHeadersReceived((details) => {
     if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
       const sc = (details.responseHeaders && details.responseHeaders["set-cookie"]) || [];
