@@ -43,6 +43,15 @@ const WEB_APP_URL =
   (_cfg.appUrl && String(_cfg.appUrl)) ||
   "https://app-22aae7dc61f1.vibecode.bitrix24.tech";
 const ACCESS_TOKEN = process.env.BIOTIME_ACCESS_TOKEN || (_cfg.accessToken || "");
+// Личный вход через шлюз (по умолчанию): окно ведёт себя как обычный браузер,
+// шлюз Black Hole при отсутствии сессии показывает экран «Защищённый сервер /
+// Войти через Bitrix24», пользователь входит, и сессия сохраняется в userData.
+// Общий access-токен при этом НЕ подставляется. Режим общего токена включается
+// только явно: "useSharedToken": true в biotime.config.json либо
+// BIOTIME_USE_SHARED_TOKEN=1. 
+const useSharedToken =
+  (process.env.BIOTIME_USE_SHARED_TOKEN === "1" || process.env.BIOTIME_USE_SHARED_TOKEN === "true") ||
+  _cfg.useSharedToken === true;
 // Имя принтера для прямой печати этикеток (без диалога). Если не задано —
 // печатаем на принтер по умолчанию Windows. Пропишите в biotime.config.json
 // поле "printerName": "HP...", чтобы печать шла всегда на нужный принтер.
@@ -216,33 +225,24 @@ function createWindow() {
   });
   // Снимаем Set-Cookie при ответе шлюза на главный запрос (без разбора значений).
   const ses = mainWindow.webContents.session;
-  ses.webRequest.onBeforeSendHeaders((details, callback) => {
-    const isWeb = /vibecode\.bitrix24\.tech/.test(details.url || "");
-    if (isWeb) {
-      const ua = (details.requestHeaders && details.requestHeaders["User-Agent"]) || "";
-      logWeb("ПЕРЕХВАТ onBeforeSendHeaders", details.method, details.url);
-      logWeb("  UA БЫЛО:", JSON.stringify(ua));
-      // Принудительно заменяем User-Agent на обычный Chrome. Это ПЕРЕЗАПИСЬ
-      // заголовка перед отправкой — надёжнее session.setUserAgent: тот мог не
-      // примениться к окну, а здесь гарантированно уходит нужный UA (без
-      // метки Electron/biotime-desktop, по которой шлюз отклоняет запрос 401).
-      details.requestHeaders["User-Agent"] =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-      details.requestHeaders["Sec-CH-UA"] = '"Chromium";v="126", "Google Chrome";v="126", "Not.A/Brand";v="8"';
-      logWeb("  UA СТАЛО:", JSON.stringify(details.requestHeaders["User-Agent"]));
-      // Маркер доступа, который пропускает шлюз Black Hole. Без него шлюз
-      // отвечает 401 (BH_LOGIN_REQUIRED) и окно никогда не доходит до экрана
-      // входа. Токен (BIOTIME_ACCESS_TOKEN / biotime.config.json) в код/сборку
-      // не включается.
-      if (ACCESS_TOKEN) {
-        details.requestHeaders["Authorization"] = "Bearer " + ACCESS_TOKEN;
-        logWeb("  Authorization подставлен:", ACCESS_TOKEN.slice(0, 12) + "…");
+  // ЧИСТЫЙ режим: НЕ трогаем заголовки запроса (ни UA, ни Authorization).
+  // Окно ведёт себя как обычный браузер, чтобы шлюз Black Hole при отсутствии
+  // сессии показал экран «Защищённый сервер / Войти через Bitrix24» (200 с
+  // HTML), а не отвечал 401 XML. В режиме общего токена (useSharedToken)
+  // Authorization подставляется только тогда — см. applyWebToken.
+  if (useSharedToken) {
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      const url = details.url || "";
+      if (url.startsWith(WEB_APP_URL) || url.includes("vibecode.bitrix24.tech")) {
+        const h = Object.assign({}, details.requestHeaders);
+        if (ACCESS_TOKEN) h["Authorization"] = "Bearer " + ACCESS_TOKEN;
+        logWeb("режим общего токена: Authorization подставлен");
+        callback({ requestHeaders: h });
       } else {
-        logWeb("  Authorization: ТОКЕН НЕ ЗАДАН");
+        callback({});
       }
-    }
-    callback({ requestHeaders: details.requestHeaders });
-  });
+    });
+  }
   ses.webRequest.onHeadersReceived((details) => {
     if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
       const sc = (details.responseHeaders && details.responseHeaders["set-cookie"]) || [];
@@ -260,25 +260,26 @@ function createWindow() {
   });
 }
 
-// В режиме A окно открывает веб-версию КАК ОБЫЧНЫЙ БРАУЗЕР — никакой общий
-// access-токен НЕ подставляется. Шлюз Black Hole сам проводит вход каждого
-// пользователя: открывает экран входа в личную учётку, выдаёт сессию и
-// запоминает её в userData. Так каждый входит под своей учёткой, и
-// `Authorization: Bearer vibe_app_local_...` (который шлюз не принимает и
-// отвечает BH_LOGIN_REQUIRED / malformed) больше не отправляется.
+// В режиме A окно открывает веб-версию КАК ОБЫЧНЫЙ БРАУЗЕР. По умолчанию
+// (личный вход) никакой access-токен НЕ подставляется: шлюз Black Hole при
+// отсутствии сессии показывает экран «Защищённый сервер / Войти через
+// Bitrix24», пользователь входит, сессия сохраняется в userData (persist).
+// Общий токен (`Authorization: Bearer vibe_app_local_...`) — только при явно
+// включённом useSharedToken, и подставляется в перехвате внутри createWindow.
 function applyWebToken() {
-  // Токен доступа (Authorization: Bearer) подставляется в перехвате
-  // webRequest сессии окна внутри createWindow — там, где есть ссылка на
-  // реальную сессию (persist:biotime). Здесь только проверяем его наличие.
-  // Маркер доступа — это то, что пропускает шлюз Black Hole: без него шлюз
-  // отвечает 401 (BH_LOGIN_REQUIRED). Токен (BIOTIME_ACCESS_TOKEN /
-  // biotime.config.json) в код/сборку не включается.
-  if (!useWebMode || !ACCESS_TOKEN) {
-    console.warn("[web] Режим веб-версии активен, но BIOTIME_ACCESS_TOKEN не задан — "
-      + "шлюз вернёт 401. Задайте токен переменной окружения или в конфиге.");
-    return;
+  if (!useWebMode) return;
+  if (useSharedToken) {
+    if (!ACCESS_TOKEN) {
+      console.warn("[web] Режим общего токена включён (useSharedToken=true), "
+        + "но BIOTIME_ACCESS_TOKEN не задан — шлюз вернёт 401. "
+        + "Задайте токен в переменной окружения или в конфиге.");
+    } else {
+      console.log("[web] Режим общего токена: Authorization: Bearer будет подставляться.");
+    }
+  } else {
+    console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
+      + "шлюз покажет экран входа, кто войдёт в учётку — тот и используется.");
   }
-  console.log("[web] Токен доступа к веб-версии задан, подставляется в перехвате окна.");
 }
 
 // Останавливает локальный сервер при завершении приложения.
