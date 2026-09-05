@@ -217,7 +217,8 @@ function createWindow() {
   // Снимаем Set-Cookie при ответе шлюза на главный запрос (без разбора значений).
   const ses = mainWindow.webContents.session;
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
-    if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
+    const isWeb = /vibecode\.bitrix24\.tech/.test(details.url || "");
+    if (isWeb) {
       const ua = (details.requestHeaders && details.requestHeaders["User-Agent"]) || "";
       logWeb("ПЕРЕХВАТ onBeforeSendHeaders", details.method, details.url);
       logWeb("  UA БЫЛО:", JSON.stringify(ua));
@@ -229,6 +230,16 @@ function createWindow() {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
       details.requestHeaders["Sec-CH-UA"] = '"Chromium";v="126", "Google Chrome";v="126", "Not.A/Brand";v="8"';
       logWeb("  UA СТАЛО:", JSON.stringify(details.requestHeaders["User-Agent"]));
+      // Маркер доступа, который пропускает шлюз Black Hole. Без него шлюз
+      // отвечает 401 (BH_LOGIN_REQUIRED) и окно никогда не доходит до экрана
+      // входа. Токен (BIOTIME_ACCESS_TOKEN / biotime.config.json) в код/сборку
+      // не включается.
+      if (ACCESS_TOKEN) {
+        details.requestHeaders["Authorization"] = "Bearer " + ACCESS_TOKEN;
+        logWeb("  Authorization подставлен:", ACCESS_TOKEN.slice(0, 12) + "…");
+      } else {
+        logWeb("  Authorization: ТОКЕН НЕ ЗАДАН");
+      }
     }
     callback({ requestHeaders: details.requestHeaders });
   });
@@ -256,27 +267,18 @@ function createWindow() {
 // `Authorization: Bearer vibe_app_local_...` (который шлюз не принимает и
 // отвечает BH_LOGIN_REQUIRED / malformed) больше не отправляется.
 function applyWebToken() {
-  // Ничего не подставляем в заголовки: полагаемся на шлюзовую сессию.
-  // Сессию (cookies) шлюза сохраняем в persistent partition, чтобы вход
-  // не терялся между запусками приложения.
-  // Важно: шлюз Black Hole отвечает 401 (BH_LOGIN_REQUIRED) вместо экрана
-  // входа, если видит в User-Agent "Electron" — он считает запрос
-  // автоматизированным, а не браузером пользователя. Поэтому подменяем
-  // User-Agent окна на обычный Chrome (тот же, что в обычном браузере), чтобы
-  // шлюз повёл нас через экран входа и выдал cookie сессии.
-  try {
-    const s = session.fromPartition("persist:biotime");
-    // Обычный Chrome без метки Electron — гарантированно убирает все вхождения
-    // Electron/эмуляции из заголовка.
-    s.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-    );
-    console.log("[web] User-Agent окна заменён на обычный Chrome (без Electron)");
-  } catch (err) {
-    console.error("[web] Не удалось подменить User-Agent:", err && (err.message || err));
+  // Токен доступа (Authorization: Bearer) подставляется в перехвате
+  // webRequest сессии окна внутри createWindow — там, где есть ссылка на
+  // реальную сессию (persist:biotime). Здесь только проверяем его наличие.
+  // Маркер доступа — это то, что пропускает шлюз Black Hole: без него шлюз
+  // отвечает 401 (BH_LOGIN_REQUIRED). Токен (BIOTIME_ACCESS_TOKEN /
+  // biotime.config.json) в код/сборку не включается.
+  if (!useWebMode || !ACCESS_TOKEN) {
+    console.warn("[web] Режим веб-версии активен, но BIOTIME_ACCESS_TOKEN не задан — "
+      + "шлюз вернёт 401. Задайте токен переменной окружения или в конфиге.");
+    return;
   }
-  console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
-    + "кто войдёт в учётку — тот и используется.");
+  console.log("[web] Токен доступа к веб-версии задан, подставляется в перехвате окна.");
 }
 
 // Останавливает локальный сервер при завершении приложения.
