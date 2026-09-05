@@ -31,12 +31,34 @@ const { autoUpdater } = require("electron-updater");
 //   3) фиксированный адрес инстанса (fallback).
 // Токен в код/сборку не включается.
 let _cfg = {};
+let _cfgPathUsed = "";
 try {
-  const cfgPath = path.join(app.getPath("userData"), "biotime.config.json");
-  if (fs.existsSync(cfgPath)) {
-    _cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")) || {};
+  // Папка userData в упакованном exe берётся из productName ("BIOTIME"), а в dev
+  // — из name ("biotime-desktop"). Плюс файл может называться как с расширением,
+  // так и без. Поэтому ищем конфиг толерантно: в обеих папках и обоими именами,
+  // чтобы не зависеть от того, как именно его положил пользователь.
+  const userDataBase = (() => {
+    try { return app.getPath("userData"); } catch { return ""; }
+  })();
+  const parentDir = userDataBase ? userDataBase.replace(/[\\/][^\\/]*$/, "") : "";
+  const folders = [userDataBase, parentDir ? path.join(parentDir, "BIOTIME") : "", parentDir ? path.join(parentDir, "biotime-desktop") : ""]
+    .filter(Boolean);
+  const fileNames = ["biotime.config.json", "biotime.config"];
+  outer:
+  for (const folder of folders) {
+    for (const fname of fileNames) {
+      const cfgPath = path.join(folder, fname);
+      if (fs.existsSync(cfgPath)) {
+        _cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")) || {};
+        _cfgPathUsed = cfgPath;
+        break outer;
+      }
+    }
   }
 } catch { /* необязательный конфиг — при отсутствии используем env/fallback */ }
+console.log(_cfgPathUsed
+  ? "[cfg] Конфиг прочитан: " + _cfgPathUsed
+  : "[cfg] Конфиг biotime.config(.json) не найден — используем env/fallback.");
 
 const WEB_APP_URL =
   process.env.BIOTIME_APP_URL ||
