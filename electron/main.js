@@ -31,54 +31,18 @@ const { autoUpdater } = require("electron-updater");
 //   3) фиксированный адрес инстанса (fallback).
 // Токен в код/сборку не включается.
 let _cfg = {};
-let _cfgPathUsed = "";
 try {
-  // Папка userData в упакованном exe берётся из productName ("BIOTIME"), а в dev
-  // — из name ("biotime-desktop"). Плюс файл может называться как с расширением,
-  // так и без. Поэтому ищем конфиг толерантно: в обеих папках и обоими именами,
-  // чтобы не зависеть от того, как именно его положил пользователь.
-  const userDataBase = (() => {
-    try { return app.getPath("userData"); } catch { return ""; }
-  })();
-  const parentDir = userDataBase ? userDataBase.replace(/[\\/][^\\/]*$/, "") : "";
-  const folders = [userDataBase, parentDir ? path.join(parentDir, "BIOTIME") : "", parentDir ? path.join(parentDir, "biotime-desktop") : ""]
-    .filter(Boolean);
-  const fileNames = ["biotime.config.json", "biotime.config"];
-  outer:
-  for (const folder of folders) {
-    for (const fname of fileNames) {
-      const cfgPath = path.join(folder, fname);
-      if (fs.existsSync(cfgPath)) {
-        _cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")) || {};
-        _cfgPathUsed = cfgPath;
-        break outer;
-      }
-    }
+  const cfgPath = path.join(app.getPath("userData"), "biotime.config.json");
+  if (fs.existsSync(cfgPath)) {
+    _cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")) || {};
   }
 } catch { /* необязательный конфиг — при отсутствии используем env/fallback */ }
-console.log(_cfgPathUsed
-  ? "[cfg] Конфиг прочитан: " + _cfgPathUsed
-  : "[cfg] Конфиг biotime.config(.json) не найден — используем env/fallback.");
 
 const WEB_APP_URL =
   process.env.BIOTIME_APP_URL ||
   (_cfg.appUrl && String(_cfg.appUrl)) ||
   "https://app-22aae7dc61f1.vibecode.bitrix24.tech";
 const ACCESS_TOKEN = process.env.BIOTIME_ACCESS_TOKEN || (_cfg.accessToken || "");
-// Режим доступа к веб-версии. По умолчанию окно подставляет ОДИН общий
-// access-токен (Authorization: Bearer) ко всем запросам шлюза — точно как
-// работало раньше: шлюз пускает без личного входа, а личность определяется
-// выбором сотрудника внутри приложения.
-//
-// Чтобы перейти на личный вход «под своей учёткой» (каждый входит сам через
-// шлюз, своя сессия в userData) — явно отключите общий токен:
-//   поле "useSharedToken": false в biotime.config.json,
-//   либо переменную окружения BIOTIME_USE_SHARED_TOKEN=0.
-const useSharedToken =
-  process.env.BIOTIME_USE_SHARED_TOKEN === "0" ||
-  process.env.BIOTIME_USE_SHARED_TOKEN === "false"
-    ? false
-    : _cfg.useSharedToken !== false;
 // Имя принтера для прямой печати этикеток (без диалога). Если не задано —
 // печатаем на принтер по умолчанию Windows. Пропишите в biotime.config.json
 // поле "printerName": "HP...", чтобы печать шла всегда на нужный принтер.
@@ -221,18 +185,10 @@ function createWindow() {
   });
 }
 
-// В режиме A по умолчанию никакой токен НЕ подставляется: окно открывает
-// веб-версию как обычный браузер И подставляет общий access-токен ко всем
-// запросам окна — так шлюз всегда видит одного субъекта и пускает без личного
-// входа (как работало раньше). Только при явном отключении (useSharedToken=false)
-// окно ведёт себя как браузер и шлюз проводит личный вход каждого пользователя.
+// В режиме A добавляет access-токен платформы (Authorization: Bearer) ко
+// ВСЕМ HTTP-запросам окна к адресу веб-версии. Без этого шлюз Black Hole
+// вернёт 401 и внешний клиент не увидит приложение.
 function applyWebToken() {
-  if (!useSharedToken) {
-    console.log("[web] Личный вход через шлюз (без общего токена). "
-      + "Каждый пользователь войдёт под своей учёткой. "
-      + "Запасной режим: BIOTIME_USE_SHARED_TOKEN=1 или useSharedToken:true в конфиге.");
-    return;
-  }
   if (!useWebMode || !ACCESS_TOKEN) {
     console.warn("[web] Режим веб-версии активен, но BIOTIME_ACCESS_TOKEN не задан — "
       + "шлюз вернёт 401. Задайте токен переменной окружения.");
