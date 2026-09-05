@@ -42,6 +42,20 @@ jobs:
       - name: Установить зависимости
         run: npm ci
 
+      # Берём версию из единого источника version.json и подставляем в
+      # package.json. Так версия десктоп-сборки всегда совпадает с версией
+      # сервера и APK (правка version.json — единственная точка обновления).
+      - name: Синхронизировать версию из version.json
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = JSON.parse(fs.readFileSync("version.json", "utf8"));
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.version = (v.versionName || "1.0.0").replace(/^v/, "");
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+            console.log("Версия desktop:", pkg.version);
+          '
+
       # Публикуем установщик в GitHub Release. electron-builder сам:
       #   * собирает NSIS Setup-установщик;
       #   * генерирует latest.yml (манифест для автообновления);
