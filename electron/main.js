@@ -66,6 +66,16 @@ let serverProc = null;   // дочерний процесс Node (server.js)
 let mainWindow = null;   // главное окно
 let shuttingDown = false;
 
+// Пишет строку в файл web-gate.log в папке данных приложения. Нужно для
+// диагностики входа: stdout GUI-приложения Windows в обычном запуске не виден,
+// поэтому логируем в файл, который можно прочитать после запуска exe.
+function logWeb(...args) {
+  try {
+    const line = `[${new Date().toISOString()}] ${args.join(" ")}\n`;
+    fs.appendFileSync(path.join(app.getPath("userData"), "web-gate.log"), line);
+  } catch { /* диагностика не должна ронять приложение */ }
+}
+
 // Проверяет, отвечает ли локальный сервер (готов к открытию окна).
 function serverIsUp(host, port, timeoutMs = 1500) {
   return new Promise((resolve) => {
@@ -184,6 +194,33 @@ function createWindow() {
       if (!ok) console.error("[print] Печать не удалась:", failureReason || "unknown");
       else console.log("[print] Этикетки отправлены на печать.");
     });
+  });
+
+  // ---- Диагностика входа через шлюз ----
+  // Логируем редиректы и завершения загрузки главного окна, чтобы понять, как
+  // шлюз Black Hole встречает окно Electron (экран входа или JSON BH_LOGIN_REQUIRED).
+  mainWindow.webContents.on("did-redirect-navigation", (event, url) => {
+    logWeb("редирект →", url);
+  });
+  mainWindow.webContents.on("did-navigate", (event, url) => {
+    logWeb("навигация/загрузка →", url);
+  });
+  mainWindow.webContents.on("did-fail-load", (event, code, desc, url, isMainFrame) => {
+    logWeb("ОШИБКА загрузки", code, desc, "|", url, "| main:", isMainFrame);
+  });
+  mainWindow.webContents.on("did-finish-load", () => {
+    logWeb("страница загружена (финиш)");
+  });
+  mainWindow.webContents.on("render-process-gone", (event, details) => {
+    logWeb("render-process-gone:", details && details.reason);
+  });
+  // Снимаем Set-Cookie при ответе шлюза на главный запрос (без разбора значений).
+  const ses = mainWindow.webContents.session;
+  ses.webRequest.onHeadersReceived((details) => {
+    if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
+      const sc = (details.responseHeaders && details.responseHeaders["set-cookie"]) || [];
+      logWeb("ответ", details.statusCode, "url:", details.url, "| set-cookie:", sc.length);
+    }
   });
 
   mainWindow.on("closed", () => {
