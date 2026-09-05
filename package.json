@@ -1,0 +1,76 @@
+{
+  "name": "biotime-desktop",
+  "version": "1.0.0",
+  "description": "BIOTIME — десктоп-приложение для Windows (Electron) с автообновлением",
+  "author": "ПрофМаркетСистем",
+  "main": "electron/main.js",
+  "license": "MIT",
+  "scripts": {
+    "desktop": "electron .",
+    "pack": "electron-builder --win --publish never",
+    "publish": "electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.biotime.worklogger",
+    "productName": "BIOTIME",
+    "asar": false,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "andreyahmedov29-droid",
+        "repo": "electron"
+      }
+    ],
+    "files": [
+      "server.js",
+      "app.js",
+      "index.html",
+      "styles.css",
+      "qr.js",
+      "sw.js",
+      "manifest.webmanifest",
+      "electron/**/*",
+      "icon-180.png",
+      "icon-192.png",
+      "icon-512.png",
+      "icon-512.svg",
+      "icon-maskable-512.png",
+      "icon-maskable.svg",
+      "ios-icon-1024.png",
+      "ios-icon-180.png",
+      "ios-icon.svg",
+      "logo-biotime-dark.svg",
+      "logo-biotime-mark.svg",
+      "logo-biotime.svg",
+      "sign-icon-512.png",
+      "sign-icon-dark-512.png",
+      "sign-icon-dark.svg",
+      "sign-icon.svg",
+      "package.json",
+      "!**/*.log"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "icon": "icon-512.png",
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

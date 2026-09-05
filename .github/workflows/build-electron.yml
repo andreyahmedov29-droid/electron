@@ -1,0 +1,55 @@
+name: Build Electron
+
+# Собирает десктоп-приложение BIOTIME (NSIS-установщик) и публикует его в
+# GitHub Release репозитория «electron». Приложение само находит новую версию
+# по latest.yml (electron-updater) и обновляется без ручной переустановки.
+#
+# Запускается:
+#   - по кнопке: вкладка Actions ▸ „Build Electron“ ▸ Run workflow;
+#   - при пуше в main (если файлы сборки/версия менялись).
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "electron/**"
+      - "package.json"
+      - "package-lock.json"
+      - "server.js"
+      - "app.js"
+      - "index.html"
+      - "styles.css"
+      - "qr.js"
+      - "sw.js"
+  workflow_dispatch: # ручной запуск
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # нужен для публикации Release системным GITHUB_TOKEN
+
+    steps:
+      - name: Checkout репозитория
+        uses: actions/checkout@v5
+
+      - name: Установить Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Установить зависимости
+        run: npm ci
+
+      # Публикуем установщик в GitHub Release. electron-builder сам:
+      #   * собирает NSIS Setup-установщик;
+      #   * генерирует latest.yml (манифест для автообновления);
+      #   * загружает и установщик, и latest.yml в GitHub Release с тегом v<версия>.
+      # Системный GITHUB_TOKEN уже имеет доступ к этому репозиторию и к его
+      # Releases (permissions.contents: write), отдельный токен не нужен.
+      - name: Собрать и опубликовать (publish to GitHub Release)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run publish

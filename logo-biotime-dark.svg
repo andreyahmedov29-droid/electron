@@ -1,0 +1,46 @@
+<svg width="960" height="240" viewBox="0 0 960 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gTeal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14CFB9"/>
+      <stop offset="1" stop-color="#0AF0CE"/>
+    </linearGradient>
+    <linearGradient id="gMint" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#C7F9E9"/>
+      <stop offset="1" stop-color="#F2FFF9"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#14CFB9" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#soft)">
+    <circle cx="120" cy="120" r="92" fill="url(#gTeal)"/>
+    <circle cx="120" cy="120" r="88" stroke="#0B1E22" stroke-opacity="0.25" stroke-width="2"/>
+  </g>
+
+  <g stroke="#073B34" stroke-width="4" stroke-linecap="round">
+    <line x1="120" y1="48"  x2="120" y2="68"/>
+    <line x1="120" y1="172" x2="120" y2="192"/>
+    <line x1="48"  y1="120" x2="68"  y2="120"/>
+    <line x1="172" y1="120" x2="192" y2="120"/>
+  </g>
+
+  <path d="M120 172
+           C 104 158, 96 140, 96 120
+           C 110 132, 120 138, 130 138
+           C 112 118, 112 96, 128 76
+           C 146 96, 158 112, 146 134
+           C 144 152, 136 164, 120 172 Z"
+        fill="url(#gMint)"/>
+
+  <circle cx="120" cy="120" r="20" fill="#14CFB9" fill-opacity="0.3"/>
+  <circle cx="120" cy="120" r="20" fill="url(#gMint)" fill-opacity="0.4"/>
+
+<text x="264" y="150" font-family="'Segoe UI', 'Inter', system-ui, sans-serif" font-size="112" font-weight="800" letter-spacing="-1" fill="#EFFFF9">
+    <tspan fill="#21D6C0">Таб</tspan><tspan fill="#4DE8D2">ель</tspan>
+  </text>
+
+  <text x="268" y="192" font-family="'Segoe UI', 'Inter', system-ui, sans-serif" font-size="22" font-weight="600" letter-spacing="7" fill="#6FCFC2">
+    УЧЁТ  РАБОЧЕГО  ВРЕМЕНИ
+  </text>
+</svg>

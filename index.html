@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Личный кабинет ПрофМаркетСистем</title>
+  <meta name="theme-color" content="#08090d" />
+  <meta name="description" content="Личный кабинет ПрофМаркетСистем — учёт рабочего времени, переработок, маршрутов и отгрузок" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png" />
+  <link rel="apple-touch-icon" href="icon-180.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Табель" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;800&family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="noise"></div>
+  <div class="grid-bg"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg class="brand-mark-svg" viewBox="0 0 48 48" width="30" height="30" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="biotimeFace" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#98a4ad"/>
+              <stop offset="1" stop-color="#b9c3ca"/>
+            </linearGradient>
+            <linearGradient id="biotimeLeaf" x1="0" y1="1" x2="1" y2="0">
+              <stop offset="0" stop-color="#c3cdd3"/>
+              <stop offset="1" stop-color="#eef2f4"/>
+            </linearGradient>
+            <radialGradient id="biotimeGlow" cx="0.5" cy="0.42" r="0.6">
+              <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+              <stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#biotimeFace)"/>
+          <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#biotimeGlow)"/>
+          <circle cx="24" cy="24" r="16.6" stroke="#e9fff8" stroke-opacity="0.55" stroke-width="2.4"/>
+          <circle cx="24" cy="24" r="15.1" stroke="#0b2e33" stroke-opacity="0.35" stroke-width="1.2"/>
+          <g stroke="#e9fff8" stroke-linecap="round">
+            <path d="M24 13v2.2" stroke-width="2.6"/>
+            <path d="M24 32.8v2.2" stroke-width="2.6"/>
+            <path d="M13 24h2.2" stroke-width="2.6"/>
+            <path d="M32.8 24H35" stroke-width="2.6"/>
+          </g>
+          <path d="M24 34
+                   C 21.6 32 20.8 29.6 20.8 27
+                   C 22.6 28.2 23.9 28.7 25 28.7
+                   C 23.4 26.4 23.4 24 24.9 21.4
+                   C 27.2 23.4 28.5 25 27.7 27.8
+                   C 27.3 30.3 26.1 32.4 24 34 Z"
+                fill="url(#biotimeLeaf)"/>
+          <circle cx="24" cy="24" r="2.3" fill="#0b2e33" fill-opacity="0.35"/>
+        </svg>
+      </span>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="timer">Таймер</button>
+      <button class="tab" data-tab="calendar">Зарплата</button>
+      <button class="tab" data-tab="delivery">Доставка</button>
+      <button class="tab admin-only" data-tab="live">В эфире</button>
+      <button class="tab admin-only" data-tab="report">Отчёт</button>
+      <button class="tab admin-only-drivers" data-tab="drivers" hidden>Маршрутизация</button>
+      <button class="tab driver-only-tab" data-tab="myroutes" hidden>Мои маршруты</button>
+      <button class="tab shipment-only" data-tab="shipment" hidden>Отгрузка</button>
+    </nav>
+    <div class="topbar-right">
+      <div class="user-chip" id="userChip" hidden>
+        <span class="user-avatar" id="userAvatar">?</span>
+        <span class="user-name" id="userName"></span>
+      </div>
+      <div class="today-chip" id="todayChip">—</div>
+      <button class="icon-btn" id="settingsBtn" title="Настройки" aria-label="Настройки">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+          <circle cx="12" cy="12" r="3.2"/>
+          <path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.7a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.5 2.7h4l.5-2.7a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Полоса «нет связи с сервером»: появляется при сетевых сбоях (в т.ч. когда
+       VPN блокирует доступ к серверу) и исчезает, когда связь восстановилась. -->
+  <div class="net-banner" id="netBanner" role="status" hidden>
+    <div class="net-banner-inner">
+      <span class="net-banner-icon" aria-hidden="true">⚠</span>
+      <span class="net-banner-text" id="netBannerText">Нет связи с сервером. Проверьте интернет и отключите VPN, если он блокирует приложение.</span>
+      <button type="button" class="mini-btn net-banner-btn" id="netRetry">Проверить</button>
+    </div>
+  </div>
+
+  <main class="stage">
+    <section class="tab-page" id="page-timer">
+      <section class="clock-card" id="clockCard">
+      <div class="clock-top">
+        <div class="status-row">
+          <span class="status-dot" id="statusDot"></span>
+          <span class="status-text" id="statusText">Сегодня не начали</span>
+        </div>
+        <div class="phase-pill" id="phasePill">ожидание</div>
+      </div>
+
+      <div class="dial" id="dial">
+        <div class="dial-ring"></div>
+        <div class="dial-label">работаем</div>
+        <div class="dial-time" id="dialTime">00:00:00</div>
+        <div class="dial-sub" id="dialSub">время работы</div>
+      </div>
+
+      <div class="totals">
+        <div class="total-cell">
+          <span class="total-value" id="totWorked">00:00</span>
+          <span class="total-label">отработано</span>
+        </div>
+        <div class="total-cell accent">
+          <span class="total-value" id="totOvertime">00:00</span>
+          <span class="total-label">переработка</span>
+          <span class="over-note" id="overNote"></span>
+        </div>
+        <div class="total-cell">
+          <span class="total-value" id="totBal">0 ₽</span>
+          <span class="total-label" id="totBalLabel">заработано</span>
+          <span class="rate-note" id="rateNote"></span>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="ctrl ctrl-primary" id="startBtn">Начать работу</button>
+        <button class="ctrl ctrl-finish hidden" id="finishBtn">Завершить работу</button>
+      </div>
+      </section>
+
+    </section>
+
+    <section class="tab-page" id="page-calendar" hidden>
+      <section class="cal-card">
+        <div class="cal-card-head">
+          <div>
+            <h2 class="cal-title">Зарплата</h2>
+            <p class="cal-subtitle">Оклад сотрудника и переработки по месяцам</p>
+          </div>
+          <span class="cal-salary-chip">оклад <b id="calSalaryChip">—</b></span>
+        </div>
+        <p class="cal-note">Переработки считаются исходя из оклада, без учёта надбавки.</p>
+        <div class="month-list" id="monthList">
+          <div class="empty-hint">Загрузка...</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-page" id="page-delivery" hidden>
+      <section class="cal-card">
+        <div class="cal-card-head">
+          <div>
+            <h2 class="cal-title">Доставка</h2>
+            <p class="cal-subtitle">Как идёт доставка: маршруты водителей по датам</p>
+          </div>
+          <span class="delivery-count" id="deliveryCount">—</span>
+        </div>
+        <div class="delivery-toolbar">
+          <input id="deliveryDateFilter" class="text-input routes-date-filter" type="date" />
+          <button type="button" class="mini-btn" id="deliveryRefresh">Обновить</button>
+        </div>
+        <div class="delivery-list" id="deliveryList">
+          <div class="empty-hint">Загрузка...</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-page" id="page-live" hidden>
+      <section class="cal-card">
+        <div class="cal-card-head">
+          <div>
+            <h2 class="cal-title">В эфире</h2>
+            <p class="cal-subtitle">Кто из сотрудников онлайн и у кого сейчас работает таймер</p>
+          </div>
+          <span class="live-live-badge" id="liveBadge"><span class="live-dot"></span> в реальном времени</span>
+        </div>
+        <div class="live-summary" id="liveSummary"></div>
+        <div class="live-list" id="liveList">
+          <div class="empty-hint">Загрузка...</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-page" id="page-report" hidden>
+      <section class="cal-card">
+        <div class="cal-card-head">
+          <div>
+            <h2 class="cal-title">Отчёт</h2>
+            <p class="cal-subtitle">Табель учёта рабочего времени</p>
+          </div>
+        </div>
+
+        <div class="report-form" id="reportForm">
+          <!-- Параметры периода -->
+          <div class="report-controls">
+            <label class="report-field">
+              <span class="report-field-label">Месяц табеля</span>
+              <select id="reportMonth" class="select-input"></select>
+            </label>
+            <button type="button" class="ctrl ctrl-primary report-export-btn" id="reportExportBtn">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>
+              </svg>
+              <span>Скачать Excel</span>
+            </button>
+            <label class="report-field toggle-field">
+              <span class="report-field-label">Показывать часы переработок</span>
+              <label class="switch">
+                <input type="checkbox" id="reportShowOver" checked />
+                <span class="slider"></span>
+              </label>
+            </label>
+          </div>
+
+          <!-- Сводка по периоду -->
+          <div class="report-summary" id="reportSummary">
+            <div class="report-stat">
+              <span class="report-stat-value" id="reportWorkDays">—</span>
+              <span class="report-stat-label">рабочих дней в месяце</span>
+            </div>
+            <div class="report-stat">
+              <span class="report-stat-value" id="reportStaffCount">—</span>
+              <span class="report-stat-label">сотрудников</span>
+            </div>
+            <div class="report-stat">
+              <span class="report-stat-value" id="reportTotalOver">—</span>
+              <span class="report-stat-label">переработка всего</span>
+            </div>
+          </div>
+
+          <!-- Легенда кодов табеля -->
+          <div class="report-legend">
+            <span class="report-legend-title">Условные обозначения</span>
+            <span class="legend-item"><span class="legend-mark">Я</span>Явка</span>
+            <span class="legend-item"><span class="legend-mark">НД</span>Не полный день</span>
+            <span class="legend-item"><span class="legend-mark">Б</span>Больничный</span>
+            <span class="legend-item"><span class="legend-mark">ОТ</span>Отпуск</span>
+            <span class="legend-item"><span class="legend-mark">ДО</span>День за свой счёт</span>
+            <span class="legend-item"><span class="legend-mark">НН</span>Прогул</span>
+          </div>
+
+          <!-- Табель -->
+          <div class="report-table-wrap" id="reportTableWrap">
+            <table class="report-table" id="reportTable"></table>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-page" id="page-drivers" hidden>
+      <section class="cal-card">
+        <div class="cal-card-head">
+          <div>
+            <h2 class="cal-title">Маршрутизация</h2>
+            <p class="cal-subtitle">Контрагенты, адреса и дневные маршруты для водителей</p>
+          </div>
+          <span class="route-total-pill" id="routeTotalPill"><span class="route-total-dot"></span> планировщик</span>
+        </div>
+        <div class="drv-subtabs" role="tablist" aria-label="Разделы маршрутизации">
+          <button type="button" class="drv-subtab active" data-sub="contr" role="tab" id="subtab-contr">Контрагенты</button>
+          <button type="button" class="drv-subtab" data-sub="route" role="tab" id="subtab-route">Маршрут на день</button>
+          <button type="button" class="drv-subtab" data-sub="routes" role="tab" id="subtab-routes">Маршруты</button>
+          <button type="button" class="drv-subtab" data-sub="report" role="tab" id="subtab-report">Отчёт</button>
+          <button type="button" class="drv-subtab tracking-only" data-sub="tracking" role="tab" id="subtab-tracking">Трекинг</button>
+        </div>
+
+        <!-- Вкладка: Контрагенты -->
+        <div class="drv-subpanel" id="routesub-contr" role="tabpanel">
+          <div class="drv-panel">
+            <div class="drv-panel-head">
+              <div class="drv-panel-title">
+                <span class="drv-panel-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                </span>
+                Контрагенты
+              </div>
+              <span class="drv-chip" id="driverClientsCount">—</span>
+            </div>
+
+            <div class="drv-quick-add" id="driverClientsForm">
+              <div class="drv-field">
+                <label class="drv-field-label" for="driverClientName">Контрагент</label>
+                <input id="driverClientName" class="text-input" type="text" placeholder="Название / ФИО" />
+              </div>
+              <div class="drv-field">
+                <label class="drv-field-label" for="driverClientAddress">Адрес</label>
+                <input id="driverClientAddress" class="text-input" type="text" placeholder="Адрес контрагента" />
+              </div>
+              <button type="button" class="drv-add-btn" id="addDriverClientBtn">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                <span>Добавить</span>
+              </button>
+            </div>
+
+            <div class="drv-client-list" id="driverClientsList">
+              <div class="empty-hint">Контрагентов пока нет. Добавьте первого.</div>
+            </div>
+
+            <div class="bundle-section">
+              <div class="bundle-section-head">
+                <div class="bundle-section-title">
+                  <span class="bundle-section-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l-4 4 4 4M15 11l4 4-4 4M12 3l-2 18"/></svg>
+                  </span>
+                  Связки контрагентов
+                </div>
+                <button type="button" class="bundle-new-btn" id="bundleToggle">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+                  <span>Новая связка</span>
+                </button>
+              </div>
+
+              <div class="bundle-panel" id="bundlePanel" hidden>
+                <div class="bundle-pick" id="bundlePickList">
+                  <div class="empty-hint">Сначала добавьте контрагентов.</div>
+                </div>
+                <div class="bundle-field">
+                  <label class="drv-field-label" for="bundleAddress">Общий адрес связки</label>
+                  <input id="bundleAddress" class="text-input" type="text" placeholder="Адрес, общий для выбранных контрагентов" />
+                </div>
+                <div class="bundle-actions">
+                  <button type="button" class="drv-mini-btn drv-mini-primary" id="bundleCreateBtn">Связать на адрес</button>
+                </div>
+              </div>
+
+              <div class="bundle-grid" id="bundleList">
+                <div class="empty-hint">Связок пока нет.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Вкладка: Маршрут на день -->
+        <div class="drv-subpanel" id="routesub-route" role="tabpanel" hidden>
+          <div class="drv-panel" id="driverRouteForm">
+            <div class="drv-panel-head">
+              <div class="drv-panel-title">
+                <span class="drv-panel-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19h7a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7h8.5"/></svg>
+                </span>
+                Маршрут на день
+              </div>
+              <span class="drv-chip drv-chip-amber" id="routeStepCount">0 клиентов</span>
+            </div>
+
+            <div class="drv-route-form-grid">
+              <div class="drv-field">
+                <label class="drv-field-label" for="driverRouteDate">Дата</label>
+                <input id="driverRouteDate" class="text-input" type="date" />
+              </div>
+              <div class="drv-field">
+                <label class="drv-field-label" for="driverRouteDriver">Водитель</label>
+                <select id="driverRouteDriver" class="select-input"></select>
+              </div>
+            </div>
+
+            <div class="drv-route-label">Последовательность остановок</div>
+            <div class="route-multiselect" id="driverRouteClients">
+              <div class="rms-search-wrap">
+                <svg class="rms-search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+                <input id="routeClientSearch" class="text-input rms-search" type="text"
+                  placeholder="Найти контрагента…" autocomplete="off" />
+              </div>
+              <div class="rms-options" id="routeClientOptions"></div>
+            </div>
+
+            <div class="rms-selected-block">
+              <div class="rms-selected-head">
+                <div class="drv-route-label">Выбранные клиенты</div>
+                <span class="drv-chip drv-chip-amber" id="routeSelectedCount">0</span>
+              </div>
+              <div class="rms-selected" id="routeClientSelected"></div>
+            </div>
+
+            <div class="rms-auto-route">
+              <div class="drv-field">
+                <label class="drv-field-label" for="routeBaseAddress">База (адрес отправления)</label>
+                <input id="routeBaseAddress" class="text-input rms-search" type="text"
+                  value="142715, Московская область, г.о. Ленинский, д. Апаринки, владение 5, строение 18, комната 17"
+                  placeholder="Напр.: склад, ул. Промышленная, 1" autocomplete="off" />
+              </div>
+              <button type="button" class="drv-auto-route-btn" id="autoRouteBtn">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9">
+                  <path d="M12 3 4 9l8 6 8-6-8-6z"/>
+                  <path d="M4 15l8 6 8-6"/>
+                </svg>
+                <span>Построить оптимальный маршрут</span>
+              </button>
+              <div class="rms-auto-route-status" id="autoRouteStatus" hidden></div>
+            </div>
+
+            <button type="button" class="drv-save-btn" id="saveDriverRouteBtn">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+              <span>Сохранить маршрут</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Вкладка: Маршруты -->
+        <div class="drv-subpanel" id="routesub-routes" role="tabpanel" hidden>
+          <div class="drv-panel">
+            <div class="drv-panel-head">
+              <div class="drv-panel-title">
+                <span class="drv-panel-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                </span>
+                Маршруты
+              </div>
+              <div class="drv-routes-tools">
+                <input id="driverRoutesDateFilter" class="text-input routes-date-filter" type="date" />
+                <span class="drv-chip" id="driverRoutesCount">—</span>
+              </div>
+            </div>
+            <div class="drv-route-list" id="driverRoutesList">
+              <div class="empty-hint">Маршрутов пока нет.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Вкладка: Отчёт — заглушка под будущий дашборд по отрезкам маршрутов -->
+        <div class="drv-subpanel" id="routesub-report" role="tabpanel" hidden>
+          <div class="drv-panel">
+            <div class="drv-panel-head">
+              <div class="drv-panel-title">
+                <span class="drv-panel-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 3v18h18"/><rect x="7" y="10" width="4" height="8"/><rect x="13" y="6" width="4" height="12"/></svg>
+                </span>
+                Движение водителей
+              </div>
+            </div>
+            <div class="drv-report-sub">Дашборд движения водителей · пробег и время по датам</div>
+            <div class="driver-map-toolbar">
+              <input id="motionDateFilter" class="text-input routes-date-filter" type="date" />
+              <button type="button" class="mini-btn" id="motionRefresh">Обновить</button>
+            </div>
+            <div class="report-summary motion-summary" id="motionSummary">
+              <div class="report-stat">
+                <span class="report-stat-value" id="motionDrivers">0</span>
+                <span class="report-stat-label">водителей</span>
+              </div>
+              <div class="report-stat">
+                <span class="report-stat-value" id="motionKm">0</span>
+                <span class="report-stat-label">километров</span>
+              </div>
+              <div class="report-stat">
+                <span class="report-stat-value" id="motionMove">0</span>
+                <span class="report-stat-label">в пути</span>
+              </div>
+              <div class="report-stat">
+                <span class="report-stat-value" id="motionLunch">0</span>
+                <span class="report-stat-label">обеды</span>
+              </div>
+            </div>
+            <div class="report-table-wrap" id="motionTableWrap">
+              <table class="report-table motion-table" id="motionTable">
+                <thead>
+                  <tr>
+                    <th class="col-idx">#</th>
+                    <th class="col-name">Водитель</th>
+                    <th title="Пробег считается из фактического GPS-трека водителя (если он есть), иначе — по прямой между точками маршрута">Пробег, км</th>
+                    <th>Время в пути</th>
+                    <th>На точке</th>
+                    <th>Обед</th>
+                    <th>Точек</th>
+                  </tr>
+                </thead>
+                <tbody id="motionBody"></tbody>
+              </table>
+            </div>
+            <div class="drv-report-stub" id="driverReportStub" style="display:none">
+              <div class="empty-hint">За выбранную дату данных о движении нет.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Вкладка: Трекинг — живая карта водителей (Yandex JS API, только админ) -->
+        <div class="drv-subpanel" id="routesub-tracking" role="tabpanel" hidden>
+          <div class="drv-panel">
+            <div class="drv-panel-head">
+              <div class="drv-panel-title">
+                <span class="drv-panel-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 21s-7-5.6-7-11a7 7 0 1 1 14 0c0 5.4-7 11-7 11z"/><circle cx="12" cy="10" r="2.2"/></svg>
+                </span>
+                Трекинг водителей
+              </div>
+            </div>
+            <div class="drv-report-sub">Живая карта водителей · обновляется автоматически</div>
+            <div class="driver-map-toolbar">
+              <span class="drv-chip" id="driverMapCount">—</span>
+              <input id="driverTrackDate" class="text-input routes-date-filter" type="date" title="Выбрать день для отображения маршрутов" />
+              <button type="button" class="mini-btn" id="driverMapRefresh">Обновить</button>
+            </div>
+            <div class="driver-map" id="driverMap">
+              <div class="empty-hint" id="driverMapHint">Загрузка карты…</div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-page" id="page-myroutes" hidden>
+      <section class="cal-card">
+        <div class="cal-card-head">
+          <div>
+            <h2 class="cal-title">Мои маршруты</h2>
+            <p class="cal-subtitle">Маршруты, назначенные вам на день</p>
+          </div>
+        </div>
+        <div class="myroutes-wrap">
+          <div class="drivers-list-head">
+            <h4 class="drivers-form-title">Мои маршруты</h4>
+            <input id="myroutesDateFilter" class="text-input routes-date-filter" type="date" />
+            <span class="drivers-count" id="myroutesCount">—</span>
+          </div>
+          <div class="admin-list" id="myroutesList">
+            <div class="empty-hint">Маршруты ещё не назначены.</div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <!-- Отгрузка: склад видит маршруты водителей с клиентами и завершает
+         отгрузку. Пока отгрузка не завершена, водитель не может начать маршрут
+         (если админ включил блокировку). Доступ — по группам из «Параметры». -->
+    <section class="tab-page" id="page-shipment" hidden>
+      <section class="cal-card">
+        <div class="cal-card-head">
+          <div>
+            <h2 class="cal-title">Отгрузка</h2>
+            <p class="cal-subtitle">Маршруты водителей, ожидающие отгрузки. Пока склад не завершил отгрузку, водитель не может начать маршрут.</p>
+          </div>
+          <button class="ctrl ctrl-soft" id="shipmentRefresh">Обновить</button>
+        </div>
+        <div class="shipment-list" id="shipmentList">
+          <div class="empty-hint">Загрузка маршрутов…</div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <!-- Печать этикеток отгрузки: выбор клиента и количества мест -->
+  <dialog class="modal" id="printModal">
+    <div class="account-card">
+      <div class="modal-head">
+        <h3>Печать этикеток</h3>
+        <button class="icon-btn modal-close" id="printClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="driver-route-form-grid">
+        <label class="drv-route-label">Клиент
+          <select class="text-input" id="printClientSelect"></select>
+        </label>
+        <label class="drv-route-label">Кол-во мест
+          <input class="text-input" type="number" id="printPlacesQty" min="1" max="200" value="1" />
+        </label>
+      </div>
+      <div class="route-confirm-actions">
+        <button class="mini-btn route-confirm-cancel" id="printCancel" type="button">Отмена</button>
+        <button class="mini-btn route-confirm-ok" id="printConfirm" type="button">Печать этикеток</button>
+      </div>
+      <div class="print-scan-block">
+        <!-- Выгрузка мест теперь выполняется водителем в «Моих маршрутах»,
+             поэтому на складе оставлена только кнопка сканирования погрузки. -->
+        <div class="drv-route-label">Сканирование мест (статусы)</div>
+        <div class="print-scan-actions">
+          <button class="mini-btn" id="scanLoadBtn" type="button">Сканировать: погрузка</button>
+        </div>
+        <div class="print-scan-status" id="printScanStatus"></div>
+        <div class="print-labels-list" id="printLabelsList"></div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Скрытая на экране область печати этикеток (термопринтер 58 мм) -->
+  <div id="printArea"></div>
+
+  <dialog class="modal admin-modal" id="settingsModal">
+    <div class="admin-shell">
+      <div class="admin-head">
+        <div class="admin-title-wrap">
+          <div class="admin-kicker">Панель администратора</div>
+          <h3 class="admin-title">Настройки</h3>
+        </div>
+        <button class="icon-btn modal-close" id="adminClose" aria-label="Закрыть">&times;</button>
+      </div>
+
+      <nav class="admin-tabs" id="adminTabs">
+        <button class="atab active" data-sub="staff">Все сотрудники</button>
+        <button class="atab" data-sub="today">Время работы</button>
+        <button class="atab" data-sub="groups">Группы</button>
+        <button class="atab" data-sub="salaries">Оклады и дни</button>
+        <button class="atab" data-sub="log">Журнал</button>
+        <button class="atab" data-sub="settings">Параметры</button>
+        <button class="atab" data-sub="admins">Администраторы</button>
+      </nav>
+
+      <!-- Все сотрудники -->
+      <div class="asub" data-sub="staff">
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Все сотрудники</h4>
+            <p class="sub-note" id="staffCountNote">—</p>
+          </div>
+        </div>
+        <div class="action-bar">
+          <input id="newStaffName" class="text-input" placeholder="ФИО сотрудника" />
+          <button class="ctrl ctrl-primary" id="addStaffBtn">Добавить</button>
+        </div>
+        <div class="admin-list" id="staffList"></div>
+      </div>
+
+      <!-- Время работы -->
+      <div class="asub" data-sub="today" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Время работы</h4>
+            <p class="sub-note">Вкладки на каждый день — от 1 сентября до <b id="todayDateNote">сегодня</b>. Если сотрудник забыл нажать таймер, проставьте за него время начала и конца работы. «Конец» можно оставить пустым, если работа ещё идёт. Прошедшие дни всегда доступны для правки.</p>
+          </div>
+        </div>
+        <div class="admin-list" id="todayList"></div>
+      </div>
+
+      <!-- Группы и модераторы -->
+      <div class="asub" data-sub="groups" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Группы</h4>
+            <p class="sub-note">Объединяйте сотрудников в группы и назначайте модератора. Модератор видит в отчёте только свою группу, может проставлять статусы, но не видит панель администратора.</p>
+          </div>
+        </div>
+        <div class="action-bar">
+          <input id="newGroupName" class="text-input" placeholder="Название группы" />
+          <button class="ctrl ctrl-primary" id="addGroupBtn">Создать группу</button>
+        </div>
+        <div class="admin-list" id="groupsList"></div>
+      </div>
+
+      <!-- Оклады и дни -->
+      <div class="asub" data-sub="salaries" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Оклады и дни</h4>
+            <p class="sub-note">Оклад, премия, надбавка, отработанные часы и переработка за текущий месяц</p>
+          </div>
+        </div>
+        <div class="admin-table-wrap">
+          <table class="admin-table">
+            <thead><tr>
+              <th>Сотрудник</th>
+              <th>Оклад (₽)</th>
+              <th>Премия (₽)</th>
+              <th>Надбавка (₽)</th>
+              <th class="num">Рабочих дней в месяце</th>
+              <th class="num">Ставка переработки (₽/ч)</th>
+            </tr></thead>
+            <tbody id="salariesBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Журнал -->
+      <div class="asub" data-sub="log" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Журнал</h4>
+            <p class="sub-note">История статусов табеля, нажатий таймера и ручных изменений времени</p>
+          </div>
+          <button class="ctrl ctrl-soft" id="clearLogBtn">Очистить журнал</button>
+        </div>
+        <nav class="journal-tabs" id="logTabs">
+          <button class="jtab active" data-jkind="status">Статусы</button>
+          <button class="jtab" data-jkind="timer">Таймер</button>
+          <button class="jtab" data-jkind="manual">Время</button>
+        </nav>
+        <div class="journal-list" id="logList" data-jkind="status"></div>
+      </div>
+
+      <!-- Настройки -->
+      <div class="asub" data-sub="settings" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Параметры</h4>
+            <p class="sub-note">Параметры отображения и расчёта переработок</p>
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading">Отображение</h5>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-title">Показывать часы подработок</div>
+              <div class="toggle-sub">Показывать часы сверх нормы в календаре и отчётах</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="showOverHours" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="group-scope">
+            <span class="group-scope-label">Показывать группам</span>
+            <div class="group-check-list" id="showOverHoursGroups"></div>
+            <span class="group-scope-hint">Отмеченные группы <b>видят</b> переработки. Если ничего не отмечено — видят все.</span>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-title">Показывать сумму подработок</div>
+              <div class="toggle-sub">Показывать денежную сумму за переработку</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="showOverSum" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="group-scope">
+            <span class="group-scope-label">Показывать группам</span>
+            <div class="group-check-list" id="showOverSumGroups"></div>
+            <span class="group-scope-hint">Отмеченные группы <b>видят</b> сумму за переработку. Если ничего не отмечено — видят все.</span>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-title">Вкладка «Маршрутизация»</div>
+              <div class="toggle-sub">Показывать вкладку «Маршрутизация» администраторам (рядом с отчётом)</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="showDrivers" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-title">Вкладка «Мои маршруты» — администратору</div>
+              <div class="toggle-sub">Администратор видит вкладку «Мои маршруты» со всеми маршрутами водителей</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="adminSeeRoutes" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-title">Вкладка «Мои маршруты» — водителю</div>
+              <div class="toggle-sub">Водители видят вкладку «Мои маршруты» со своими маршрутами</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="driverSeeRoutes" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-title">Раздел «Отгрузка»</div>
+              <div class="toggle-sub">Показывать раздел «Отгрузка» сотрудникам из выбранных групп</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="showShipment" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="group-scope">
+            <span class="group-scope-label">Показывать группам</span>
+            <div class="group-check-list" id="shipmentGroups"></div>
+            <span class="group-scope-hint">Раздел «Отгрузка» видят только сотрудники отмеченных групп. Если ничего не отмечено — раздел скрыт у всех.</span>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-title">Начинать маршрут без отгрузки</div>
+              <div class="toggle-sub">Разрешить водителю начинать маршрут, даже если склад ещё не завершил отгрузку. Включите — и водитель может игнорировать склад.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="allowDriverStartWithoutShipment" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-title">Завершать выгрузку при неполном скане</div>
+              <div class="toggle-sub">Разрешить водителю нажать «Завершить выгрузку», даже если отсканированы не все места клиента. Выключено — завершение возможно только когда выгружены все места.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="allowFinishUnloadIncomplete" />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading">Норма рабочего дня</h5>
+          <p class="toggle-sub">Продолжительность рабочего дня в часах. Всё сверх этой нормы считается переработкой (отработано − норма).</p>
+          <div class="field">
+            <label for="normVal">Рабочий день, ч</label>
+            <input id="normVal" class="text-input" type="number" min="1" max="24" step="0.5" value="9" />
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading">Множитель подработки</h5>
+          <p class="toggle-sub">Коэффициент к ставке переработки, действующий в указанный период (например 1,5).</p>
+          <div class="multiplier-grid">
+            <div class="field">
+              <label for="multiplierVal">Множитель</label>
+              <input id="multiplierVal" class="text-input" type="number" min="1" step="0.1" value="1.0" />
+            </div>
+            <div class="field">
+              <label for="multiplierFrom">Действует с</label>
+              <input id="multiplierFrom" class="text-input" type="date" />
+            </div>
+            <div class="field">
+              <label for="multiplierTo">по</label>
+              <input id="multiplierTo" class="text-input" type="date" />
+            </div>
+          </div>
+          <div class="multiplier-status" id="multiplierStatus">не активен</div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading">Обновление Android-приложения</h5>
+          <p class="toggle-sub">Номер версии, которую приложение считает актуальной. Когда он станет <b>больше</b> установленного на телефоне, при запуске появится предложение обновиться. Пустые поля = значения из окружения/дефолты сервера.</p>
+          <div class="field">
+            <label for="updateVersionCode">Номер версии (versionCode)</label>
+            <input id="updateVersionCode" class="text-input" type="number" min="1" step="1" placeholder="например, 5" />
+          </div>
+          <div class="field">
+            <label for="updateVersionName">Название версии (versionName)</label>
+            <input id="updateVersionName" class="text-input" type="text" placeholder="например, 1.0.4" />
+          </div>
+          <div class="field">
+            <label for="updateApkUrl">Ссылка на APK</label>
+            <input id="updateApkUrl" class="text-input" type="text" placeholder="https://github.com/…/releases/download/…/app-release.apk" />
+          </div>
+          <div class="field">
+            <label for="updateNotes">Описание изменений</label>
+            <input id="updateNotes" class="text-input" type="text" placeholder="например, Исправления и улучшения" />
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading">Резервная копия данных</h5>
+          <p class="toggle-sub">Скачайте полную базу (сотрудники, оклады, время работы, группы, клиенты, маршруты, параметры) в файл и восстановите её на любом сервере — например, при переносе приложения на новый адрес. Перед восстановлением текущая база автоматически сохраняется отдельным файлом.</p>
+          <div class="backup-row">
+            <button type="button" class="ctrl ctrl-primary" id="backupExportBtn">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              <span>Скачать бэкап</span>
+            </button>
+            <label class="ctrl ctrl-soft backup-import-label" for="backupImportFile">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 15V3m0 0 4 4m-4-4L8 7M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              <span>Восстановить из файла</span>
+            </label>
+            <input type="file" id="backupImportFile" accept="application/json,.json" hidden />
+            <button type="button" class="ctrl ctrl-soft" id="backupAppBtn" title="Исходный код приложения + полная база данных в одном файле">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
+              <span>Копия приложения (код + данные)</span>
+            </button>
+          </div>
+          <div class="backup-status" id="backupStatus"></div>
+
+          <div class="backup-auto">
+            <div class="backup-auto-head">
+              <span class="backup-auto-title">Автоматические копии</span>
+              <span class="backup-auto-note" id="backupAutoNote"></span>
+            </div>
+            <p class="toggle-sub">Приложение само делает резервную копию базы примерно каждые 6 часов и хранит последние 30 копий в надёжном хранилище сервера. Копию можно скачать в любой момент и восстановить на любом сервере.</p>
+            <div class="backup-auto-list" id="backupAutoList">
+              <div class="empty-hint">Автоматических копий пока нет — первая появится при следующем запуске сервера.</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Администраторы -->
+      <div class="asub" data-sub="admins" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Администраторы</h4>
+            <p class="sub-note">Назначайте сотрудников администраторами. Владельца снять с роли нельзя.</p>
+          </div>
+        </div>
+        <div class="admin-list" id="adminsList"></div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Меню проставления статуса дня в табеле (только для администратора) -->
+  <dialog class="modal" id="statusModal">
+    <div class="status-card">
+      <div class="modal-head">
+        <h3>Статус дня</h3>
+        <button class="icon-btn modal-close" id="statusClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="modal-note" id="statusWho"></p>
+      <div class="status-options" id="statusOptions"></div>
+      <div class="status-clear-wrap">
+        <button class="mini-btn status-clear" id="statusClear" type="button">Сбросить (авто)</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Учётная запись: виден любому вошедшему (в т.ч. тем, кто на мобильном не видит панель администратора) -->
+  <dialog class="modal" id="accountModal">
+    <div class="account-card">
+      <div class="modal-head">
+        <h3>Учётная запись</h3>
+        <button class="icon-btn modal-close" id="accountClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="account-body" id="accountBody">
+        <div class="account-row"><span class="account-label">Имя</span><span class="account-value" id="acctName">—</span></div>
+        <div class="account-row"><span class="account-label">Идентификатор</span><span class="account-value" id="acctId">—</span></div>
+        <div class="account-row"><span class="account-label">Тип id</span><span class="account-value" id="acctIdKind">—</span></div>
+        <div class="account-row"><span class="account-label">Роль</span><span class="account-value" id="acctRole">—</span></div>
+        <div class="account-row"><span class="account-label">Администратор</span><span class="account-value" id="acctAdmin">—</span></div>
+        <div class="account-note" id="acctReason" hidden></div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Доступно обновление Android-приложения: веб-интерфейс (со сессией шлюза)
+       опрашивает /api/app/update-info и показывает окно, когда на сервере версия
+       выше установленной. Кнопка открывает прямую ссылку на APK. -->
+  <dialog class="modal" id="updateModal">
+    <div class="account-card update-card">
+      <div class="modal-head">
+        <h3>Доступно обновление</h3>
+        <button class="icon-btn modal-close" id="updateClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="modal-note" id="updateText"></p>
+      <div class="route-confirm-actions">
+        <button class="mini-btn route-confirm-cancel" id="updateLater" type="button">Позже</button>
+        <button class="mini-btn route-confirm-ok" id="updateDownload" type="button">Скачать обновление</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Предупреждение о пересечении клиентов в маршрутах: разрешаем продолжить или отменить -->
+  <dialog class="modal" id="routeConfirmModal">
+    <div class="route-confirm-card">
+      <div class="modal-head">
+        <h3>Клиент уже в маршруте</h3>
+        <button class="icon-btn modal-close" id="routeConfirmClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="modal-note" id="routeConfirmText"></p>
+      <div class="route-confirm-actions">
+        <button class="mini-btn route-confirm-cancel" id="routeConfirmCancel" type="button">Отменить</button>
+        <button class="mini-btn route-confirm-ok" id="routeConfirmOk" type="button">Продолжить</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Модалка выбора причины переноса точки (водитель в статусе «прибыл на адрес») -->
+  <dialog class="modal postpone-modal" id="postponeModal">
+    <div class="postpone-card">
+      <div class="modal-head">
+        <h3>Причина переноса</h3>
+        <button class="icon-btn modal-close" id="postponeClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="modal-note">Точка будет закрыта как перенесённая. Укажите причину:</p>
+      <div class="postpone-tiles" id="postponeTiles">
+        <button type="button" class="postpone-tile" data-reason="Точка закрыта">Точка закрыта</button>
+        <button type="button" class="postpone-tile" data-reason="Нет документов">Нет документов</button>
+        <button type="button" class="postpone-tile" data-reason="Технический сбой у контрагента">Технический сбой у контрагента</button>
+        <button type="button" class="postpone-tile" data-reason="Перенос по просьбе клиента">Перенос по просьбе клиента</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- Оверлей живого прогресса сканирования: крупно показывает клиента и
+       счётчик «отсканировано / нужно». Появляется между сканами нативного
+       сканера (ZXing), чтобы водитель видел, сколько осталось. -->
+  <div class="scan-overlay" id="scanOverlay" hidden>
+    <div class="scan-overlay-inner">
+      <div class="scan-overlay-client" id="scanOverlayClient">—</div>
+      <div class="scan-overlay-count">
+        <span class="scan-overlay-done" id="scanOverlayDone">0</span>
+        <span class="scan-overlay-sep">/</span>
+        <span class="scan-overlay-need" id="scanOverlayNeed">0</span>
+      </div>
+      <div class="scan-overlay-note" id="scanOverlayNote">Осталось отсканировать</div>
+    </div>
+  </div>
+
+  <script>
+    // Регистрируем service worker для PWA-установки и офлайн-кэша.
+    // Только в безопасном контексте (HTTPS либо localhost).
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("./sw.js").catch(function () {
+          /* нет сети/поддержки — приложение работает и без SW */
+        });
+      });
+    }
+  </script>
+  <script src="qr.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
