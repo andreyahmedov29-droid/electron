@@ -1,5 +1,5 @@
 {
-  "versionCode": 9,
-  "versionName": "1.0.8",
-  "notes": "Тестовая версия для проверки автообновления APK и desktop"
+  "versionCode": 10,
+  "versionName": "1.0.9",
+  "notes": "Добавлен номер версии приложения в шапку (бейдж)"
 }
