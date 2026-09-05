@@ -1697,6 +1697,15 @@
     if (!val || !el.salaryCalcList) return;
     const [y, m] = val.split("-").map(Number);
     const m0 = m - 1;
+    // Расчёт по итогам месяца доступен только после его завершения
+    // (с 1-го числа следующего месяца). До этого момента итоги/переработку
+    // не показываем, чтобы не было преждевременных и противоречивых сумм.
+    const monthComplete = new Date(y, m, 1) <= new Date();
+    if (!monthComplete) {
+      el.salaryCalcList.innerHTML =
+        `<div class="salary-calc-none">Расчёт за этот месяц появится после его завершения (с 1-го числа следующего месяца).</div>`;
+      return;
+    }
     const hs = fmtCalcHours;
 
     const calcRows = state.staff
