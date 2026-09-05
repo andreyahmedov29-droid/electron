@@ -236,6 +236,11 @@ function createWindow() {
     if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
       const sc = (details.responseHeaders && details.responseHeaders["set-cookie"]) || [];
       logWeb("ответ", details.statusCode, "url:", details.url, "| set-cookie:", sc.length);
+      // На 401/302 логируем ВСЕ заголовки ответа — там может быть Location
+      // (куда вести на вход) или WWW-Authenticate/подсказка о способе входа.
+      if (details.statusCode === 401 || details.statusCode === 302 || details.statusCode === 403) {
+        logWeb("  ЗАГОЛОВКИ ОТВЕТА:", JSON.stringify(details.responseHeaders || {}));
+      }
     }
   });
 
