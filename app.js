@@ -1624,14 +1624,29 @@
     let unpaidDays = 0;
     for (let d = 1; d <= daysInMonth; d += 1) {
       const key = `${year}-${String(m0 + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-      totalWorkMs += reportDayWorkMs(staffId, key);
-      // Переработка — только по закрытым дням (как в табеле).
-      const closed = dayClosedWorkMs(staffId, key);
-      if (closed > 0) totalOverMs += Math.max(0, closed - normDayMs);
-      // Неоплачиваемые статусы (НН/ДО) для этого сотрудника.
       const rec = state.days[key];
       const st = rec && rec.statuses ? rec.statuses[staffId] : undefined;
-      if (st === "НН" || st === "ДО") unpaidDays++;
+      // Неоплачиваемые статусы (НН/ДО): исключаем из заработка.
+      if (st === "НН" || st === "ДО") { unpaidDays++; continue; }
+      const isBiz = isBizDay(year, m0, d);
+      const closedReal = dayClosedWorkMs(staffId, key);
+      // Выходной день: если таймер был запущен и завершён (есть закрытый сегмент)
+      // — ставим явку независимо от часов и ВЕСЬ интервал пишем в подработку.
+      if (!isBiz && closedReal > 0) {
+        totalWorkMs += closedReal;
+        totalOverMs += closedReal;
+        continue;
+      }
+      // Ручная явка «Я» (вручную проставлена админом в статусах) — считаем день
+      // за 8 часов по умолчанию, независимо от реальных сегментов. Для остальных
+      // дней считаем по фактически отработанному периоду (сегменты работы).
+      const isManualYa = st === "Я";
+      const work = isManualYa
+        ? RATE_BASE_HOURS * 3600000
+        : reportDayWorkMs(staffId, key);
+      const closed = isManualYa ? RATE_BASE_HOURS * 3600000 : closedReal;
+      totalWorkMs += work;
+      if (closed > 0) totalOverMs += Math.max(0, closed - normDayMs);
     }
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
     // Зачёт сверху вниз: переработка сначала закрывает месячный недобор.
