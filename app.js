@@ -716,6 +716,15 @@
   }
 
   // ------------- Actions -------------
+  // Передаём нативу (Android WebView) статус рабочего дня водителя, чтобы
+  // фоновый трекер геолокации работал ТОЛЬКО пока день начат и не завершён.
+  // После «Завершить работу» натив останавливает отправку координат.
+  function syncWorkActiveToNative(active) {
+    if (window.AndroidBridge && typeof window.AndroidBridge.setWorkActive === "function") {
+      try { window.AndroidBridge.setWorkActive(!!active); } catch (_) { /* натив недоступен */ }
+    }
+  }
+
   async function startWork() {
     if (state.phase === "working") return;
     // A finished day is closed: you cannot start (or "resume") it again today.
@@ -726,6 +735,7 @@
     }
     state.segments.push({ start: Date.now(), end: null, kind: "work", id: uid() });
     state.phase = "working";
+    syncWorkActiveToNative(true);
     render();
     toast("Работа начата");
     postLog("начало работы");
@@ -748,6 +758,7 @@
     }
     state.phase = "finished";
     state.finishKey = state.dayKey; // day finished — prevent an open segment re-living
+    syncWorkActiveToNative(false);
     render();
     showFinishToast();
     postLog("завершение работы");
@@ -5587,6 +5598,12 @@
       el.userAvatar.textContent = initials || "?";
       el.userChip.hidden = false;
     }
+
+    // Синхронизируем с нативом фактический статус рабочего дня: если приложение
+    // (или процесс Android) перезапустилось посреди дня, трекер геолокации должен
+    // снова заработать — натив узнаёт, что день ещё активен. Если день завершён
+    // (или не начат) — натив трекер не запускает.
+    syncWorkActiveToNative(state.phase === "working" || state.phase === "paused");
 
     // Show/hide the admin gear based on the real role from the server.
     el.settingsBtn.classList.toggle("hidden", !(state.isAdmin || state.isModerator));
