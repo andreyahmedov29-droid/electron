@@ -635,12 +635,25 @@
         unpaidDays++;
         unpaidDates.push({ key, status, day: d, date: new Date(year, m0, d) });
       }
-      if (work <= 0) continue;
-      // Overtime counts only for closed segments (day finished), see dayClosedWorkMs.
-      const over = Math.max(0, dayClosedWorkMs(state.me.id, key) - normDayMs);
-      totalWorkMs += work;
+      const isBiz = isBizDay(year, m0, d);
+      const closedReal = dayClosedWorkMs(state.me.id, key);
+      // Выходной день: если таймер был запущен и завершён (есть закрытый сегмент)
+      // — ВЕСЬ интервал пишется в подработку (не только сверх нормы).
+      if (!isBiz && closedReal > 0) {
+        totalWorkMs += closedReal;
+        totalOverMs += closedReal;
+        rows.push({ day: d, work: closedReal, over: closedReal, date: new Date(year, m0, d) });
+        continue;
+      }
+      // Приоритет часов: есть таймер → используем его (ручная явка игнорируется).
+      // Нет таймера → если проставлена ручная явка «Я», считаем день за 8 часов.
+      const hasTimer = closedReal > 0;
+      const workEff = hasTimer ? work : (status === "Я" ? RATE_BASE_HOURS * 3600000 : 0);
+      if (workEff <= 0) continue;
+      const over = hasTimer ? Math.max(0, closedReal - normDayMs) : 0;
+      totalWorkMs += workEff;
       totalOverMs += over;
-      rows.push({ day: d, work, over, date: new Date(year, m0, d) });
+      rows.push({ day: d, work: workEff, over, date: new Date(year, m0, d) });
     }
     const bizDays = businessDaysInMonth(year, m0);
     const rateMonthMs = bizDays * RATE_BASE_HOURS * 3600000;
@@ -1630,6 +1643,7 @@
       if (st === "НН" || st === "ДО") { unpaidDays++; continue; }
       const isBiz = isBizDay(year, m0, d);
       const closedReal = dayClosedWorkMs(staffId, key);
+      const hasTimer = closedReal > 0; // есть завершённый сегмент таймера
       // Выходной день: если таймер был запущен и завершён (есть закрытый сегмент)
       // — ставим явку независимо от часов и ВЕСЬ интервал пишем в подработку.
       if (!isBiz && closedReal > 0) {
@@ -1637,16 +1651,14 @@
         totalOverMs += closedReal;
         continue;
       }
-      // Ручная явка «Я» (вручную проставлена админом в статусах) — считаем день
-      // за 8 часов по умолчанию, независимо от реальных сегментов. Для остальных
-      // дней считаем по фактически отработанному периоду (сегменты работы).
-      const isManualYa = st === "Я";
-      const work = isManualYa
-        ? RATE_BASE_HOURS * 3600000
-        : reportDayWorkMs(staffId, key);
-      const closed = isManualYa ? RATE_BASE_HOURS * 3600000 : closedReal;
+      // Приоритет: есть таймер → используем его (ручная явка игнорируется).
+      // Нет таймера → если проставлена ручная явка «Я», считаем день за 8 часов.
+      const work = hasTimer ? reportDayWorkMs(staffId, key)
+        : (st === "Я" ? RATE_BASE_HOURS * 3600000 : 0);
+      if (work <= 0) continue;
+      const over = hasTimer ? Math.max(0, closedReal - normDayMs) : 0;
       totalWorkMs += work;
-      if (closed > 0) totalOverMs += Math.max(0, closed - normDayMs);
+      if (over > 0) totalOverMs += over;
     }
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
     // Зачёт сверху вниз: переработка сначала закрывает месячный недобор.
@@ -4581,6 +4593,7 @@
             <input class="sd-time today-start" type="time" data-id="${escapeHtml(s.id)}" value="${startHm}" />
             <span class="sd-label">конец</span>
             <input class="sd-time today-end" type="time" data-id="${escapeHtml(s.id)}" value="${endHm}" />
+            <button type="button" class="sd-clear" title="Удалить этот день" aria-label="Удалить этот день">✕</button>
           </div>
         </div>
         <div class="today-state" id="todayState-${escapeHtml(s.id)}"></div>
@@ -4592,6 +4605,17 @@
       const startInput = row.querySelector(".today-start");
       const endInput = row.querySelector(".today-end");
       const stateEl = row.querySelector(".today-state");
+      // Крестик: полностью очищает день сотрудника (начало и конец) и удаляет
+      // запись с сервера (saveTodayRow при пустых полях удаляет сегмент).
+      const clearBtn = row.querySelector(".sd-clear");
+      if (clearBtn && canEdit) {
+        clearBtn.addEventListener("click", () => {
+          startInput.value = "";
+          endInput.value = "";
+          if (todayDraft[key]) { delete todayDraft[key][s.id]; persistDraft(); }
+          saveTodayRow(s.id, key);
+        });
+      }
       const saveDraft = () => {
         if (!todayDraft[key]) todayDraft[key] = {};
         todayDraft[key][s.id] = { start: startInput.value, end: endInput.value };
