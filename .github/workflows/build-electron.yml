@@ -81,6 +81,9 @@ jobs:
       - name: Опубликовать релиз (снять черновик)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Раннер — Windows, shell по умолчанию PowerShell, а команда написана в
+        # bash-синтаксисе ($(node ...)), поэтому явно включаем bash.
+        shell: bash
         run: |
           VERSION=$(node -p "require('./version.json').versionName.replace(/^v/,'')")
           echo "Публикуем релиз v$VERSION"
