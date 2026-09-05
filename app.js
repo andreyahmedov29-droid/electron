@@ -659,17 +659,18 @@
     const normMonthMs = NORM_MONTH_DAYS * RATE_BASE_HOURS * 3600000; // 176 ч
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
     const usedMs = Math.min(totalOverMs, deficitMs); // зачтено в недобор
-    const effectiveOverMs = Math.max(0, totalOverMs - usedMs); // к оплате
+    // Месяц считается завершённым (расчёт окончателен), когда наступило 1-е число
+    // следующего месяца. Автокомпенсация (уменьшение переработки на недобор)
+    // применяется ТОЛЬКО после завершения месяца — пока месяц идёт, недобор ещё
+    // может закрыться, поэтому показываем полную переработку (не обнуляем сумму).
+    const isComplete = new Date(year, m0 + 1, 1) <= new Date();
+    const effectiveOverMs = isComplete ? Math.max(0, totalOverMs - usedMs) : totalOverMs; // к оплате
     // Unpaid days (НН/ДО) are not paid: deduct their share of the monthly salary.
     const dayRate = bizDays > 0 ? salary / bizDays : 0;
     const unpaidDeduct = unpaidDays * dayRate;
     // "Заработано" = оклад + подработка + премия − неоплаченные дни; подработка считается ТОЛЬКО от оклада.
     const earned = salary + (effectiveOverMs / 3600000) * ratePerHour * multiplier + bonus + extraBonus - unpaidDeduct;
     const overRate = ratePerHour * multiplier;
-    // Месяц считается завершённым (расчёт окончателен), когда наступило 1-е число
-    // следующего месяца — именно тогда для сотрудника показывается итог/блок
-    // автокомпенсации за этот месяц (например, по сентябрю — 1 октября).
-    const isComplete = new Date(year, m0 + 1, 1) <= new Date();
     return { year, m0, key: monthKey(year, m0), label: monthLabel(year, m0), isLast, isComplete, bizDays, salary, bonus, extraBonus, totalWorkMs, totalOverMs, normMonthMs, deficitMs, usedMs, effectiveOverMs, ratePerHour, overEarn: (effectiveOverMs / 3600000) * ratePerHour * multiplier, earned, unpaidDays, unpaidDeduct, unpaidDates, dayRate, rows };
   }
 
@@ -1635,7 +1636,10 @@
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
     // Зачёт сверху вниз: переработка сначала закрывает месячный недобор.
     const usedMs = Math.min(totalOverMs, deficitMs);
-    const effectiveOverMs = Math.max(0, totalOverMs - usedMs);
+    // Автокомпенсация применяется ТОЛЬКО после завершения месяца: пока месяц
+    // идёт, показываем полную переработку, а недобор ещё может закрыться.
+    const isComplete = new Date(year, m0 + 1, 1) <= new Date();
+    const effectiveOverMs = isComplete ? Math.max(0, totalOverMs - usedMs) : totalOverMs;
     const st = state.staff.find((x) => String(x.id) === String(staffId));
     const salary = st && st.salary != null ? st.salary : 50000;
     const extraBonus = st && st.extraBonus != null ? st.extraBonus : 0;
@@ -1650,7 +1654,7 @@
       id: staffId,
       name: st ? st.name : "—",
       bizDays, normMonthMs, totalWorkMs, totalOverMs,
-      deficitMs, usedMs, effectiveOverMs,
+      isComplete, deficitMs, usedMs, effectiveOverMs,
       salary, extraBonus, ratePerHour, overEarn, earned,
       unpaidDays, unpaidDeduct, dayRate,
     };

@@ -2578,7 +2578,7 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   margin-top: 10px;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--ink);
+  color: #e8eaed;
   background: rgba(255, 255, 255, 0.04);
   border-radius: 10px;
   padding: 10px 12px;
@@ -4385,8 +4385,8 @@ dialog.admin-modal[open] {
 .mcn-text {
   font-size: 12px;
   line-height: 1.5;
-  color: var(--ink);
-  opacity: 0.95;
+  color: #e8eaed;
+  opacity: 1;
 }
 
 /* ==========================================================================
