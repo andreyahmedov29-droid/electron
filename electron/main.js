@@ -219,6 +219,13 @@ function createWindow() {
   });
   mainWindow.webContents.on("did-fail-load", (event, code, desc, url, isMainFrame) => {
     logWeb("ОШИБКА загрузки", code, desc, "|", url, "| main:", isMainFrame);
+    // Если главная страница поддомена приложения не загрузилась (нет сессии —
+    // шлюз отвечает 401 и не отдаёт HTML), направляем на вход платформы.
+    if (isMainFrame && /^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(url || "") && !loginRedirectPending) {
+      loginRedirectPending = true;
+      logWeb("did-fail-load на поддомене: переходим на вход платформы");
+      try { mainWindow.loadURL("https://vibecode.bitrix24.tech"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
+    }
   });
   mainWindow.webContents.on("did-finish-load", () => {
     logWeb("страница загружена (финиш)");
@@ -294,8 +301,10 @@ function createWindow() {
       // (нет сессии платформы), перенаправляем окно на вход платформы
       // vibecode.bitrix24.tech (SSO → auth2.bitrix24.net → Битрикс24). После
       // входа сессия появится в cookie, слушатель session.cookies ниже вернёт
-      // окно обратно на приложение.
-      if (details.resourceType === "mainFrame" && details.statusCode === 401 && !loginRedirectPending) {
+      // окно обратно на приложение. Главный запрос (GET /) — это и есть
+      // загрузка документа, поэтому не ограничиваем по resourceType (в
+      // onHeadersReceived он может приходить не как "mainFrame").
+      if (details.statusCode === 401 && !loginRedirectPending) {
         loginRedirectPending = true;
         logWeb("НЕТ СЕССИИ: перенаправляем на вход платформы vibecode.bitrix24.tech");
         try { mainWindow.loadURL("https://vibecode.bitrix24.tech"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
