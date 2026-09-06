@@ -219,13 +219,11 @@ function createWindow() {
   });
   mainWindow.webContents.on("did-fail-load", (event, code, desc, url, isMainFrame) => {
     logWeb("ОШИБКА загрузки", code, desc, "|", url, "| main:", isMainFrame);
-    // Если главная страница поддомена приложения не загрузилась (нет сессии —
-    // шлюз отвечает 401 и не отдаёт HTML), направляем на вход платформы.
-    if (isMainFrame && /^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(url || "") && !loginRedirectPending) {
-      loginRedirectPending = true;
-      logWeb("did-fail-load на поддомене: переходим на вход платформы");
-      try { mainWindow.loadURL("https://vibecode.bitrix24.tech/auth/login"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
-    }
+    // Ручной редирект на /auth/login ЗДЕСЬ НЕ ДЕЛАЕМ (убрано в 1.1.4).
+    // Любая ошибка mainFrame на поддомене (в т.ч. ERR_ABORTED от корректной
+    // 200-навигации) прерывала загрузку документа и вела на вход, из-за чего
+    // шлюз-навигация отменялась и окно оставалось чёрным. Шлюз сам показывает
+    // экран входа при отсутствии сессии — ручной переход не нужен.
   });
   mainWindow.webContents.on("did-finish-load", () => {
     logWeb("страница загружена (финиш)");
@@ -272,18 +270,10 @@ function createWindow() {
       if (details.statusCode === 401 || details.statusCode === 302 || details.statusCode === 403) {
         logWeb("  ЗАГОЛОВКИ ОТВЕТА:", JSON.stringify(details.responseHeaders || {}));
       }
-      // Личный вход через платформу: если поддомен приложения отвечает 401
-      // (нет сессии платформы), перенаправляем окно на вход платформы
-      // vibecode.bitrix24.tech (SSO → auth2.bitrix24.net → Битрикс24). После
-      // входа сессия появится в cookie, слушатель session.cookies ниже вернёт
-      // окно обратно на приложение. Главный запрос (GET /) — это и есть
-      // загрузка документа, поэтому не ограничиваем по resourceType (в
-      // onHeadersReceived он может приходить не как "mainFrame").
-      if (details.statusCode === 401 && !loginRedirectPending) {
-        loginRedirectPending = true;
-        logWeb("НЕТ СЕССИИ: перенаправляем на вход платформы vibecode.bitrix24.tech/auth/login");
-        try { mainWindow.loadURL("https://vibecode.bitrix24.tech/auth/login"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
-      }
+      // Ручной редирект на /auth/login на 401 ЗДЕСЬ НЕ ДЕЛАЕМ (убрано в 1.1.4).
+      // Шлюз Black Hole сам отдаёт 200 HTML экрана входа при отсутствии
+      // сессии; ручной loadURL(.../auth/login) в onHeadersReceived отменял
+      // корректную mainFrame-навигацию (ERR_ABORTED + пустой getURL()).
       // Вход завершён: окно снова успешно (200) загрузило именно КОРНЕВУЮ
       // страницу приложения — значит шлюз отдал документ, то есть сессия есть.
       // ВАЖНО: судить только по корню, а не по любому 200 на поддомене: шлюз
