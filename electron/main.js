@@ -315,6 +315,52 @@ function createWindow() {
     }
   }
 
+  // ---- Авто-диагностика, не зависящая от did-finish-load ----
+  // Страница может прийти 200, но так и не завершить загрузку (did-finish-load
+  // не наступает, окно остаётся чёрным). Поэтому снимаем URL/DOM/скриншот по
+  // таймеру через несколько секунд после старта, а не по событию load.
+  function captureDump() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      const u = mainWindow.webContents.getURL();
+      logWeb("[dump] URL:", u, "| готовность:", String(mainWindow.webContents.isLoading()));
+      mainWindow.webContents.executeJavaScript(
+        "(function(){var de=document.documentElement;var b=document.body;" +
+        "return JSON.stringify({title:document.title, h:(de?de.scrollHeight:-1), " +
+        "body:(b?b.innerText.length:-1), html:(de?de.outerHTML.length:-1)})})()",
+        true
+      ).then((r) => logWeb("[dump] DOM:", r))
+       .catch((e) => logWeb("[dump] DOM err:", e && e.message));
+    } catch (e) { logWeb("[dump] js err:", e && e.message); }
+    try {
+      mainWindow.webContents.capturePage()
+        .then((img) => {
+          const p = path.join(app.getPath("userData"), "screen.png");
+          fs.writeFileSync(p, img.toPNG());
+          logWeb("[dump] скриншот:", p);
+        })
+        .catch((e) => logWeb("[dump] capture err:", e && e.message));
+    } catch (e) { logWeb("[dump] capture err2:", e && e.message); }
+  }
+  setTimeout(captureDump, 5000);
+  setTimeout(captureDump, 12000);
+
+  // Сетевые события: какие URL страница реально запрашивает и что висит/падает.
+  try {
+    ses.webRequest.onCompleted((details) => {
+      const u = details.url || "";
+      if (/vibecode\.bitrix24\.tech|auth2\.bitrix24\.net|app-/.test(u)) {
+        logWeb("[net] done", details.statusCode, u, "| type:", details.resourceType || "?");
+      }
+    });
+    ses.webRequest.onErrorOccurred((details) => {
+      const u = details.url || "";
+      if (/vibecode\.bitrix24\.tech|auth2\.bitrix24\.net|app-/.test(u)) {
+        logWeb("[net] ОШИБКА", details.error || "?", u, "| type:", details.resourceType || "?");
+      }
+    });
+  } catch (e) { logWeb("ошибка сетевого лога:", e && e.message); }
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
