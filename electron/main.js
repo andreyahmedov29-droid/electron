@@ -266,7 +266,7 @@ function createWindow() {
   });
   // Снимаем Set-Cookie при ответе шлюза на главный запрос (без разбора значений).
   const ses = mainWindow.webContents.session;
-  ses.webRequest.onHeadersReceived((details) => {
+  ses.webRequest.onHeadersReceived((details, callback) => {
     if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
       const sc = (details.responseHeaders && details.responseHeaders["set-cookie"]) || [];
       const ct = (details.responseHeaders && details.responseHeaders["content-type"]) || [];
