@@ -254,6 +254,30 @@ function createWindow() {
     }
     callback({ requestHeaders: details.requestHeaders });
   });
+  // Воспроизводим ЗАГОЛОВКИ браузерной навигации. Electron при loadURL посылает
+  // Sec-Fetch-Dest:"empty", а настоящий Chrome при переходе по адресу — 
+  // Sec-Fetch-Dest:"document" + Sec-Fetch-Mode:"navigate" + client hints.
+  // Шлюз Black Hole реагирует на этот признак: «навигация» → ведёт на OAuth-
+  // вход (auth2.bitrix24.net), «не навигация» (empty) → отвечает 401 JSON.
+  if (!useSharedToken) {
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      const url = details.url || "";
+      if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(url) && details.resourceType === "mainFrame") {
+        const h = Object.assign({}, details.requestHeaders);
+        if (!/^https:\/\/app-.*vibecode\.bitrix24\.tech\/oauth|auth2\.bitrix24\.net/.test(url)) {
+          h["Sec-Fetch-Dest"] = "document";
+          h["Sec-Fetch-Mode"] = "navigate";
+          h["Sec-Fetch-Site"] = "none";
+        }
+        h["Sec-CH-UA"] = '"Chromium";v="126", "Google Chrome";v="126", "Not.A/Brand";v="8"';
+        h["Sec-CH-UA-Mobile"] = "?0";
+        h["Sec-CH-UA-Platform"] = '"Windows"';
+        callback({ requestHeaders: h });
+      } else {
+        callback({});
+      }
+    });
+  }
   ses.webRequest.onHeadersReceived((details) => {
     if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
       const sc = (details.responseHeaders && details.responseHeaders["set-cookie"]) || [];
