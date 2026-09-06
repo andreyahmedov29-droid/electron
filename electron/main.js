@@ -429,44 +429,6 @@ async function applyWebToken() {
   } else {
     console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
       + "шлюз покажет экран входа, кто войдёт в учётку — тот и используется.");
-    // ЧЁРНЫЙ ЭКРАН: окно не получало HTML страницы входа, потому что первый запрос
-    // к поддомену приложения шёл как Sec-Fetch-Dest:"empty" (Electron loadURL не
-    // делает "навигацию"). На «не-навигацию» шлюз Black Hole отвечает 401 JSON, а
-    // не 200 HTML с экраном входа → страница не рендерилась, оставался чёрный фон.
-    // Заставляем главный фрейм к поддомену приложения быть браузерной навигацией
-    // (Sec-Fetch-Dest:document + Sec-Fetch-Mode:navigate): тогда шлюз сам отдаст
-    // HTML страницы входа (200), пользователь войдёт, и приложение откроется.
-    // OAuth-домены (vibecode.bitrix24.tech/auth/login, auth2.bitrix24.net) не
-    // матчат regex поддомена приложения и не попадают под подмену — навигация на
-    // вход/обратно не ломается.
-    try {
-      const webSes = session.fromPartition("persist:biotime");
-      webSes.webRequest.onBeforeSendHeaders((details, callback) => {
-        const url = details.url || "";
-        // Подменяем навигационные заголовки ТОЛЬКО для корневого документа
-        // приложения (GET / к app-поддомену). Не опираемся на details.resourceType:
-        // для первой навигации из loadURL() он приходит как "other"/undefined, из-за
-        // чего прежнее условие (mainFrame) пропускало запрос и шлюз отвечал 401
-        // вместо 200 HTML с экраном входа.
-        const isAppRoot =
-          String(url).replace(/\/$/, "") === WEB_APP_URL.replace(/\/$/, "");
-        if (isAppRoot) {
-          const h = Object.assign({}, details.requestHeaders);
-          h["Sec-Fetch-Dest"] = "document";
-          h["Sec-Fetch-Mode"] = "navigate";
-          logWeb("навигация окна → корень приложения (Sec-Fetch-Dest:document, type=",
-            details.resourceType || "?", "): ", url);
-          callback({ requestHeaders: h });
-        } else {
-          callback({});
-        }
-      });
-    } catch (e) {
-      console.warn("[web] Не удалось зарегистрировать перехват навигации:",
-        e && e.message);
-      try { logWeb("ошибка регистрации перехвата навигации:", e && e.message); }
-      catch { /* ignore */ }
-    }
   }
 }
 
