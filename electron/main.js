@@ -305,7 +305,7 @@ function createWindow() {
 // включённом useSharedToken. Перехват onBeforeSendHeaders регистрируется ЗДЕСЬ,
 // до createWindow()/loadURL(), на той же partition-сессии, что использует окно
 // (persist:biotime), поэтому Bearer уходит уже в ПЕРВЫЙ запрос к поддомену.
-function applyWebToken() {
+async function applyWebToken() {
   // Диагностика: пишем в web-gate.log, что реально видит приложение (путь
   // конфига, режим, наличие токена) — без секретов.
   try {
@@ -315,6 +315,18 @@ function applyWebToken() {
     logWeb("applyWebToken: ACCESS_TOKEN задан =", String(!!ACCESS_TOKEN), "| конфиг:", cfgPath);
   } catch (e) { logWeb("applyWebToken log err:", e && e.message); }
   if (!useWebMode) return;
+  // До первой навигации сбрасываем service worker и HTTP-кэш partition. Старый
+  // sw.js приложения может перехватывать навигацию как fetch/XHR — тогда шлюз
+  // отвечает HTML страницы входа 200, но Chromium не подставляет его как документ
+  // окна (запрос классифицирован как XHR, а не навигация) → чёрный экран.
+  try {
+    const webSes = session.fromPartition("persist:biotime");
+    await webSes.clearStorageData({ storages: ["serviceworkers", "cachestorage", "indexdb"] });
+    logWeb("очищен service worker / кэш partition (persist:biotime)");
+  } catch (e) {
+    console.warn("[web] Не удалось очистить storage:", e && e.message);
+    try { logWeb("ошибка очистки storage:", e && e.message); } catch { /* ignore */ }
+  }
   if (useSharedToken) {
     if (!ACCESS_TOKEN) {
       console.warn("[web] Режим общего токена включён (useSharedToken=true), "
@@ -404,7 +416,9 @@ function stopServer() {
 app.whenReady().then(async () => {
   if (useWebMode) {
     // Режим A: подключаемся к веб-версии напрямую (без локального сервера).
-    applyWebToken();
+    // Дожидаемся сброса SW/кэша внутри applyWebToken, чтобы первая навигация
+    // loadURL() не была перехвачена старым сервис-воркером и не ушла как XHR.
+    await applyWebToken();
     createWindow();
   } else {
     // Режим B: поднимаем локальную копию сервера.
