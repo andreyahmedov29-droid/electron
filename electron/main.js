@@ -229,6 +229,29 @@ function createWindow() {
   });
   mainWindow.webContents.on("did-finish-load", () => {
     logWeb("страница загружена (финиш)");
+    logWeb("  URL документа:", mainWindow.webContents.getURL());
+    // Что реально в документе (url/title/высота/длина текста) — понять, отрисовывается
+    // ли страница входа или это пустой/тёмный документ.
+    try {
+      mainWindow.webContents.executeJavaScript(
+        "JSON.stringify({url: location.href, title: document.title, h: " +
+        "(document.documentElement?document.documentElement.scrollHeight:-1), " +
+        "body: (document.body?document.body.innerText.length:-1), html: " +
+        "(document.documentElement?document.documentElement.outerHTML.length:-1)})",
+        true
+      ).then((r) => logWeb("  DOM:", r))
+       .catch((e) => logWeb("  DOM err:", e && e.message));
+    } catch (e) { logWeb("  executeJavaScript err:", e && e.message); }
+    // Скриншот окна в userData/screen.png — увидеть, что реально рендерится.
+    try {
+      mainWindow.webContents.capturePage()
+        .then((img) => {
+          const p = path.join(app.getPath("userData"), "screen.png");
+          fs.writeFileSync(p, img.toPNG());
+          logWeb("  скриншот сохранён:", p);
+        })
+        .catch((e) => logWeb("  capture err:", e && e.message));
+    } catch (e) { logWeb("  capture err2:", e && e.message); }
   });
   mainWindow.webContents.on("render-process-gone", (event, details) => {
     logWeb("render-process-gone:", details && details.reason);
