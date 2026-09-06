@@ -74,6 +74,9 @@ const PROJECT_ROOT = app.isPackaged
 let serverProc = null;   // дочерний процесс Node (server.js)
 let mainWindow = null;   // главное окно
 let shuttingDown = false;
+// Флаг: окно перенаправлено на вход платформы (vibecode.bitrix24.tech), чтобы
+// не перенаправлять повторно и вернуться на приложение после установки сессии.
+let loginRedirectPending = false;
 
 // Пишет строку в файл web-gate.log в папке данных приложения. Нужно для
 // диагностики входа: stdout GUI-приложения Windows в обычном запуске не виден,
@@ -287,8 +290,35 @@ function createWindow() {
       if (details.statusCode === 401 || details.statusCode === 302 || details.statusCode === 403) {
         logWeb("  ЗАГОЛОВКИ ОТВЕТА:", JSON.stringify(details.responseHeaders || {}));
       }
+      // Личный вход через платформу: если поддомен приложения отвечает 401
+      // (нет сессии платформы), перенаправляем окно на вход платформы
+      // vibecode.bitrix24.tech (SSO → auth2.bitrix24.net → Битрикс24). После
+      // входа сессия появится в cookie, слушатель session.cookies ниже вернёт
+      // окно обратно на приложение.
+      if (details.resourceType === "mainFrame" && details.statusCode === 401 && !loginRedirectPending) {
+        loginRedirectPending = true;
+        logWeb("НЕТ СЕССИИ: перенаправляем на вход платформы vibecode.bitrix24.tech");
+        try { mainWindow.loadURL("https://vibecode.bitrix24.tech"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
+      }
     }
   });
+  // Возврат на приложение после того, как сессия платформы установилась в
+  // cookie (пользователь прошёл вход). Слушаем появление cookie на домене
+  // vibecode.bitrix24.tech и, если мы перенаправляли на вход, открываем
+  // приложение снова — теперь шлюз пустит по сессии.
+  if (!useSharedToken) {
+    try {
+      ses.cookies.on("changed", (event, cookie) => {
+        if (loginRedirectPending && cookie && /(vibecode\.bitrix24\.tech)$/.test(String(cookie.domain || ""))) {
+          logWeb("Обнаружена cookie сессии платформы; возвращаемся на приложение");
+          loginRedirectPending = false;
+          try { mainWindow.loadURL(WEB_APP_URL); } catch (e) { logWeb("ошибка возврата:", e && e.message); }
+        }
+      });
+    } catch (e) {
+      logWeb("не удалось слушать cookies:", e && e.message);
+    }
+  }
 
   mainWindow.on("closed", () => {
     mainWindow = null;
