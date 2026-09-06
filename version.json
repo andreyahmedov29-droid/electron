@@ -1,5 +1,5 @@
 {
-  "versionCode": 16,
-  "versionName": "1.1.8",
-  "notes": "Фикс чёрного экрана десктопа: onHeadersReceived теперь вызывает callback(), навигация mainFrame больше не обрывается ERR_ABORTED (200 text/html от шлюза становится документом окна). Убраны ручные редиректы на /auth/login"
+  "versionCode": 17,
+  "versionName": "1.1.9",
+  "notes": "Авторелиз 1.1.9 (commit ab13721)"
 }
