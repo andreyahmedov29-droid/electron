@@ -341,6 +341,14 @@ function createWindow() {
 // Общий токен (`Authorization: Bearer vibe_app_local_...`) — только при явно
 // включённом useSharedToken, и подставляется в перехвате внутри createWindow.
 function applyWebToken() {
+  // Диагностика: пишем в web-gate.log, что реально видит приложение (путь
+  // конфига, режим, наличие токена) — без секретов.
+  try {
+    const cfgPath = path.join(app.getPath("userData"), "biotime.config.json");
+    logWeb("applyWebToken: userData=", app.getPath("userData"));
+    logWeb("applyWebToken: useWebMode=", useWebMode, "| useSharedToken=", String(useSharedToken));
+    logWeb("applyWebToken: ACCESS_TOKEN задан =", String(!!ACCESS_TOKEN), "| конфиг:", cfgPath);
+  } catch (e) { logWeb("applyWebToken log err:", e && e.message); }
   if (!useWebMode) return;
   if (useSharedToken) {
     if (!ACCESS_TOKEN) {
