@@ -41,7 +41,7 @@ try {
 const WEB_APP_URL =
   process.env.BIOTIME_APP_URL ||
   (_cfg.appUrl && String(_cfg.appUrl)) ||
-  "https://app-22aae7dc61f1.vibecode.bitrix24.tech";
+  "https://app-2660de1a180b.vibecode.bitrix24.tech";
 const ACCESS_TOKEN = process.env.BIOTIME_ACCESS_TOKEN || (_cfg.accessToken || "");
 // Личный вход через шлюз (по умолчанию): окно ведёт себя как обычный браузер,
 // шлюз Black Hole при отсутствии сессии показывает экран «Защищённый сервер /
