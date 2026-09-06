@@ -256,6 +256,13 @@ function createWindow() {
         logWeb("НЕТ СЕССИИ: перенаправляем на вход платформы vibecode.bitrix24.tech/auth/login");
         try { mainWindow.loadURL("https://vibecode.bitrix24.tech/auth/login"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
       }
+      // Вход завершён: окно снова успешно (200) загрузило приложение — значит у
+      // шлюза уже есть сессия. Снимаем флаг ожидания, чтобы редирект на вход не
+      // повторился, и не дёргаем loadURL снова (окно уже на приложении).
+      if (loginRedirectPending && details.statusCode === 200) {
+        logWeb("Вход выполнен: приложение отвечает 200; снимаем флаг ожидания входа");
+        loginRedirectPending = false;
+      }
     }
   });
   // Возврат на приложение после того, как сессия платформы установилась в
