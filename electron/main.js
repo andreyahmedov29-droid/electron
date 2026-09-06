@@ -343,6 +343,36 @@ function applyWebToken() {
   } else {
     console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
       + "шлюз покажет экран входа, кто войдёт в учётку — тот и используется.");
+    // ЧЁРНЫЙ ЭКРАН: окно не получало HTML страницы входа, потому что первый запрос
+    // к поддомену приложения шёл как Sec-Fetch-Dest:"empty" (Electron loadURL не
+    // делает "навигацию"). На «не-навигацию» шлюз Black Hole отвечает 401 JSON, а
+    // не 200 HTML с экраном входа → страница не рендерилась, оставался чёрный фон.
+    // Заставляем главный фрейм к поддомену приложения быть браузерной навигацией
+    // (Sec-Fetch-Dest:document + Sec-Fetch-Mode:navigate): тогда шлюз сам отдаст
+    // HTML страницы входа (200), пользователь войдёт, и приложение откроется.
+    // OAuth-домены (vibecode.bitrix24.tech/auth/login, auth2.bitrix24.net) не
+    // матчат regex поддомена приложения и не попадают под подмену — навигация на
+    // вход/обратно не ломается.
+    try {
+      const webSes = session.fromPartition("persist:biotime");
+      webSes.webRequest.onBeforeSendHeaders((details, callback) => {
+        const url = details.url || "";
+        if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(url)
+            && details.resourceType === "mainFrame"
+            && !/^https:\/\/app-.*vibecode\.bitrix24\.tech\/(oauth|auth2\.bitrix24\.net)/.test(url)) {
+          const h = Object.assign({}, details.requestHeaders);
+          h["Sec-Fetch-Dest"] = "document";
+          h["Sec-Fetch-Mode"] = "navigate";
+          logWeb("навигация окна → mainFrame к приложению (Sec-Fetch-Dest:document): ", url);
+          callback({ requestHeaders: h });
+        } else {
+          callback({});
+        }
+      });
+    } catch (e) {
+      console.warn("[web] Не удалось зарегистрировать перехват навигации:",
+        e && e.message);
+    }
   }
 }
 
