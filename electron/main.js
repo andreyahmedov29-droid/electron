@@ -224,7 +224,7 @@ function createWindow() {
     if (isMainFrame && /^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(url || "") && !loginRedirectPending) {
       loginRedirectPending = true;
       logWeb("did-fail-load на поддомене: переходим на вход платформы");
-      try { mainWindow.loadURL("https://vibecode.bitrix24.tech"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
+      try { mainWindow.loadURL("https://vibecode.bitrix24.tech/auth/login"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
     }
   });
   mainWindow.webContents.on("did-finish-load", () => {
@@ -306,8 +306,8 @@ function createWindow() {
       // onHeadersReceived он может приходить не как "mainFrame").
       if (details.statusCode === 401 && !loginRedirectPending) {
         loginRedirectPending = true;
-        logWeb("НЕТ СЕССИИ: перенаправляем на вход платформы vibecode.bitrix24.tech");
-        try { mainWindow.loadURL("https://vibecode.bitrix24.tech"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
+        logWeb("НЕТ СЕССИИ: перенаправляем на вход платформы vibecode.bitrix24.tech/auth/login");
+        try { mainWindow.loadURL("https://vibecode.bitrix24.tech/auth/login"); } catch (e) { logWeb("ошибка перехода на вход:", e && e.message); }
       }
     }
   });
