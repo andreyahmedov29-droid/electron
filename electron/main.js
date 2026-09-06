@@ -235,59 +235,6 @@ function createWindow() {
   });
   // Снимаем Set-Cookie при ответе шлюза на главный запрос (без разбора значений).
   const ses = mainWindow.webContents.session;
-  // ЧИСТЫЙ режим: НЕ трогаем заголовки запроса (ни UA, ни Authorization).
-  // Окно ведёт себя как обычный браузер, чтобы шлюз Black Hole при отсутствии
-  // сессии показал экран «Защищённый сервер / Войти через Bitrix24» (200 с
-  // HTML), а не отвечал 401 XML. В режиме общего токена (useSharedToken)
-  // Authorization подставляется только тогда — см. applyWebToken.
-  if (useSharedToken) {
-    ses.webRequest.onBeforeSendHeaders((details, callback) => {
-      const url = details.url || "";
-      if (url.startsWith(WEB_APP_URL) || url.includes("vibecode.bitrix24.tech")) {
-        const h = Object.assign({}, details.requestHeaders);
-        if (ACCESS_TOKEN) h["Authorization"] = "Bearer " + ACCESS_TOKEN;
-        logWeb("режим общего токена: Authorization подставлен");
-        callback({ requestHeaders: h });
-      } else {
-        callback({});
-      }
-    });
-  }
-  // Всегда логируем ПОЛНЫЙ набор исходящих заголовков окна к поддомену
-  // приложения (заголовки НЕ меняем — только смотрим). Это нужно, чтобы
-  // сравнить, чем запрос окна Electron отличается от запроса обычного
-  // браузера, который шлюз встречает экраном входа, а не 401 JSON.
-  ses.webRequest.onBeforeSendHeaders((details, callback) => {
-    if (/vibecode\.bitrix24\.tech/.test(details.url || "")) {
-      logWeb("ИСХОДЯЩИЕ ЗАГОЛОВКИ ", details.method, details.url);
-      logWeb("  " + JSON.stringify(details.requestHeaders || {}));
-    }
-    callback({ requestHeaders: details.requestHeaders });
-  });
-  // Воспроизводим ЗАГОЛОВКИ браузерной навигации. Electron при loadURL посылает
-  // Sec-Fetch-Dest:"empty", а настоящий Chrome при переходе по адресу — 
-  // Sec-Fetch-Dest:"document" + Sec-Fetch-Mode:"navigate" + client hints.
-  // Шлюз Black Hole реагирует на этот признак: «навигация» → ведёт на OAuth-
-  // вход (auth2.bitrix24.net), «не навигация» (empty) → отвечает 401 JSON.
-  if (!useSharedToken) {
-    ses.webRequest.onBeforeSendHeaders((details, callback) => {
-      const url = details.url || "";
-      if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(url) && details.resourceType === "mainFrame") {
-        const h = Object.assign({}, details.requestHeaders);
-        if (!/^https:\/\/app-.*vibecode\.bitrix24\.tech\/oauth|auth2\.bitrix24\.net/.test(url)) {
-          h["Sec-Fetch-Dest"] = "document";
-          h["Sec-Fetch-Mode"] = "navigate";
-          h["Sec-Fetch-Site"] = "none";
-        }
-        h["Sec-CH-UA"] = '"Chromium";v="126", "Google Chrome";v="126", "Not.A/Brand";v="8"';
-        h["Sec-CH-UA-Mobile"] = "?0";
-        h["Sec-CH-UA-Platform"] = '"Windows"';
-        callback({ requestHeaders: h });
-      } else {
-        callback({});
-      }
-    });
-  }
   ses.webRequest.onHeadersReceived((details) => {
     if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
       const sc = (details.responseHeaders && details.responseHeaders["set-cookie"]) || [];
@@ -339,7 +286,9 @@ function createWindow() {
 // отсутствии сессии показывает экран «Защищённый сервер / Войти через
 // Bitrix24», пользователь входит, сессия сохраняется в userData (persist).
 // Общий токен (`Authorization: Bearer vibe_app_local_...`) — только при явно
-// включённом useSharedToken, и подставляется в перехвате внутри createWindow.
+// включённом useSharedToken. Перехват onBeforeSendHeaders регистрируется ЗДЕСЬ,
+// до createWindow()/loadURL(), на той же partition-сессии, что использует окно
+// (persist:biotime), поэтому Bearer уходит уже в ПЕРВЫЙ запрос к поддомену.
 function applyWebToken() {
   // Диагностика: пишем в web-gate.log, что реально видит приложение (путь
   // конфига, режим, наличие токена) — без секретов.
@@ -357,6 +306,28 @@ function applyWebToken() {
         + "Задайте токен в переменной окружения или в конфиге.");
     } else {
       console.log("[web] Режим общего токена: Authorization: Bearer будет подставляться.");
+      // Окно открывает веб-версию на partition "persist:biotime" (см.
+      // createWindow), поэтому перехват ставим именно на эту сессию, а не на
+      // session.defaultSession — иначе запросы окна токен не увидят.
+      // Регистрируем ЗДЕСЬ, до createWindow()/loadURL(): навигация окна пойдёт
+      // уже с заголовком Authorization в первом же запросе к поддомену.
+      try {
+        const webSes = session.fromPartition("persist:biotime");
+        webSes.webRequest.onBeforeSendHeaders((details, callback) => {
+          const url = details.url || "";
+          if (url.startsWith(WEB_APP_URL) || url.includes("vibecode.bitrix24.tech")) {
+            const h = Object.assign({}, details.requestHeaders);
+            if (ACCESS_TOKEN) h["Authorization"] = "Bearer " + ACCESS_TOKEN;
+            logWeb("режим общего токена: Authorization подставлен к ", url);
+            callback({ requestHeaders: h });
+          } else {
+            callback({});
+          }
+        });
+      } catch (e) {
+        console.warn("[web] Не удалось зарегистрировать перехват Authorization:",
+          e && e.message);
+      }
     }
   } else {
     console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
