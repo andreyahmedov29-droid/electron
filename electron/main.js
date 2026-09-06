@@ -77,6 +77,10 @@ let shuttingDown = false;
 // Флаг: окно перенаправлено на вход платформы (vibecode.bitrix24.tech), чтобы
 // не перенаправлять повторно и вернуться на приложение после установки сессии.
 let loginRedirectPending = false;
+// Флаг: один раз перезагрузили окно без кэша при зависшей навигации первого
+// запуска (чёрный экран, см. captureDump). Сбрасывается при успешной
+// финализации документа — чтобы перезагрузка не зацикливалась.
+let reloadOnceDone = false;
 
 // Пишет строку в файл web-gate.log в папке данных приложения. Нужно для
 // диагностики входа: stdout GUI-приложения Windows в обычном запуске не виден,
@@ -217,6 +221,16 @@ function createWindow() {
   mainWindow.webContents.on("did-navigate", (event, url) => {
     logWeb("навигация/загрузка →", url);
   });
+  // Точные начала/завершения навигации — увидеть, сколько раз окно пытается
+  // загрузить документ и на каком URL. Полезно при чёрном экране первого
+  // запуска: понять, дошла ли навигация до реального URL или застряла на
+  // пустом/исходном адресе.
+  mainWindow.webContents.on("did-start-navigation", (event, url, isInPlace, isMainFrame) => {
+    if (isMainFrame) logWeb("start-nav →", url, "| inPlace:", isInPlace);
+  });
+  mainWindow.webContents.on("did-navigate-in-page", (event, url, isMainFrame) => {
+    if (isMainFrame) logWeb("in-page →", url);
+  });
   mainWindow.webContents.on("did-fail-load", (event, code, desc, url, isMainFrame) => {
     logWeb("ОШИБКА загрузки", code, desc, "|", url, "| main:", isMainFrame);
     // Ручной редирект на /auth/login ЗДЕСЬ НЕ ДЕЛАЕМ (убрано в 1.1.4).
@@ -226,6 +240,9 @@ function createWindow() {
     // экран входа при отсутствии сессии — ручной переход не нужен.
   });
   mainWindow.webContents.on("did-finish-load", () => {
+    // Документ завершил загрузку — снимаем флаг «перезагрузить окно», чтобы
+    // диагностика в captureDump не зацикливалась на зависшей навигации.
+    reloadOnceDone = false;
     logWeb("страница загружена (финиш)");
     logWeb("  URL документа:", mainWindow.webContents.getURL());
     // Что реально в документе (url/title/высота/длина текста) — понять, отрисовывается
@@ -297,6 +314,7 @@ function createWindow() {
         if (loginRedirectPending && cookie && /(vibecode\.bitrix24\.tech)$/.test(String(cookie.domain || ""))) {
           logWeb("Обнаружена cookie сессии платформы; возвращаемся на приложение");
           loginRedirectPending = false;
+          reloadOnceDone = false;
           try { mainWindow.loadURL(WEB_APP_URL); } catch (e) { logWeb("ошибка возврата:", e && e.message); }
         }
       });
@@ -313,7 +331,9 @@ function createWindow() {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     try {
       const u = mainWindow.webContents.getURL();
-      logWeb("[dump] URL:", u, "| готовность:", String(mainWindow.webContents.isLoading()));
+      const loaded = !mainWindow.webContents.isLoading();
+      logWeb("[dump] URL:", JSON.stringify(u), "| isLoading:", String(!loaded),
+        "| finished:", String(loaded));
       mainWindow.webContents.executeJavaScript(
         "(function(){var de=document.documentElement;var b=document.body;" +
         "return JSON.stringify({title:document.title, h:(de?de.scrollHeight:-1), " +
@@ -321,6 +341,25 @@ function createWindow() {
         true
       ).then((r) => logWeb("[dump] DOM:", r))
        .catch((e) => logWeb("[dump] DOM err:", e && e.message));
+      // executeJavaScript молчит — нет исполняемого документа — это главный
+      // маркер проблемы. На случай зависшего контекста логируем факт отдельно.
+      setTimeout(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        logWeb("[dump] JS-статус: окно всё ещё в",
+          mainWindow.webContents.isLoading() ? "загрузке (нет DOM)" : "завершено");
+      }, 800);
+      // ФИКС-ЭКСПЕРИМЕНТ 1.1.5: если первый неавторизованный ответ шлюза
+      // (экран входа, 200 text/html) не финализируется как документ окна
+      // (isLoading всё ещё true и getURL() пуст), перезагружаем окно без кэша
+      // один раз. На чистой partition это позволяет mainFrame повторить
+      // навигацию уже без «случайного» service worker экрана входа и завершить
+      // документ. Защита от повтора: reloadOnceDone сбрасывается только после
+      // успешной финализации (did-finish-load / непустой getURL).
+      if (!u && !loaded && !reloadOnceDone) {
+        reloadOnceDone = true;
+        logWeb("[dump] НАВИГАЦИЯ ЗАВИСЛА (getURL пуст, isLoading=true): перезагружаем окно без кэша");
+        try { mainWindow.webContents.reloadIgnoringCache(); } catch (e) { logWeb("[dump] reload err:", e && e.message); }
+      }
     } catch (e) { logWeb("[dump] js err:", e && e.message); }
     try {
       mainWindow.webContents.capturePage()
@@ -414,8 +453,8 @@ async function applyWebToken() {
       } catch (e) {
         console.warn("[web] Не удалось зарегистрировать перехват Authorization:",
           e && e.message);
-      }
     }
+  }
   } else {
     console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
       + "шлюз покажет экран входа, кто войдёт в учётку — тот и используется.");
