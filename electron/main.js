@@ -243,6 +243,17 @@ function createWindow() {
       }
     });
   }
+  // Всегда логируем ПОЛНЫЙ набор исходящих заголовков окна к поддомену
+  // приложения (заголовки НЕ меняем — только смотрим). Это нужно, чтобы
+  // сравнить, чем запрос окна Electron отличается от запроса обычного
+  // браузера, который шлюз встречает экраном входа, а не 401 JSON.
+  ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    if (/vibecode\.bitrix24\.tech/.test(details.url || "")) {
+      logWeb("ИСХОДЯЩИЕ ЗАГОЛОВКИ ", details.method, details.url);
+      logWeb("  " + JSON.stringify(details.requestHeaders || {}));
+    }
+    callback({ requestHeaders: details.requestHeaders });
+  });
   ses.webRequest.onHeadersReceived((details) => {
     if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
       const sc = (details.responseHeaders && details.responseHeaders["set-cookie"]) || [];
