@@ -238,7 +238,12 @@ function createWindow() {
   ses.webRequest.onHeadersReceived((details) => {
     if (/^https:\/\/app-.*vibecode\.bitrix24\.tech/.test(details.url || "")) {
       const sc = (details.responseHeaders && details.responseHeaders["set-cookie"]) || [];
-      logWeb("ответ", details.statusCode, "url:", details.url, "| set-cookie:", sc.length);
+      const ct = (details.responseHeaders && details.responseHeaders["content-type"]) || [];
+      const cl = (details.responseHeaders && details.responseHeaders["content-length"]) || [];
+      logWeb("ответ", details.statusCode, "url:", details.url,
+        "| set-cookie:", sc.length,
+        "| content-type:", Array.isArray(ct) ? ct[0] : ct,
+        "| content-length:", Array.isArray(cl) ? cl[0] : cl);
       // На 401/302 логируем ВСЕ заголовки ответа — там может быть Location
       // (куда вести на вход) или WWW-Authenticate/подсказка о способе входа.
       if (details.statusCode === 401 || details.statusCode === 302 || details.statusCode === 403) {
