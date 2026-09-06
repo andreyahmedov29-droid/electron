@@ -77,10 +77,6 @@ let shuttingDown = false;
 // Флаг: окно перенаправлено на вход платформы (vibecode.bitrix24.tech), чтобы
 // не перенаправлять повторно и вернуться на приложение после установки сессии.
 let loginRedirectPending = false;
-// Флаг: один раз перезагрузили окно без кэша при зависшей навигации первого
-// запуска (чёрный экран, см. captureDump). Сбрасывается при успешной
-// финализации документа — чтобы перезагрузка не зацикливалась.
-let reloadOnceDone = false;
 
 // Пишет строку в файл web-gate.log в папке данных приложения. Нужно для
 // диагностики входа: stdout GUI-приложения Windows в обычном запуске не виден,
@@ -240,9 +236,6 @@ function createWindow() {
     // экран входа при отсутствии сессии — ручной переход не нужен.
   });
   mainWindow.webContents.on("did-finish-load", () => {
-    // Документ завершил загрузку — снимаем флаг «перезагрузить окно», чтобы
-    // диагностика в captureDump не зацикливалась на зависшей навигации.
-    reloadOnceDone = false;
     logWeb("страница загружена (финиш)");
     logWeb("  URL документа:", mainWindow.webContents.getURL());
     // Что реально в документе (url/title/высота/длина текста) — понять, отрисовывается
@@ -314,7 +307,6 @@ function createWindow() {
         if (loginRedirectPending && cookie && /(vibecode\.bitrix24\.tech)$/.test(String(cookie.domain || ""))) {
           logWeb("Обнаружена cookie сессии платформы; возвращаемся на приложение");
           loginRedirectPending = false;
-          reloadOnceDone = false;
           try { mainWindow.loadURL(WEB_APP_URL); } catch (e) { logWeb("ошибка возврата:", e && e.message); }
         }
       });
@@ -348,18 +340,6 @@ function createWindow() {
         logWeb("[dump] JS-статус: окно всё ещё в",
           mainWindow.webContents.isLoading() ? "загрузке (нет DOM)" : "завершено");
       }, 800);
-      // ФИКС-ЭКСПЕРИМЕНТ 1.1.5: если первый неавторизованный ответ шлюза
-      // (экран входа, 200 text/html) не финализируется как документ окна
-      // (isLoading всё ещё true и getURL() пуст), перезагружаем окно без кэша
-      // один раз. На чистой partition это позволяет mainFrame повторить
-      // навигацию уже без «случайного» service worker экрана входа и завершить
-      // документ. Защита от повтора: reloadOnceDone сбрасывается только после
-      // успешной финализации (did-finish-load / непустой getURL).
-      if (!u && !loaded && !reloadOnceDone) {
-        reloadOnceDone = true;
-        logWeb("[dump] НАВИГАЦИЯ ЗАВИСЛА (getURL пуст, isLoading=true): перезагружаем окно без кэша");
-        try { mainWindow.webContents.reloadIgnoringCache(); } catch (e) { logWeb("[dump] reload err:", e && e.message); }
-      }
     } catch (e) { logWeb("[dump] js err:", e && e.message); }
     try {
       mainWindow.webContents.capturePage()
@@ -421,6 +401,28 @@ async function applyWebToken() {
     const webSes = session.fromPartition("persist:biotime");
     await webSes.clearStorageData({ storages: ["serviceworkers", "cachestorage", "indexdb"] });
     logWeb("очищен service worker / кэш partition (persist:biotime)");
+    // ДЕСКТОП-ФИКС (1.1.6): подресурс /sw.js на поддомене приложения
+    // отвечает 401 (Black Hole защищает его — проверено, остальная статика
+    // index.html/app.js отдаётся 200 без сессии). Регистрация service worker
+    // на такой защищённый sw.js в Electron (изолированная partition) ломает
+    // mainFrame-навигацию: навигация по mainFrame зависает/отменяется
+    // net::ERR_ABORTED → окно чёрное, getURL() пуст, DOM не появляется.
+    // В обычном браузере тот же 401-SW не блокирует документ (SW просто не
+    // активируется), поэтому приложение там работает. В десктопном окне
+    // PWA-офлайн не нужен, а само приложение рассчитано на работу и без SW
+    // (в index.html на ошибку регистрации есть обработчик «работает и без SW»).
+    // Блокируем запрос /sw.js, чтобы навигация шла напрямую к index.html без
+    // SW-перехвата и ERR_ABORTED не возникал.
+    webSes.webRequest.onBeforeRequest((details, callback) => {
+      const u = details.url || "";
+      if (/\.vibecode\.bitrix24\.tech/.test(u) && /\/sw\.js(\?|$)/.test(u)) {
+        logWeb("блокируем service worker (sw.js):", u);
+        callback({ cancel: true });
+      } else {
+        callback({});
+      }
+    });
+    logWeb("установлен перехват: sw.js на поддомене блокируется (фикс 1.1.6)");
   } catch (e) {
     console.warn("[web] Не удалось очистить storage:", e && e.message);
     try { logWeb("ошибка очистки storage:", e && e.message); } catch { /* ignore */ }
