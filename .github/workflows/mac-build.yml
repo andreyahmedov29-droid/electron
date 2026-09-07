@@ -1,0 +1,79 @@
+name: Build macOS
+
+# Собирает macOS-версию BIOTIME (.app/.dmg/.zip) на бесплатном macOS-раннере
+# GitHub Actions. Запускается по кнопке (workflow_dispatch) и при пуше в
+# main/master (когда меняются файлы приложения/сборки). Готовые артефакты
+# выгружаются как артефакт workflow и публикуются в GitHub Release
+# «biotime-mac-latest». Подпись/нотаризация НЕ выполняются (нет платной учётки
+# Apple Developer) — файлы откроются через «Правый клик ▸ Открыть».
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "electron/**"
+      - "server.js"
+      - "app.js"
+      - "index.html"
+      - "styles.css"
+      - "qr.js"
+      - "package.json"
+      - "package-lock.json"
+      - "version.json"
+  workflow_dispatch: # ручной запуск: вкладка Actions ▸ «Build macOS» ▸ Run workflow
+
+jobs:
+  build:
+    runs-on: macos-latest
+    # Нужно для публикации GitHub Release («biotime-mac-latest») системным GITHUB_TOKEN.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout репозитория
+        uses: actions/checkout@v5
+
+      - name: Установить Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Установить зависимости
+        run: npm ci
+
+      # Единый источник версии — version.json в корне репозитория. Перед сборкой
+      # сохраняем номер версии в переменную окружения, чтобы вписать его в имя
+      # артефактов/релиза; саму версию поднимайте в version.json одним правком.
+      - name: Прочитать версию из version.json
+        id: ver
+        run: |
+          echo "VN=$(node -p "require('./version.json').versionName || '1.0.0'")" >> "$GITHUB_OUTPUT"
+
+      - name: Собрать приложение для macOS (arm64 + x64)
+        run: npx electron-builder --mac --publish never
+
+      - name: Выгрузить сборку как артефакт workflow
+        uses: actions/upload-artifact@v5
+        with:
+          name: biotime-mac
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/mac*/**/*.app
+          if-no-files-found: warn
+
+      # Публикуем .dmg и .zip в GitHub Release «biotime-mac-latest». .zip нужен
+      # для автообновления (electron-updater на macOS качает именно его), .dmg —
+      # для установки вручную. Ссылки прямые:
+      #   https://github.com/<owner>/<repo>/releases/download/biotime-mac-latest/...
+      - name: Опубликовать сборку в GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: biotime-mac-latest
+          name: BIOTIME macOS v${{ steps.ver.outputs.VN }}
+          body: |
+            Автоматическая сборка macOS.
+            Версия: v${{ steps.ver.outputs.VN }}
+          files: |
+            dist/*.dmg
+            dist/*.zip
+          token: ${{ secrets.GITHUB_TOKEN }}

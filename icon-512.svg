@@ -1,0 +1,25 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gTeal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0EB6A3"/>
+      <stop offset="1" stop-color="#05D5B7"/>
+    </linearGradient>
+    <linearGradient id="gMint" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#B8F5E4"/>
+      <stop offset="1" stop-color="#E8FFF7"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(16,16) scale(2)">
+    <circle cx="120" cy="120" r="108" fill="url(#gTeal)"/>
+    <circle cx="120" cy="120" r="103" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="2.5"/>
+    <g stroke="#E9FFF8" stroke-width="5" stroke-linecap="round">
+      <line x1="120" y1="40"  x2="120" y2="62"/>
+      <line x1="120" y1="178" x2="120" y2="200"/>
+      <line x1="40"  y1="120" x2="62"  y2="120"/>
+      <line x1="178" y1="120" x2="200" y2="120"/>
+    </g>
+    <path d="M120 200 C 100 182, 90 160, 90 134 C 108 150, 120 158, 132 158 C 110 132, 110 104, 132 78 C 156 102, 172 122, 156 150 C 154 174, 142 190, 120 200 Z" fill="url(#gMint)"/>
+    <circle cx="120" cy="120" r="24" fill="#0EB6A3" fill-opacity="0.22"/>
+    <circle cx="120" cy="120" r="24" fill="url(#gMint)" fill-opacity="0.35"/>
+  </g>
+</svg>

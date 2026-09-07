@@ -1,0 +1,24 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Непрозрачный тёмный фон во весь холст (iOS не любит альфу) -->
+  <rect width="1024" height="1024" fill="#13141C"/>
+  <!-- Радиальный блик для глубины -->
+  <circle cx="512" cy="512" r="512" fill="url(#glow)"/>
+  <defs>
+    <radialGradient id="glow" cx="0.5" cy="0.4" r="0.7">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- Значок (тёмно-бирюзовый) -->
+  <g transform="translate(512,512) scale(1.7) translate(-256,-256)">
+    <g stroke="#0B9489" stroke-width="22" stroke-linecap="round" fill="none">
+      <circle cx="256" cy="256" r="168"/>
+      <line x1="256" y1="52"  x2="256" y2="128"/>
+      <line x1="256" y1="384" x2="256" y2="460"/>
+      <line x1="52"  y1="256" x2="128" y2="256"/>
+      <line x1="384" y1="256" x2="460" y2="256"/>
+    </g>
+    <circle cx="256" cy="240" r="26" fill="#0B9489"/>
+    <path d="M256 268 C 236 292, 240 316, 256 330 C 272 316, 276 292, 256 268 Z" fill="#0B9489"/>
+  </g>
+</svg>

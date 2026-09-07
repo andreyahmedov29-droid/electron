@@ -1,0 +1,50 @@
+# ---- Секреты (НИКОГДА не коммитить) ----
+.env
+biotime.config.json
+.data/
+data-test/
+
+# ---- Node ----
+node_modules/
+
+# ---- Сборки ----
+dist/
+
+# ---- Логи ----
+*.log
+server*.out*
+server*.err*
+srv_*.log
+srv_*_out*.log
+srv_*_err*.log
+test_*_out*.log
+test_*_err*.log
+t2_*.log
+snap_*.txt
+snap-*.txt
+srv.err
+srv.log
+
+# ---- Скриншоты-проверки и временные артефакты ----
+check-*.png
+check-*.jpg
+example-*
+_before_design.png
+export_test.xlsx
+test-yamaps.html
+preview-route-km.html
+logo-preview.html
+
+# ---- Android — отдельный git-репозиторий (biotime-android) ----
+/android/
+
+# ---- OS / IDE ----
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+.vscode/
+
+# ---- Инструменты ----
+.opencode/
+opencode.jsonc

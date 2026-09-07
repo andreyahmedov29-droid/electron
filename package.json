@@ -1,0 +1,107 @@
+{
+  "name": "biotime-worklogger",
+  "version": "1.0.0",
+  "description": "Учёт рабочего времени и переработок — таймер с дневной историей",
+  "author": "ПрофМаркетСистем",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node server.js",
+    "desktop": "electron .",
+    "desktop:pack": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win",
+    "desktop:publish": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win --publish always"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.biotime.worklogger",
+    "productName": "BIOTIME",
+    "asar": false,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "andreyahmedov29-droid",
+        "repo": "electron"
+      }
+    ],
+    "files": [
+      "server.js",
+      "app.js",
+      "index.html",
+      "styles.css",
+      "qr.js",
+      "sw.js",
+      "manifest.webmanifest",
+      "icon-180.png",
+      "icon-192.png",
+      "icon-512.png",
+      "icon-512.svg",
+      "icon-maskable-512.png",
+      "icon-maskable.svg",
+      "ios-icon-1024.png",
+      "ios-icon-180.png",
+      "ios-icon.svg",
+      "electron/**/*",
+      "logo-biotime-dark.svg",
+      "logo-biotime-mark.svg",
+      "logo-biotime.svg",
+      "sign-icon-512.png",
+      "sign-icon-dark-512.png",
+      "sign-icon-dark.svg",
+      "sign-icon.svg",
+      "package.json",
+      "!**/*.log",
+      "!**/.opencode/**",
+      "!**/ios/**",
+      "!**/dist/**",
+      "!**/check-*.png",
+      "!**/example-*",
+      "!**/_before_design.png",
+      "!**/export_test.xlsx"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "icon-512.png",
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "icon-512.png",
+      "darkModeSupport": true,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
