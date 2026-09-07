@@ -40,6 +40,33 @@ jobs:
       - name: Установить зависимости
         run: npm ci
 
+      # АВТОРЕЛИЗ НА КАЖДЫЙ PUSH в main/master: поднимаем versionCode и patch-версию
+      # (1.0.3 → 1.0.4) в version.json, коммитим и пушим с маркером [skip ci].
+      # Так ЛЮБОЙ коммит (fix, debug, release …) даёт новую версию macOS-сборки,
+      # а server/update-info и клиенты видят её. [skip ci] в сообщении останавливает
+      # повторный запуск workflow на bump-коммит — иначе получили бы бесконечный
+      # цикл push → bump → push. Коммит делает системный GITHUB_TOKEN.
+      - name: Автоинкремент версии на каждый push (авторелиз)
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = JSON.parse(fs.readFileSync("version.json", "utf8"));
+            const cur = (v.versionName || "1.0.0").replace(/^v/, "");
+            const parts = cur.split(".").map(Number);
+            parts[2] = (parts[2] || 0) + 1;                  // patch++
+            const next = parts.join(".");
+            v.versionCode = (Number(v.versionCode) || 0) + 1;
+            v.versionName = next;
+            v.notes = "Авторелиз macOS " + next + " (commit " + (process.env.GITHUB_SHA || "").slice(0, 7) + ")";
+            fs.writeFileSync("version.json", JSON.stringify(v, null, 2) + "\n");
+            console.log("Версия: " + cur + " -> " + next + " | versionCode: " + v.versionCode);
+          '
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "chore(release): bump to $(node -p "require('./version.json').versionName") [skip ci]" || echo "нет изменений для коммита"
+          git push origin HEAD:main
+
       # Единый источник версии — version.json в корне репозитория. Перед сборкой
       # сохраняем номер версии в переменную окружения, чтобы вписать его в имя
       # артефактов/релиза; саму версию поднимайте в version.json одним правком.
@@ -47,6 +74,7 @@ jobs:
         id: ver
         run: |
           echo "VN=$(node -p "require('./version.json').versionName || '1.0.0'")" >> "$GITHUB_OUTPUT"
+          echo "VC=$(node -p "require('./version.json').versionCode || '0'")" >> "$GITHUB_OUTPUT"
 
       - name: Собрать приложение для macOS (arm64 + x64)
         run: npx electron-builder --mac --publish never
@@ -77,3 +105,30 @@ jobs:
             dist/*.dmg
             dist/*.zip
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Авто-оповещение сервера о новой версии macOS-сборки. Desktop-клиенты
+      # обновляются через electron-updater (GitHub Release), поэтому само
+      # обновление НЕ зависит от этого шага; здесь мы лишь пишем актуальную
+      # версию в db.params/version.json сервера для GET /api/app/update-info.
+      # Чтобы включить — задайте на GitHub два секрета (Settings ▸ Secrets ▸ Actions):
+      #   SERVER_UPDATE_URL   — адрес POST /api/app/update сервера BIOTIME, например:
+      #     https://app-2660de1a180b.vibecode.bitrix24.tech/api/app/update
+      #   SERVER_UPDATE_TOKEN — произвольный токен/секрет (передаётся заголовком
+      #     X-Update-Token; должен совпадать с SERVER_UPDATE_TOKEN на сервере).
+      # Если секреты не заданы — шаг БЕЗОПАСНО пропускается (сборка/публикация релиза уже прошли).
+      - name: Оповестить сервер о новой версии macOS
+        env:
+          SERVER_UPDATE_URL: ${{ secrets.SERVER_UPDATE_URL }}
+          SERVER_UPDATE_TOKEN: ${{ secrets.SERVER_UPDATE_TOKEN }}
+        run: |
+          if [ -z "$SERVER_UPDATE_URL" ] || [ -z "$SERVER_UPDATE_TOKEN" ]; then
+            echo "::warning::Секреты SERVER_UPDATE_URL/SERVER_UPDATE_TOKEN не заданы — пропускаем оповещение сервера."
+            exit 0
+          fi
+          VN=$(node -p "require('./version.json').versionName")
+          VC=$(node -p "require('./version.json').versionCode")
+          echo "Извещаем сервер: versionCode=$VC versionName=$VN"
+          curl -sS -X POST "$SERVER_UPDATE_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Update-Token: $SERVER_UPDATE_TOKEN" \
+            --data "{\"versionCode\":$VC,\"versionName\":\"$VN\",\"notes\":\"Авторелиз macOS $VN\"}"
