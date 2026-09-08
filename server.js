@@ -1128,7 +1128,13 @@ function gisDistanceMatrix(points) {
       sources: Array.from({ length: n }, (_, i) => i),
       targets: Array.from({ length: n }, (_, i) => i),
       transport: "driving",
-      type: "jam",
+      // type "shortest" — детерминированный кратчайший маршрут по дорогам БЕЗ
+      // учёта текущих пробок. Раньше был "jam" (с пробками) — из-за этого
+      // километраж секций «плавал» между построениями одного и того же маршрута
+      // (2ГИС перекладывала путь в объезд пробок → км менялся). С "shortest"
+      // одинаковые точки всегда дают одинаковое расстояние. Для построения
+      // по времени пробки учитываются отдельно (матрицы TomTom/OSRM).
+      type: "shortest",
     };
     const body = JSON.stringify(payload);
     const url = "https://routing.api.2gis.com/get_dist_matrix?key=" +
