@@ -5723,3 +5723,79 @@ button.icon-btn svg,
   color: var(--amber-bright);
   line-height: 1;
 }
+
+/* Плитки клиентов окна «Отгрузка» (выбор клиента для печати этикеток).
+   Вместо выпадающего списка — карточки; активный клиент подсвечен, по клику
+   любой клиент выбирается (в т.ч. уже отгруженный — для допечатки). */
+.print-clients-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 8px;
+}
+@media (max-width: 1180px) {
+  .print-clients-tiles { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 720px) {
+  .print-clients-tiles { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 420px) {
+  .print-clients-tiles { grid-template-columns: 1fr; }
+}
+.print-client-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease), transform 0.12s var(--ease);
+}
+.print-client-tile:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.07);
+}
+.print-client-tile.is-active {
+  border-color: var(--green-soft, #7dd87d);
+  background: rgba(125, 216, 125, 0.12);
+  box-shadow: 0 0 0 1px rgba(125, 216, 125, 0.25);
+}
+.print-client-tile.is-done {
+  background: rgba(127, 127, 127, 0.16);
+  border-color: transparent;
+  color: var(--muted, #9ca3af);
+  cursor: pointer;
+}
+.print-client-tile.is-done:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(127, 127, 127, 0.24);
+}
+.print-client-tile.is-active.is-done {
+  border-color: var(--green-soft, #7dd87d);
+  background: rgba(125, 216, 125, 0.12);
+  box-shadow: 0 0 0 1px rgba(125, 216, 125, 0.25);
+  color: var(--ink);
+}
+.print-client-tile .tile-name {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.25;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.print-client-tile .tile-places {
+  font-size: 12px;
+  color: var(--muted, #9ca3af);
+  overflow-wrap: anywhere;
+}
+.print-client-tile.is-active .tile-places {
+  color: var(--green-soft, #9ef09e);
+}
+.print-client-tile.is-done .tile-places {
+  color: var(--muted, #9ca3af);
+}

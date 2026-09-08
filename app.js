@@ -748,7 +748,7 @@
     allowDriverStartWithoutShipment: $("allowDriverStartWithoutShipment"),
     allowFinishUnloadIncomplete: $("allowFinishUnloadIncomplete"),
     shipmentList: $("shipmentList"), shipmentRefresh: $("shipmentRefresh"),
-    printModal: $("printModal"), printClientSelect: $("printClientSelect"),
+    printModal: $("printModal"), printClientsTiles: $("printClientsTiles"),
     printPlacesQty: $("printPlacesQty"), printConfirm: $("printConfirm"),
     printCancel: $("printCancel"), printClose: $("printClose"), printArea: $("printArea"),
     scanLoadBtn: $("scanLoadBtn"), scanOverlayClose: $("scanOverlayClose"),
@@ -2777,6 +2777,7 @@
 
   // ---- Печать этикеток отгрузки (склад: выбирает клиента и кол-во мест) ----
   let printRouteId = null;
+  let printClientIndex = 0;
   function openPrintLabels(routeId) {
     const r = shipmentsCache.find((x) => String(x.id) === String(routeId));
     if (!r || !Array.isArray(r.clients) || r.clients.length === 0) {
@@ -2784,10 +2785,13 @@
       return;
     }
     printRouteId = routeId;
-    const sel = el.printClientSelect;
-    sel.innerHTML = r.clients
-      .map((c, i) => `<option value="${i}">${escapeHtml(c.client || "—")}${c.address ? " — " + escapeHtml(c.address) : ""}</option>`)
-      .join("");
+    // Открываем сразу на первом клиенте, который ещё не отгружен полностью;
+    // если все клиенты отгружены — остаётся первый как заглушка.
+    printClientIndex = r.clients.findIndex(
+      (c) => !(Number(c.totalCount) > 0 && Number(c.loadedCount) >= Number(c.totalCount))
+    );
+    if (printClientIndex < 0) printClientIndex = 0;
+    renderPrintClientsTiles();
     el.printPlacesQty.value = "1";
     if (el.printScanStatus) { el.printScanStatus.textContent = ""; el.printScanStatus.className = "print-scan-status"; }
     refreshPrintLabels();
@@ -2817,7 +2821,7 @@
     if (!printRouteId) return;
     const r = shipmentsCache.find((x) => String(x.id) === String(printRouteId));
     if (!r) return;
-    const idx = Number(el.printClientSelect.value || 0);
+    const idx = currentPrintClientIndex();
     const cl = (r.clients || [])[idx];
     if (!cl) return;
     const qty = Math.max(1, Math.min(200, Number(el.printPlacesQty.value) || 1));
@@ -2871,12 +2875,57 @@
   }
 
   // ---- Сканирование этикеток (погрузка/выгрузка) — Шаг 3 ----
+  // Плитки клиентов окна «Отгрузка»: вместо выпадающего списка клиентов —
+  // карточки. Активный клиент подсвечен; полностью отгруженный (все места
+  // погружены) перестаёт подсвечиваться и становится серым, но остаётся
+  // ВЫБИРАЕМЫМ — в процессе отгрузки могут найтись новые места, и тогда нужно
+  // допечатать этикетки клиенту, у которого всё уже погружено.
+  function renderPrintClientsTiles() {
+    if (!el.printClientsTiles) return;
+    const r = shipmentsCache.find((x) => String(x.id) === String(printRouteId));
+    const clients = r && Array.isArray(r.clients) ? r.clients : [];
+    if (clients.length === 0) {
+      el.printClientsTiles.innerHTML = "";
+      return;
+    }
+    el.printClientsTiles.innerHTML = clients.map((c, i) => {
+      const done = Number(c.totalCount) > 0 && Number(c.loadedCount) >= Number(c.totalCount);
+      const cls = [
+        "print-client-tile",
+        i === printClientIndex ? "is-active" : "",
+        done ? "is-done" : "",
+      ].filter(Boolean).join(" ");
+      const total = Number(c.totalCount) || 0;
+      const loaded = Number(c.loadedCount) || 0;
+      const places = done ? `отгружено ${loaded}` : `${loaded} / ${total}`;
+      return `
+        <button type="button" class="${cls}" data-client-index="${i}" title="${done ? "Клиент отгружен — можно допечатать новые места" : ""}">
+          <span class="tile-name">${escapeHtml(c.client || "—")}</span>
+          <span class="tile-places">${places}</span>
+        </button>
+      `;
+    }).join("");
+  }
+
+  // Переключение активного клиента по клику на плитку. «Отгруженный» клиент
+  // (все места погружены) тоже выбирается — чтобы можно было допечатать этикетки
+  // найденных позже мест. Это устраняет ошибку «не могу выбрать/переключить
+  // клиента» в окне Отгрузка.
+  function selectPrintClient(idx) {
+    const r = shipmentsCache.find((x) => String(x.id) === String(printRouteId));
+    const clients = r && Array.isArray(r.clients) ? r.clients : [];
+    if (idx < 0 || idx >= clients.length) return;
+    printClientIndex = idx;
+    renderPrintClientsTiles();
+    refreshPrintLabels();
+  }
+
   // Непрерывное сканирование и живой счётчик: состояние scanLabels + scanProgress.
   // После каждого успешного скана, пока есть неотсканированные места, сканер
   // открывается снова автоматически; когда всё готово — цикл останавливается.
   // Индекс выбранного клиента в модалке печати (0-based, как в select печати).
   function currentPrintClientIndex() {
-    return Number(el.printClientSelect ? el.printClientSelect.value : 0) || 0;
+    return printClientIndex || 0;
   }
 
   function setPrintScanStatus(text, cls) {
@@ -2905,10 +2954,6 @@
   // у Авилона). Если логотипа нет — оверлей показывает имя + адрес как раньше.
   function scanClientInfo() {
     const info = { name: "—", address: "", logo: "", logoText: "" };
-    const sel = el.printClientSelect;
-    if (sel && sel.selectedOptions && sel.selectedOptions[0]) {
-      info.name = sel.selectedOptions[0].textContent || "—";
-    }
     // Достаём «сырого» клиента из кэша отгрузок — там есть logo/logoText/address.
     try {
       const r = shipmentsCache.find((x) => String(x.id) === String(printRouteId));
@@ -5545,8 +5590,18 @@
   if (el.printCancel) el.printCancel.addEventListener("click", () => { try { el.printModal.close(); } catch {} });
   if (el.printClose) el.printClose.addEventListener("click", () => { try { el.printModal.close(); } catch {} });
   if (el.scanLoadBtn) el.scanLoadBtn.addEventListener("click", () => callQrScanner("load"));
-  if (el.printClientSelect) {
-    el.printClientSelect.addEventListener("change", () => refreshPrintLabels());
+  // Выбор клиента в окне «Отгрузка» — по клику на ПЛИТКУ клиента (вместо
+  // выпадающего списка). Кликабелен любой клиент, включая уже отгруженного —
+  // чтобы можно было допечатать найденные позже места.
+  if (el.printClientsTiles) {
+    el.printClientsTiles.addEventListener("click", (ev) => {
+      const tile = ev.target.closest(".print-client-tile");
+      if (!tile) return;
+      const idx = Number(tile.dataset.clientIndex);
+      if (Number.isFinite(idx) && idx >= 0) {
+        selectPrintClient(idx);
+      }
+    });
   }
   // Дашборд движения: кнопка «Обновить» и смена даты перезагружают данные.
   if (el.motionRefresh) {
