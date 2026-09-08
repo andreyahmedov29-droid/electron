@@ -1,5 +1,5 @@
 {
-  "versionCode": 21,
-  "versionName": "1.1.13",
-  "notes": "Фикс: дожидаемся завершения очистки кэша перед загрузкой окна"
+  "versionCode": 22,
+  "versionName": "1.1.14",
+  "notes": "Авторелиз 1.1.14 (commit 047e1c2)"
 }
