@@ -1,5 +1,5 @@
 {
-  "versionCode": 11,
-  "versionName": "1.0.10",
-  "notes": "Погрузка: разрешён выбор отгруженного клиента для допечатки стикеров"
+  "versionCode": 12,
+  "versionName": "1.0.11",
+  "notes": "Авторелиз macOS 1.0.11 (commit b6cda09)"
 }
