@@ -909,7 +909,7 @@
     routeStepCount: $("routeStepCount"), routeSelectedCount: $("routeSelectedCount"), routeTotalPill: $("routeTotalPill"),
     subtabContr: $("subtab-contr"), subtabRoute: $("subtab-route"), subtabRoutes: $("subtab-routes"), subtabReport: $("subtab-report"), subtabTracking: $("subtab-tracking"),
     routesubContr: $("routesub-contr"), routesubRoute: $("routesub-route"), routesubRoutes: $("routesub-routes"), routesubReport: $("routesub-report"), routesubTracking: $("routesub-tracking"),
-    driverMap: $("driverMap"), driverMapCount: $("driverMapCount"), driverMapHint: $("driverMapHint"), driverTrackDate: $("driverTrackDate"),
+    driverMap: $("driverMap"), driverMapCount: $("driverMapCount"), driverMapHint: $("driverMapHint"), driverTrackDate: $("driverTrackDate"), driverTrackStatus: $("driverTrackStatus"),
     motionDateFilter: $("motionDateFilter"),
     motionDrivers: $("motionDrivers"), motionKm: $("motionKm"), motionMove: $("motionMove"), motionLunch: $("motionLunch"),
     motionTable: $("motionTable"), motionBody: $("motionBody"),
@@ -2214,6 +2214,7 @@
   let driverTrackCollection = null;   // GeoObjectCollection следа; создаётся с картой
   let driverTracksDueAt = 0;          // когда снова перезагрузить треки
   let driverTracks = {};              // id водителя -> [[lat, lon], ...]
+  let driverTracksSnapped = {};       // id водителя -> true, если трек привязан к дорогам
 
   // ---- Слой всех клиентов справочника (серые маркеры) ----
   // Вся география клиентов показывается на карте, чтобы видеть, где они находятся,
@@ -2559,30 +2560,33 @@
       tracks = (t && t.tracks) || [];
     } catch { return; }
     driverTracks = {};
-    tracks.forEach((o) => { if (o && o.id && Array.isArray(o.track)) driverTracks[o.id] = o.track; });
+    driverTracksSnapped = {};
+    tracks.forEach((o) => {
+      if (o && o.id && Array.isArray(o.track)) {
+        driverTracks[o.id] = o.track;
+        driverTracksSnapped[o.id] = !!o.snapped;
+      }
+    });
     drawDriverTracks(ymaps);
+    updateDriverTrackStatus();
   }
 
-  // Рисует GPS-след водителей тонкой полупрозрачной линией по факту движения.
+  // Диагностика дорожных треков была полезна, когда линии следа отрисовывались.
+  // Сейчас линии убраны по запросу, поэтому чип «по дорогам: N» больше не
+  // показывается — он сообщал о тех самых линиях, которых на карте нет.
+  function updateDriverTrackStatus() {
+    if (el.driverTrackStatus) el.driverTrackStatus.hidden = true;
+  }
+
+  // Следы движения водителей. По запросу пользователя линии следа (как «сырые»
+  // GPS-ломанные, так и дорожные) полностью убраны с карты «Трекинг»: карта
+  // показывает только живые метки водителей и точки клиентов. Данные треков
+  // по-прежнему грузятся (нужны для отчёта о пробеге), но не отрисовываются.
   function drawDriverTracks(ymaps) {
     if (!driverMap || !driverTrackCollection) return;
     const coll = driverTrackCollection;
     try { coll.removeAll(); } catch { /* ignore */ }
-    Object.keys(driverTracks).forEach((id) => {
-      const pts = driverTracks[id];
-      if (!pts || pts.length < 2) return;
-      const coords = pts.filter((p) =>
-        Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1])
-      );
-      if (coords.length < 2) return;
-      coll.add(new ymaps.Polyline(coords, {
-        hintContent: "След движения",
-      }, {
-        strokeColor: "rgba(120,190,255,0.55)",
-        strokeWidth: 3,
-        strokeStyle: "solid",
-      }));
-    });
+    // Полилинии не добавляются — см. комментарий выше.
   }
 
   // ---- Дашборд движения водителей (подвкладка «Отчёт» маршрутизации) ----
@@ -3503,8 +3507,15 @@
         i === appendClientIndex ? "is-active" : "",
         done ? "is-done" : "",
       ].filter(Boolean).join(" ");
+      // Допечатать можно только клиента, у которого ВСЕ боксы уже погружены.
+      // Пока боксы не созданы или создана лишь часть — места добавляют обычной
+      // кнопкой «Печать этикеток» через выбор клиента, поэтому допечатка тут
+      // недоступна (плитка отключена).
+      const appendTitle = done
+        ? "Отгружен — можно допечатать новые места"
+        : "Допечатка доступна, только когда все боксы клиента уже погружены";
       return `
-        <button type="button" class="${cls}" data-append-client-index="${i}"${done ? ' title="Отгружен — можно допечатать новые места"' : ""}>
+        <button type="button" class="${cls}" data-append-client-index="${i}" title="${appendTitle}"${done ? "" : " disabled"}>
           <span class="tile-name">${escapeHtml(c.client || "—")}</span>
           <span class="tile-places">${done ? "отгружен · " + places : places}</span>
         </button>
@@ -3513,7 +3524,14 @@
   }
 
   function updateAppendConfirmState() {
-    if (el.appendConfirm) el.appendConfirm.disabled = appendClientIndex < 0;
+    // Подтвердить можно только выбранного полностью погруженного клиента.
+    let canConfirm = false;
+    if (appendClientIndex >= 0) {
+      const r = shipmentsCache.find((x) => String(x.id) === String(appendRouteId));
+      const cl = r && Array.isArray(r.clients) ? r.clients[appendClientIndex] : null;
+      if (cl) canConfirm = Number(cl.totalCount) > 0 && Number(cl.loadedCount) >= Number(cl.totalCount);
+    }
+    if (el.appendConfirm) el.appendConfirm.disabled = !canConfirm;
   }
 
   // Допечать этикеток выбранному клиенту (режим append): сервер добавляет новые
@@ -3529,7 +3547,7 @@
       method: "POST",
       body: JSON.stringify({ routeId: appendRouteId, clientIndex: appendClientIndex, qty, mode: "append" }),
     }).catch(() => null);
-    el.appendConfirm.disabled = appendClientIndex < 0;
+    updateAppendConfirmState();
     if (!res || !Array.isArray(res.labels)) {
       toast("Не удалось допечатать места. Попробуйте ещё раз.");
       return;
@@ -3799,13 +3817,36 @@
       // Плитка «отгруженного» клиента остаётся серой (is-done), но НЕ блокируется:
       // в процессе отгрузки могут найтись новые места, и тогда нужно ДОПЕЧАТАТЬ
       // этикетки клиенту, у которого всё уже погружено. disabled мешал это сделать.
-      return `
+    return `
         <button type="button" class="${cls}" data-client-index="${i}" title="${done ? "Клиент отгружен — можно допечатать новые места" : ""}">
           <span class="tile-name">${escapeHtml(c.client || "—")}</span>
           <span class="tile-places">${places}</span>
         </button>
       `;
     }).join("");
+    // Доступность кнопки «Допечатать места» зависит от того, полностью ли
+    // погружен выбранный клиент. Если весь клиент ещё не отгружен (боксы не
+    // созданы или создана лишь часть) — допечатка не нужна, места печатают
+    // обычной кнопкой «Печать этикеток» через выбор клиента.
+    updatePrintAppendBtn();
+  }
+
+  // Кнопку «Допечатать места» разрешаем только когда у выбранного клиента ВСЕ
+  // боксы уже погружены (полностью отгружен). Пока боксы не созданы или создана
+  // лишь часть — допечатка недоступна, новые места добавляются выбором клиента
+  // и кнопкой «Печать этикеток». Это не даёт случайно допечатать поверх места,
+  // которое ещё полностью не отгружено.
+  function updatePrintAppendBtn() {
+    if (!el.printAppendBtn) return;
+    const r = shipmentsCache.find((x) => String(x.id) === String(printRouteId));
+    const cl = r && Array.isArray(r.clients) ? r.clients[printClientIndex] : null;
+    const done = cl
+      ? Number(cl.totalCount) > 0 && Number(cl.loadedCount) >= Number(cl.totalCount)
+      : false;
+    el.printAppendBtn.disabled = !done;
+    el.printAppendBtn.title = done
+      ? "Допечатать дополнительные места, не трогая уже созданные"
+      : "Допечатка доступна, когда все боксы клиента уже погружены";
   }
 
   // Переключение активного клиента по клику на плитку.
@@ -4631,6 +4672,31 @@
       if (!routeOrderIds.some((x) => String(x) === String(id))) routeOrderIds.push(id);
     });
   }
+  // Ключ «связанности» клиента для группировки в одну плитку маршрута.
+  // Связанными считаем клиентов одного адреса: все участники одной связки
+  // (bundleId) делят общий bundleAddress, а прочие — совпадающий собственный
+  // address. Адрес нормализуем (трим + lowercase), чтобы «Черепановых 8» и
+  // «Черепановых 8 » не разъезжались. Если адреса нет — такой клиент не
+  // группируется (собственная плитка).
+  function clientGroupKey(c) {
+    const addr = String((c && (c.bundleAddress || c.address)) || "").trim().toLowerCase();
+    return addr ? "addr:" + addr : "id:" + String(c && c.id);
+  }
+  // Разбивает текущий routeOrderIds на блоки групп (подряд идущие клиенты
+  // одного адреса — один блок). Нужно, чтобы перемещение ▲/▼ и drag&drop
+  // двигали ВСЮ плитку (группу), а не одного клиента из неё.
+  function flatRouteBlocks() {
+    const byId = new Map(driverClientsCache.map((c) => [String(c.id), c]));
+    const blocks = [];
+    for (const x of routeOrderIds) {
+      const c = byId.get(String(x));
+      const key = c ? clientGroupKey(c) : ("id:" + String(x));
+      const last = blocks[blocks.length - 1];
+      if (last && last.key === key) last.ids.push(x);
+      else blocks.push({ key, ids: [x] });
+    }
+    return blocks;
+  }
   function addToRouteOrder(id) {
     if (!routeOrderIds.some((x) => String(x) === String(id))) routeOrderIds.push(id);
   }
@@ -4697,29 +4763,78 @@
     syncOrderFromSet();
     const byId = new Map(driverClientsCache.map((c) => [String(c.id), c]));
     const order = routeOrderIds.map((id) => byId.get(String(id))).filter(Boolean);
-    el.routeClientSelected.innerHTML = order.map((c, i) => `
-      <div class="rms-tile" data-id="${escapeHtml(c.id)}" draggable="true">
-        <div class="rms-tile-top">
-          <span class="rms-tile-drag" title="Перетащить" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
-          </span>
-          <span class="rms-tile-idx">${i + 1}</span>
-          <div class="rms-tile-order">
-            <button type="button" class="rms-move-btn" data-action="up" data-id="${escapeHtml(c.id)}" title="Вперёд (раньше)" aria-label="Переместить раньше" ${i === 0 ? "disabled" : ""}>
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M18 15l-6-6-6 6"/></svg>
-            </button>
-            <button type="button" class="rms-move-btn" data-action="down" data-id="${escapeHtml(c.id)}" title="Назад (позже)" aria-label="Переместить позже" ${i === order.length - 1 ? "disabled" : ""}>
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
-            </button>
-          </div>
-          <button type="button" class="rms-tile-del" data-id="${escapeHtml(c.id)}" aria-label="Убрать" title="Убрать из маршрута">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg>
-          </button>
+    // Группируем «связанные» точки — клиентов одного адреса (в т.ч. целиком
+    // связку) — в ОДНУ плитку, чтобы на карте маршрута рядом не висело несколько
+    // плиток одного адреса с мостами «0 км» между ними. Мосты строятся только
+    // между разными адресами.
+    const groups = [];
+    for (const c of order) {
+      const key = clientGroupKey(c);
+      const last = groups[groups.length - 1];
+      if (last && last.key === key) last.members.push(c);
+      else groups.push({ key, members: [c] });
+    }
+    const parts = [];
+    // Мост «от базы»: стрелка и километраж до первой точки — слева от первой
+    // плитки (по аналогии с мостами между плитками). Показывается, когда адрес
+    // базы задан в поле «База (адрес отправления)».
+    const baseAddrText = (el.routeBaseAddress ? el.routeBaseAddress.value : "").trim();
+    if (baseAddrText && groups.length > 0) {
+      const firstClient = groups[0].members[0];
+      parts.push(`
+        <div class="rms-bridge rms-bridge-base" data-base-km>
+          <span class="rms-bridge-arrow" aria-hidden="true">→</span>
+          <div class="rms-bridge-km"><div class="rms-bridge-val">— км</div><div class="rms-bridge-to">от базы до ${escapeHtml(firstClient.client || "первой точки")}</div></div>
+          <span class="rms-bridge-arrow" aria-hidden="true">→</span>
         </div>
-        <div class="rms-tile-name">${escapeHtml(c.client)}</div>
-        ${(c.bundleAddress || c.address) ? `<div class="rms-tile-addr">${escapeHtml(c.bundleAddress || c.address)}</div>` : ""}
-      </div>
-    `).join("");
+      `);
+    }
+    groups.forEach((g, i) => {
+      const first = g.members[0];
+      const addr = first.bundleAddress || first.address || "";
+      parts.push(`
+        <div class="rms-tile" data-id="${escapeHtml(first.id)}" draggable="true">
+          <div class="rms-tile-top">
+            <span class="rms-tile-drag" title="Перетащить" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
+            </span>
+            <span class="rms-tile-idx">${i + 1}</span>
+            <div class="rms-tile-order">
+              <button type="button" class="rms-move-btn" data-action="up" data-id="${escapeHtml(first.id)}" title="Вперёд (раньше)" aria-label="Переместить раньше" ${i === 0 ? "disabled" : ""}>
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M18 15l-6-6-6 6"/></svg>
+              </button>
+              <button type="button" class="rms-move-btn" data-action="down" data-id="${escapeHtml(first.id)}" title="Назад (позже)" aria-label="Переместить позже" ${i === groups.length - 1 ? "disabled" : ""}>
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="rms-tile-clients">
+            ${g.members.map((c, ci) => `
+              <div class="rms-tile-client${ci > 0 ? " rms-tile-client-sub" : ""}">
+                ${g.members.length > 1 ? `<span class="rms-tile-client-n">${ci + 1}</span>` : ""}
+                <span class="rms-tile-name">${escapeHtml(c.client)}</span>
+                <button type="button" class="rms-tile-del" data-id="${escapeHtml(c.id)}" aria-label="Убрать" title="Убрать из маршрута">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                </button>
+              </div>
+            `).join("")}
+          </div>
+          ${addr ? `<div class="rms-tile-addr">${escapeHtml(addr)}</div>` : ""}
+          ${g.members.length > 1 ? `<div class="rms-tile-badge">${g.members.length} ${plural(g.members.length, "клиент на адресе", "клиента на адресе", "клиентов на адресе")}</div>` : ""}
+        </div>
+      `);
+      if (i < groups.length - 1) {
+        const next = groups[i + 1];
+        parts.push(`
+          <div class="rms-bridge" data-route-km-from="${escapeHtml(first.id)}" data-route-km-to="${escapeHtml(next.members[0].id)}">
+            <span class="rms-bridge-arrow" aria-hidden="true">→</span>
+            <div class="rms-bridge-km"><div class="rms-bridge-val">— км</div><div class="rms-bridge-to">до ${escapeHtml(next.members[0].client || "следующей точки")}</div></div>
+            <span class="rms-bridge-arrow" aria-hidden="true">→</span>
+          </div>
+        `);
+      }
+    });
+    el.routeClientSelected.innerHTML = parts.join("");
     el.routeClientSelected.querySelectorAll(".rms-tile-del").forEach((b) => {
       b.addEventListener("click", () => toggleRouteClient(b.dataset.id));
     });
@@ -4728,6 +4843,67 @@
     });
     bindRouteDragDrop();
     updateRouteStepCount();
+    // Мосты строятся только между разными адресами (группами): передаём
+    // представителя каждой группы, чтобы км считались между плитками.
+    loadSelectedRouteKm(groups.map((g) => g.members[0]));
+    // Мост «от базы» до первой точки (слева от первой плитки).
+    loadBaseKm(groups);
+  }
+
+  // Асинхронно подгружает км между соседними выбранными клиентами (по дорогам
+  // через сервер /api/drivers/route-km, фолбэк — по прямой). Заполняет мосты.
+  async function loadSelectedRouteKm(order) {
+    const container = el.routeClientSelected;
+    if (!container || !Array.isArray(order) || order.length < 2) return;
+    const geo = order.map((c) => ({
+      lat: Number.isFinite(c.lat) ? c.lat : null,
+      lon: Number.isFinite(c.lon) ? c.lon : null,
+    }));
+    const valid = geo.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+    if (valid.length < 2) return; // нет координат — мосты остаются «— км»
+    let segs = null;
+    let method = "";
+    try {
+      const r = await api("/api/drivers/route-km", {
+        method: "POST",
+        body: JSON.stringify({ points: geo }),
+      });
+      if (r && r.ok && Array.isArray(r.segs)) segs = r.segs;
+      if (r && typeof r.method === "string") method = r.method;
+    } catch { segs = null; }
+    if (!segs || segs.length === 0) return;
+    // Мосты между плитками (без моста «от базы» — у него свой расчёт km).
+    container.querySelectorAll(".rms-bridge:not(.rms-bridge-base)").forEach((br, i) => {
+      const seg = segs[i];
+      if (!seg || !Number.isFinite(Number(seg.km))) return;
+      const val = br.querySelector(".rms-bridge-val");
+      if (val) val.textContent = `${Number(seg.km)} км`;
+      if (method) br.dataset.kmMethod = method;
+    });
+  }
+
+  // Асинхронно подгружает км «от базы» до первой точки маршрута (по дорогам
+  // через сервер /api/drivers/base-km, фолбэк — по прямой). Заполняет мост,
+  // нарисованный слева от первой плитки, когда адрес базы был задан.
+  async function loadBaseKm(groups) {
+    const container = el.routeClientSelected;
+    if (!container || !groups || groups.length === 0) return;
+    const bridge = container.querySelector(".rms-bridge-base");
+    if (!bridge) return;
+    const baseAddress = (el.routeBaseAddress ? el.routeBaseAddress.value : "").trim();
+    if (!baseAddress) return;
+    const first = groups[0].members[0];
+    if (!first || !Number.isFinite(first.lat) || !Number.isFinite(first.lon)) return; // км не посчитать — «— км»
+    try {
+      const r = await api("/api/drivers/base-km", {
+        method: "POST",
+        body: JSON.stringify({ baseAddress, firstLat: first.lat, firstLon: first.lon }),
+      });
+      if (!r || !Number.isFinite(Number(r.km))) return;
+      const val = bridge.querySelector(".rms-bridge-val");
+      if (val) val.textContent = `${Number(r.km)} км`;
+      if (r.method) bridge.dataset.kmMethod = r.method;
+    } catch { /* оставляем «— км» */ }
   }
 
   // --- Drag & drop: перетаскивание клиентов для изменения порядка в маршруте.
@@ -4925,24 +5101,30 @@
   // Перемещает перетаскиваемую плитку на место целевой в routeOrderIds.
   function moveRouteTile(dragId, targetId) {
     syncOrderFromSet();
-    const dragIdx = routeOrderIds.findIndex((x) => String(x) === String(dragId));
-    const targetIdx = routeOrderIds.findIndex((x) => String(x) === String(targetId));
-    if (dragIdx < 0 || targetIdx < 0) return;
-    const [moved] = routeOrderIds.splice(dragIdx, 1);
-    // После удаления индекс целевой позиции мог сдвинуться.
-    const insertAt = routeOrderIds.findIndex((x) => String(x) === String(targetId));
-    if (insertAt < 0) { routeOrderIds.push(moved); }
-    else routeOrderIds.splice(insertAt, 0, moved);
+    // Плитка — это группа «связанных» клиентов одного адреса: перемещаем её целиком.
+    const blocks = flatRouteBlocks();
+    const dragBi = blocks.findIndex((b) => b.ids.some((x) => String(x) === String(dragId)));
+    const targetBi = blocks.findIndex((b) => b.ids.some((x) => String(x) === String(targetId)));
+    if (dragBi < 0 || targetBi < 0 || dragBi === targetBi) return;
+    const [dragBlock] = blocks.splice(dragBi, 1);
+    // После удаления целевая позиция могла сдвинуться — ищем заново.
+    const ti = blocks.findIndex((b) => b.ids.some((x) => String(x) === String(targetId)));
+    blocks.splice(ti < 0 ? blocks.length : ti, 0, dragBlock);
+    routeOrderIds = blocks.flatMap((b) => b.ids);
     renderRouteClientSelected();
   }
 
   function moveRouteOrder(id, action) {
     syncOrderFromSet();
-    const idx = routeOrderIds.findIndex((x) => String(x) === String(id));
-    if (idx < 0) return;
-    const swapWith = action === "up" ? idx - 1 : idx + 1;
-    if (swapWith < 0 || swapWith >= routeOrderIds.length) return;
-    [routeOrderIds[idx], routeOrderIds[swapWith]] = [routeOrderIds[swapWith], routeOrderIds[idx]];
+    // Перемещаем плитку (группу связанных клиентов) целиком, сохраняя порядок
+    // клиентов внутри неё.
+    const blocks = flatRouteBlocks();
+    const bi = blocks.findIndex((b) => b.ids.some((x) => String(x) === String(id)));
+    if (bi < 0) return;
+    const swapWith = action === "up" ? bi - 1 : bi + 1;
+    if (swapWith < 0 || swapWith >= blocks.length) return;
+    [blocks[bi], blocks[swapWith]] = [blocks[swapWith], blocks[bi]];
+    routeOrderIds = blocks.flatMap((b) => b.ids);
     renderRouteClientSelected();
   }
 
@@ -5252,6 +5434,9 @@
                 ${escapeHtml(r.driverName || "—")}
               </span>
               <span class="drv-stop-count">${n}</span>
+              ${Number.isFinite(Number(r.km))
+                ? `<span class="drv-route-km" title="Протяжённость маршрута (база → точки → база)">${Number(r.km)} км</span>`
+                : ""}
             </div>
             ${collapseBtn}
             ${editDelBtns}
@@ -6697,6 +6882,14 @@
       if (!tile) return;
       const idx = Number(tile.dataset.appendClientIndex);
       if (Number.isFinite(idx) && idx >= 0) {
+        // Допечатка доступна только полностью погруженному клиенту — игнорируем
+        // клик по клиенту, у которого боксы ещё не созданы или создана лишь часть.
+        const r = shipmentsCache.find((x) => String(x.id) === String(appendRouteId));
+        const cl = r && Array.isArray(r.clients) ? r.clients[idx] : null;
+        const done = cl
+          ? Number(cl.totalCount) > 0 && Number(cl.loadedCount) >= Number(cl.totalCount)
+          : false;
+        if (!done) return;
         appendClientIndex = idx;
         renderAppendClientsTiles();
         updateAppendConfirmState();

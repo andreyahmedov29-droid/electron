@@ -1934,6 +1934,17 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   background: rgba(255, 171, 56, 0.08);
   border-color: rgba(255, 171, 56, 0.24);
 }
+.drv-chip-diag { font-weight: 600; }
+.drv-chip-diag.is-warn {
+  color: var(--red-soft, #ff7a6b);
+  background: rgba(255, 111, 97, 0.1);
+  border-color: rgba(255, 122, 107, 0.4);
+}
+.drv-chip-diag.is-ok {
+  color: #7fd1a8;
+  background: rgba(103, 201, 153, 0.1);
+  border-color: rgba(103, 201, 153, 0.35);
+}
 
 /* Быстрое добавление клиента */
 .drv-quick-add {
@@ -2265,11 +2276,58 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   .rms-options { grid-template-columns: 1fr; }
 }
 .rms-selected {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 .rms-selected-empty { color: var(--ink-faint); font-size: 12px; }
+.rms-bridge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: center;
+  padding: 0 4px;
+}
+.rms-bridge-arrow {
+  color: var(--ink-faint);
+  font-size: 18px;
+  line-height: 1;
+  user-select: none;
+  flex: 0 0 auto;
+}
+.rms-bridge-km {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 108px;
+  padding: 6px 12px;
+  text-align: center;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  flex: 0 0 auto;
+}
+.rms-bridge-val {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--amber);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.rms-bridge-to {
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  line-height: 1.25;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .rms-selected-block {
   display: flex;
   flex-direction: column;
@@ -2290,6 +2348,9 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   display: flex;
   flex-direction: column;
   gap: 5px;
+  flex: 0 1 20%;
+  min-width: 160px;
+  max-width: 230px;
   background:
     linear-gradient(180deg, rgba(255, 171, 56, 0.07), rgba(255, 171, 56, 0.02)),
     var(--panel-soft);
@@ -2432,6 +2493,56 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   opacity: 0.3;
   cursor: default;
 }
+/* Сгруппированная плитка «связанных» клиентов (несколько на одном адресе). */
+.rms-tile-clients {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.rms-tile-client {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.rms-tile-client .rms-tile-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rms-tile-client .rms-tile-del {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 7px;
+}
+.rms-tile-client.rms-tile-client-sub {
+  padding-top: 4px;
+  border-top: 1px dashed rgba(152, 164, 173, 0.22);
+}
+.rms-tile-client-n {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  background: rgba(152, 164, 173, 0.16);
+  border: 1px solid rgba(152, 164, 173, 0.3);
+  color: var(--ink-dim);
+  font-size: 9.5px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.rms-tile-badge {
+  align-self: flex-start;
+  font-size: 10px;
+  color: var(--teal-bright);
+  background: rgba(152, 164, 173, 0.14);
+  border: 1px solid rgba(152, 164, 173, 0.32);
+  border-radius: 999px;
+  padding: 1px 9px;
+}
 
 @media (max-width: 480px) {
   .rms-selected { grid-template-columns: 1fr; }
@@ -2516,6 +2627,16 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 2px 9px;
+  white-space: nowrap;
+}
+.drv-route-km {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--amber-soft);
+  background: rgba(255, 171, 56, 0.1);
+  border: 1px solid rgba(255, 171, 56, 0.28);
+  border-radius: 999px;
+  padding: 2px 10px;
   white-space: nowrap;
 }
 .drv-stops {
@@ -4111,6 +4232,16 @@ dialog.admin-modal[open] {
   background: var(--amber, #ffab38);
   filter: brightness(1.08);
   box-shadow: 0 8px 22px rgba(255, 171, 56, 0.3);
+}
+/* «Допечатать места» недоступна, пока у выбранного клиента не погружены ВСЕ
+   боксы: приглушаем кнопку, чтобы печать шла кнопкой «Печать этикеток». */
+#printModal .route-confirm-actions .route-confirm-append:disabled {
+  color: var(--ink-dim, #8a8f98);
+  background: rgba(127, 127, 127, 0.14);
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.1));
+  cursor: not-allowed;
+  box-shadow: none;
+  filter: none;
 }
 
 /* Нейтральная «Отмена» — как .ctrl-soft */
@@ -6293,6 +6424,25 @@ button.icon-btn svg,
 }
 .print-client-tile.is-done .tile-places {
   color: var(--muted, #9ca3af);
+}
+/* Недоступная плитка окна допечатки: клиент, у которого боксы ещё не созданы
+   или создана лишь часть. Допечатка таким недоступна — места добавляют обычной
+   печатью через выбор клиента. */
+.print-client-tile:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.print-client-tile:disabled:hover {
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.04);
+}
+.print-client-tile:disabled.is-done {
+  opacity: 1;
+  cursor: pointer;
+}
+.print-client-tile:disabled.is-done:hover {
+  background: rgba(127, 127, 127, 0.24);
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.28));
 }
 
 /* ===== Печать этикеток отгрузки (термопринтер 58 мм) ===== */

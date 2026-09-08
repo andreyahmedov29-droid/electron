@@ -216,11 +216,15 @@ function osrmMatchTrack(pts) {
 // Привязка трека к дорогам с разбиением на чанки (OSRM лимитирует число точек
 // на один запрос). Возвращает Promise<[[lat,lon],...]>; при полном отказе OSRM —
 // исходные точки.
+// Возвращает { path, snapped }: path — массив [[lat,lon],...], snapped — true
+// ТОЛЬКО если реально построена дорожная геометрия (TomTom или OSRM). Если
+// дорожные сервисы недоступны (нет ключей/таймаут/403) — snapped:false, path —
+// исходные точки. Так потребитель не примет «сырые» GPS-точки за дорожный путь.
 async function snapTrackToRoads(raw) {
   const clean = (raw || []).filter((p) =>
     Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])
   );
-  if (clean.length < 2) return clean.slice();
+  if (clean.length < 2) return { path: clean.slice(), snapped: false };
   // Эпсилон ~0.0002° (~20 м) — убираем дрожание GPS, сохраняя форму пути.
   let simp = douglasPeucker(clean, 0.0002);
   if (simp.length < 2) simp = [clean[0], clean[clean.length - 1]];
@@ -249,7 +253,7 @@ async function snapTrackToRoads(raw) {
     }
     // Если ни одна точка дорожной геометрии не получена (только прямые) —
     // возвращаем исходный след.
-    return out.length >= 2 ? out : clean.slice();
+    return { path: out.length >= 2 ? out : clean.slice(), snapped: true };
   }
 
   // 2) Fallback — OSRM /match (если когда-нибудь заработает).
@@ -263,7 +267,7 @@ async function snapTrackToRoads(raw) {
     if (snapped && snapped.length >= 2) { out.push(...snapped); anyMatch = true; }
     else { out.push(...chunk); }
   }
-  return anyMatch ? out : clean.slice();
+  return { path: anyMatch ? out : clean.slice(), snapped: anyMatch };
 }
 
 // ---- Automatic backup schedule ----
@@ -771,6 +775,18 @@ function isDriver(user, dbData) {
   );
 }
 
+// Узкое определение «водителя» ТОЛЬКО для карты «Трекинг»: учитываем лишь
+// участников группы, чьё имя ТОЧНО «Водители»/«Водитель». Глобальная isDriver
+// ловит все группы со словом «водител» (резервные/сменные и т.п.), но на карту
+// пользователь хочет выводить только основную группу «Водители».
+function isDriversGroupOnly(user, dbData) {
+  const allowed = new Set(["водители", "водитель"]);
+  return (dbData.groups || []).some((g) => {
+    const n = String(g.name || "").trim().toLowerCase();
+    return allowed.has(n) && (g.memberIds || []).includes(user.id);
+  });
+}
+
 // Возвращает клон маршрута с гарантированно нормализованными полями прогресса:
 // каждая точка несёт id, state и таймстемпы, а маршрут — объект progress.
 // Используется при чтении, чтобы клиент всегда видел полную структуру, не
@@ -828,6 +844,109 @@ function enrichUnloadProgress(route, labels) {
     c.unloadFinished = c.unloadFinished === true;
   });
   return route;
+}
+
+// Протяжённость маршрута в км по последовательности остановок:
+// база → точки маршрута → возврат на базу (как в отчёте движения).
+// Маршрут хранит адреса точек, а не координаты, поэтому координаты берём из
+// справочника контрагентов (по совпадению адреса); фолбэк — координаты самой
+// точки, если они были сохранены ранее. Метод — гаверсинус: мгновенный, без
+// внешних вызовов, безопасен для рендера списка со ВСЕМИ маршрутами сразу.
+// Возвращает число (км) или null, если посчитать не по чему.
+function routeKm(route) {
+  if (!route) return null;
+  const path = [];
+  const prog = route.progress || {};
+  if (Number.isFinite(prog.baseLat) && Number.isFinite(prog.baseLon)) {
+    path.push({ lat: prog.baseLat, lon: prog.baseLon });
+  }
+  (Array.isArray(route.clients) ? route.clients : []).forEach((c) => {
+    if (!c) return;
+    let pt = null;
+    const addr = String(c.bundleAddress || c.address || "").trim().toLowerCase();
+    if (addr) {
+      const cc = (db.driverClients || []).find((x) =>
+        String(x.bundleAddress || x.address || "").trim().toLowerCase() === addr
+      );
+      if (cc && Number.isFinite(cc.lat) && Number.isFinite(cc.lon)) {
+        pt = { lat: cc.lat, lon: cc.lon };
+      }
+    }
+    if (!pt && Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+      pt = { lat: c.lat, lon: c.lon };
+    }
+    if (pt) path.push(pt);
+  });
+  // Возврат на базу — последний отрезок (если маршрут имеет базу).
+  if (path.length >= 2 && Number.isFinite(prog.baseLat) && Number.isFinite(prog.baseLon)) {
+    path.push({ lat: prog.baseLat, lon: prog.baseLon });
+  }
+  if (path.length < 2) return null;
+  let km = 0;
+  for (let i = 1; i < path.length; i++) {
+    if (path[i - 1] && path[i]) km += haversineKm(path[i - 1], path[i]);
+  }
+  return Math.round(km * 10) / 10;
+}
+
+// Кэш ДОРОЖНОЙ протяжённости маршрутов: routeId -> km (по дорогам, 2ГИС).
+// Считается в фоне при GET /api/drivers/routes (фолбэк в ответе — routeKm по
+// прямой) и кэшируется, чтобы следующий просмотр списка показал км, совпадающий
+// с дорожными мостами карты. Живёт в памяти — передеплой пересчитает заново.
+const routeKmCache = {};
+const routeKmPending = {};
+
+// Дорожная протяжённость маршрута (база → точки → возврат на базу) ОДНИМ вызовом
+// матрицы 2ГИС по всем точкам сразу (сумма соседних ячеек). Фолбэк — гаверсинус
+// по прямой (routeKm). Возвращает Promise<number|null>.
+async function routeKmRoad(route) {
+  if (!route) return null;
+  const path = [];
+  const prog = route.progress || {};
+  if (Number.isFinite(prog.baseLat) && Number.isFinite(prog.baseLon)) {
+    path.push({ lat: prog.baseLat, lon: prog.baseLon });
+  }
+  (Array.isArray(route.clients) ? route.clients : []).forEach((c) => {
+    if (!c) return;
+    let pt = null;
+    const addr = String(c.bundleAddress || c.address || "").trim().toLowerCase();
+    if (addr) {
+      const cc = (db.driverClients || []).find((x) =>
+        String(x.bundleAddress || x.address || "").trim().toLowerCase() === addr
+      );
+      if (cc && Number.isFinite(cc.lat) && Number.isFinite(cc.lon)) {
+        pt = { lat: cc.lat, lon: cc.lon };
+      }
+    }
+    if (!pt && Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+      pt = { lat: c.lat, lon: c.lon };
+    }
+    if (pt) path.push(pt);
+  });
+  if (path.length >= 2 && Number.isFinite(prog.baseLat) && Number.isFinite(prog.baseLon)) {
+    path.push({ lat: prog.baseLat, lon: prog.baseLon }); // возврат на базу
+  }
+  if (path.length < 2) return null;
+  // 1) По дорогам через матрицу 2ГИС (один вызов на весь маршрут).
+  try {
+    const matrix = await gisDistanceMatrix(path);
+    if (matrix && matrix.length >= path.length) {
+      let road = 0;
+      let ok = true;
+      for (let i = 1; i < path.length; i++) {
+        const d = matrix[i - 1] && matrix[i - 1][i];
+        if (!Number.isFinite(d)) { ok = false; break; }
+        road += d;
+      }
+      if (ok) return Math.round(road * 10) / 10;
+    }
+  } catch { /* запасной */ }
+  // 2) Фолбэк — по прямой.
+  let km = 0;
+  for (let i = 1; i < path.length; i++) {
+    if (path[i - 1] && path[i]) km += haversineKm(path[i - 1], path[i]);
+  }
+  return Math.round(km * 10) / 10;
 }
 
 // ---- Автопостроение маршрута по адресам клиентов (Яндекс.Карты) ----
@@ -983,6 +1102,53 @@ function gisDurationMatrix(points) {
             const row = routes.find((r) => Number(r.source_id) === s && Number(r.target_id) === t);
             if (!row || row.status !== "OK") return Infinity;
             return Number.isFinite(Number(row.duration)) ? Number(row.duration) : Infinity;
+          };
+          const out = Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => cell(r, c)));
+          const ok = out.every((row) => row.every((t) => Number.isFinite(t) && t < Infinity));
+          return resolve(ok ? out : null);
+        } catch { resolve(null); }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(20000, () => { req.destroy(); resolve(null); });
+    req.end(body);
+  });
+}
+
+// Запрашивает у 2ГИС Distance Matrix РАССТОЯНИЕ (км) между всеми парами точек
+// по реальным дорогам с учётом текущих пробок (type: "jam"). Точки —
+// [{lat, lon}, ...]; результат — number[][] (км) или null при недоступности.
+// Используется для показа «км между точками маршрута» на экране выбора клиентов.
+function gisDistanceMatrix(points) {
+  return new Promise((resolve) => {
+    if (!GIS_API_KEY || points.length === 0) return resolve(null);
+    const n = points.length;
+    const payload = {
+      points: points.map((p) => ({ lat: Number(p.lat), lon: Number(p.lon) })),
+      sources: Array.from({ length: n }, (_, i) => i),
+      targets: Array.from({ length: n }, (_, i) => i),
+      transport: "driving",
+      type: "jam",
+    };
+    const body = JSON.stringify(payload);
+    const url = "https://routing.api.2gis.com/get_dist_matrix?key=" +
+      encodeURIComponent(GIS_API_KEY) + "&version=2.0";
+    const req = https.request(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+    }, (res) => {
+      let data = "";
+      res.on("data", (c) => { data += c; });
+      res.on("end", () => {
+        try {
+          const j = JSON.parse(data);
+          const routes = j && Array.isArray(j.routes) ? j.routes : null;
+          if (!routes) return resolve(null);
+          const cell = (s, t) => {
+            const row = routes.find((r) => Number(r.source_id) === s && Number(r.target_id) === t);
+            if (!row || row.status !== "OK") return Infinity;
+            // 2ГИС возвращает дистанцию в метрах — переводим в км.
+            return Number.isFinite(Number(row.distance)) ? Number(row.distance) / 1000 : Infinity;
           };
           const out = Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => cell(r, c)));
           const ok = out.every((row) => row.every((t) => Number.isFinite(t) && t < Infinity));
@@ -2872,17 +3038,37 @@ async function handleApi(req, res, urlPath) {
     const date = String(params.get("date") || "").slice(0, 10);
     const filterDate = (arr) => (date ? arr.filter((r) => r.date === date) : arr);
     // Админ видит все маршруты; водитель — только свои; остальным — доступ запрещён.
+    const withKm = (r) => {
+      const rr = enrichUnloadProgress(normalizeRouteProgress(r), db.labels);
+      const id = String(rr.id || "");
+      // Дорожный км (из кэша) — если его ещё нет, на лету подставляем км по
+      // прямой и запускаем фоновый дорожный расчёт; следующий просмотр покажет
+      // уже дорожное значение, совпадающее с мостами карты.
+      const cached = routeKmCache[id];
+      if (Number.isFinite(Number(cached))) {
+        rr.km = Number(cached);
+      } else {
+        rr.km = routeKm(rr); // быстрый фолбэк по прямой
+        if (!routeKmPending[id]) {
+          routeKmPending[id] = true;
+          routeKmRoad(rr).then((km) => {
+            if (Number.isFinite(Number(km))) routeKmCache[id] = Number(km);
+          }).catch(() => {}).finally(() => { delete routeKmPending[id]; });
+        }
+      }
+      return rr;
+    };
     if (isDriver(user, db) && !admin) {
       const routes = filterDate((db.driverRoutes || []).filter((r) => r.driverId === user.id));
       return sendJson(res, 200, {
         ok: true,
-        routes: routes.map((r) => enrichUnloadProgress(normalizeRouteProgress(r), db.labels)),
+        routes: routes.map(withKm),
       });
     }
     if (!admin) return sendJson(res, 403, { error: "forbidden" });
     return sendJson(res, 200, {
       ok: true,
-      routes: filterDate(db.driverRoutes || []).map((r) => enrichUnloadProgress(normalizeRouteProgress(r), db.labels)),
+      routes: filterDate(db.driverRoutes || []).map(withKm),
     });
   }
 
@@ -3245,6 +3431,82 @@ async function handleApi(req, res, urlPath) {
         lat: Number.isFinite(p.lat) ? p.lat : null,
         lon: Number.isFinite(p.lon) ? p.lon : null,
       })),
+    });
+  }
+
+  // ---- POST /api/drivers/route-km   ({ points: [{lat, lon}, ...] })
+  // Километраж между соседними точками маршрута по реальным дорогам (2ГИС,
+  // с учётом пробок). Клиент присылает точки в ПОРЯДКЕ следования; сервер
+  // возвращает расстояние по дорогам между каждой парой соседних точек.
+  // Фолбэк — «по прямой» (гаверсинус) с method: "straight", если 2ГИС недоступен.
+  if (urlPath === "/api/drivers/route-km" && method === "POST") {
+    const body = await readBody(req);
+    const pts = Array.isArray(body.points) ? body.points : [];
+    const clean = pts
+      .map((p) => ({
+        lat: Number(p && p.lat),
+        lon: Number(p && p.lon),
+      }))
+      .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+    if (clean.length < 2) return sendJson(res, 200, { ok: true, method: "empty", segs: [] });
+
+    let matrix = null;
+    try { matrix = await gisDistanceMatrix(clean); } catch { matrix = null; }
+    const byMatrix = matrix && matrix.length >= clean.length &&
+      !matrix.some((row) => row.some((t) => !Number.isFinite(t)));
+
+    const segs = [];
+    for (let i = 0; i < clean.length - 1; i++) {
+      let km;
+      if (byMatrix) {
+        km = Number(matrix[i][i + 1]); // расстояние от i-й точки к (i+1)-й по дорогам
+      } else {
+        km = haversineKm(clean[i], clean[i + 1]);
+      }
+      segs.push({
+        from: i,
+        to: i + 1,
+        km: Math.round(km * 10) / 10,
+      });
+    }
+    return sendJson(res, 200, { ok: true, method: byMatrix ? "gis" : "straight", segs });
+  }
+
+  // ---- POST /api/drivers/base-km   ({ baseAddress, firstLat, firstLon })
+  // Километраж от БАЗЫ до первой точки маршрута — клиент показывает стрелку
+  // и км слева от первой плитки («от базы до …»). Геокодирует адрес базы
+  // (Яндекс) и считает км по дорогам (2ГИС; фолбэк — по прямой).
+  if (urlPath === "/api/drivers/base-km" && method === "POST") {
+    const body = await readBody(req);
+    const baseAddress = String(body.baseAddress || "").trim();
+    const firstLat = Number(body.firstLat);
+    const firstLon = Number(body.firstLon);
+    if (!baseAddress || !Number.isFinite(firstLat) || !Number.isFinite(firstLon)) {
+      return sendJson(res, 200, { ok: true, km: null, method: "empty" });
+    }
+    let base = null;
+    try { base = await geocodeAddress(baseAddress); } catch { base = null; }
+    if (!base || !Number.isFinite(base.lat) || !Number.isFinite(base.lon)) {
+      return sendJson(res, 200, { ok: true, km: null, method: "base_unresolved" });
+    }
+    let km = null;
+    let method = "straight";
+    try {
+      const matrix = await gisDistanceMatrix([base, { lat: firstLat, lon: firstLon }]);
+      if (matrix && matrix.length >= 2 && Number.isFinite(matrix[0][1])) {
+        km = Number(matrix[0][1]);
+        method = "gis";
+      }
+    } catch { /* запасной */ }
+    if (!Number.isFinite(km)) {
+      km = haversineKm(base, { lat: firstLat, lon: firstLon });
+      method = "straight";
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      km: Math.round(km * 10) / 10,
+      method,
+      base: { lat: base.lat, lon: base.lon },
     });
   }
 
@@ -3663,7 +3925,7 @@ async function handleApi(req, res, urlPath) {
       // из группы «Водители» уже после того, как слал геолокацию, его устаревшая
       // запись оставалась в памяти до 10 минут и продолжала рисоваться на карте.
       // Здесь мы проверяем текущую роль и попутно вычищаем осиротевшие данные.
-      if (!isDriver({ id }, db)) {
+      if (!isDriversGroupOnly({ id }, db)) {
         delete db.liveLocations[id];
         delete db.tracks[id];
         continue;
@@ -3731,13 +3993,18 @@ async function handleApi(req, res, urlPath) {
       const key = `${date}:${id}`;
       const cached = snappedTracks[key];
       if (Array.isArray(cached) && cached.length >= 2) {
+        // В кэш кладём ТОЛЬКО реально привязанный к дорогам путь, поэтому
+        // cached гарантированно дорожный — помечаем snapped:true без повторной
+        // проверки.
         tracks.push({ id, name: nameOf(id), track: cached, snapped: true });
       } else {
-        // Кэша нет — считаем в фоне, сейчас отдаём исходный след.
+        // Кэша нет — считаем в фоне, сейчас отдаём исходный след с snapped:false
+        // (фронт не рисует неснапнутые треки, чтобы не показывать «сырые» линии).
         tracks.push({ id, name: nameOf(id), track: coords, snapped: false });
-        snapTrackToRoads(coords).then((roadPath) => {
-          if (roadPath && roadPath.length >= 2) {
-            snappedTracks[key] = roadPath;
+        snapTrackToRoads(coords).then((r) => {
+          // Кэшируем и помечаем как snapped ТОЛЬКО реально дорожный путь.
+          if (r && r.snapped && Array.isArray(r.path) && r.path.length >= 2) {
+            snappedTracks[key] = r.path;
             scheduleSnappedSave();
           }
         }).catch(() => {});
