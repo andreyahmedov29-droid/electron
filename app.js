@@ -2888,23 +2888,46 @@
       el.printClientsTiles.innerHTML = "";
       return;
     }
-    el.printClientsTiles.innerHTML = clients.map((c, i) => {
-      const done = Number(c.totalCount) > 0 && Number(c.loadedCount) >= Number(c.totalCount);
-      const cls = [
-        "print-client-tile",
-        i === printClientIndex ? "is-active" : "",
-        done ? "is-done" : "",
-      ].filter(Boolean).join(" ");
-      const total = Number(c.totalCount) || 0;
-      const loaded = Number(c.loadedCount) || 0;
-      const places = done ? `отгружено ${loaded}` : `${loaded} / ${total}`;
-      return `
-        <button type="button" class="${cls}" data-client-index="${i}" title="${done ? "Клиент отгружен — можно допечатать новые места" : ""}">
-          <span class="tile-name">${escapeHtml(c.client || "—")}</span>
-          <span class="tile-places">${places}</span>
-        </button>
-      `;
-    }).join("");
+    // Пересоздаём только если кнопок ещё нет ИЛИ их число не совпадает с числом
+    // клиентов. При одинаковом количестве — обновляем классы/текст, не трогая
+    // DOM: пересоздание innerHTML под курсором в момент клика на десктопе
+    // сбрасывало выбор на первого клиента (клик «прицеливался» в перерисованную
+    // первую плитку и вызывал сброс 1 → 0).
+    const existing = el.printClientsTiles.querySelectorAll(".print-client-tile");
+    if (existing.length !== clients.length) {
+      el.printClientsTiles.innerHTML = clients.map((c, i) => {
+        const done = Number(c.totalCount) > 0 && Number(c.loadedCount) >= Number(c.totalCount);
+        const cls = [
+          "print-client-tile",
+          i === printClientIndex ? "is-active" : "",
+          done ? "is-done" : "",
+        ].filter(Boolean).join(" ");
+        const total = Number(c.totalCount) || 0;
+        const loaded = Number(c.loadedCount) || 0;
+        const places = done ? `отгружено ${loaded}` : `${loaded} / ${total}`;
+        return `
+          <button type="button" class="${cls}" data-client-index="${i}" title="${done ? "Клиент отгружен — можно допечатать новые места" : ""}">
+            <span class="tile-name">${escapeHtml(c.client || "—")}</span>
+            <span class="tile-places">${places}</span>
+          </button>
+        `;
+      }).join("");
+    } else {
+      const buttons = Array.from(existing);
+      buttons.forEach((btn, i) => {
+        const c = clients[i];
+        const done = c ? (Number(c.totalCount) > 0 && Number(c.loadedCount) >= Number(c.totalCount)) : false;
+        btn.classList.toggle("is-active", i === printClientIndex);
+        btn.classList.toggle("is-done", !!done);
+        btn.title = done ? "Клиент отгружен — можно допечатать новые места" : "";
+        const placesEl = btn.querySelector(".tile-places");
+        if (placesEl && c) {
+          const total = Number(c.totalCount) || 0;
+          const loaded = Number(c.loadedCount) || 0;
+          placesEl.textContent = done ? `отгружено ${loaded}` : `${loaded} / ${total}`;
+        }
+      });
+    }
   }
 
   // Переключение активного клиента по клику на плитку. «Отгруженный» клиент
