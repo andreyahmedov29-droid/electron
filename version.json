@@ -1,5 +1,5 @@
 {
-  "versionCode": 19,
-  "versionName": "1.1.11",
-  "notes": "Новая сборка: свежий NSIS-установщик (Release electron)"
+  "versionCode": 20,
+  "versionName": "1.1.12",
+  "notes": "Авторелиз 1.1.12 (commit 9aa6ac9)"
 }
