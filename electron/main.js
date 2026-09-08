@@ -154,7 +154,7 @@ function startServer() {
 }
 
 // Создаёт главное окно приложения.
-function createWindow() {
+async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -183,12 +183,17 @@ function createWindow() {
   // свежий код. Перед загрузкой окна сбрасываем HTTP-кэш и кэш service
   // worker / Cache Storage, чтобы всегда тянулся актуальный фронтенд.
   // Cookies и сессия входа не трогаем — авторизация на шлюзе сохраняется.
+  // ОЧЕНЬ ВАЖНО: очистка кэша/service worker — асинхронная, и loadURL нужно
+  // вызывать СТРОГО после её завершения. Раньше мы «запускали» промисы очистки
+  // и сразу грузили страницу, поэтому WebView успевал снова подхватить старую
+  // закэшированную версию (выбор клиентов продолжал не работать). Здесь явно
+  // дожидаемся завершения очистки перед загрузкой.
   try {
     const ses = session.fromPartition("persist:biotime");
-    ses.clearCache().catch(() => {});
-    ses.clearStorageData({
+    await ses.clearCache();
+    await ses.clearStorageData({
       storages: ["cachestorage", "serviceworkers"],
-    }).catch(() => {});
+    });
   } catch (_) { /* очистка кэша — необязательный шаг */ }
 
   mainWindow.loadURL(APP_URL);
