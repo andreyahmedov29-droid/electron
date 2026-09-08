@@ -153,7 +153,7 @@ function startServer() {
 }
 
 // Создаёт главное окно приложения.
-function createWindow() {
+async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -167,9 +167,38 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Постоянная partition: cookies и сессия шлюза (вход в личную учётку)
+      // сохраняются в userData и держатся между перезапусками приложения.
+      // Без неё окно использует непостоянную defaultSession, вход теряется на
+      // каждом запуске и шлюз отвечает BH_LOGIN_REQUIRED при старте.
+      partition: "persist:biotime",
     },
   });
 
+  // В режиме A (веб-версия) постоянно очищаем кэш и service worker partition
+  // перед загрузкой, чтобы окно всегда тянуло СВЕЖИЙ фронтенд и не показывало
+  // старый закэшированный app.js с устаревшей логикой (например, выбор клиента
+  // для печати этикеток). Cookises и сессия входа не трогаются.
+  if (useWebMode) {
+    try {
+      const ses = session.fromPartition("persist:biotime");
+      await ses.clearCache();
+      await ses.clearStorageData({ storages: ["cachestorage", "serviceworkers"] });
+      // Блокируем /sw.js на поддомене приложения: в Electron (изолированная
+      // partition) регистрация защищённого 401-sw.js ломает mainFrame-навигацию
+      // (net::ERR_ABORTED → чёрное окно). Свой service worker десктопу не нужен.
+      ses.webRequest.onBeforeRequest((details, callback) => {
+        const u = details.url || "";
+        if (/\.vibecode\.bitrix24\.tech/.test(u) && /\/sw\.js(\?|$)/.test(u)) {
+          callback({ cancel: true });
+        } else {
+          callback({});
+        }
+      });
+    } catch (_) { /* очистка кэша — необязательный шаг */ }
+  }
+  // Дожидаемся очистки, затем грузим страницу (иначе WebView успеет подхватить
+  // закэшированную старую версию app.js).
   mainWindow.loadURL(APP_URL);
 
   // Внешние ссылки (портал, документация) открываем во внешнем браузере.
@@ -212,10 +241,19 @@ function createWindow() {
 // запоминает её в userData. Так каждый входит под своей учёткой, и
 // `Authorization: Bearer vibe_app_local_...` (который шлюз не принимает и
 // отвечает BH_LOGIN_REQUIRED / malformed) больше не отправляется.
-function applyWebToken() {
+async function applyWebToken() {
   // Ничего не подставляем в заголовки: полагаемся на шлюзовую сессию.
   console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
     + "кто войдёт в учётку — тот и используется.");
+  if (useWebMode) {
+    // Дополнительная страховка: сбрасываем service worker / кэш partition до
+    // первой навигации, чтобы старый sw.js не перехватывал её как fetch/XHR и
+    // не оставлял чёрный экран. Session (вход) при этом сохраняется.
+    try {
+      const webSes = session.fromPartition("persist:biotime");
+      await webSes.clearStorageData({ storages: ["serviceworkers", "cachestorage", "indexdb"] });
+    } catch (_) { /* необязательно */ }
+  }
 }
 
 // Останавливает локальный сервер при завершении приложения.
@@ -233,8 +271,10 @@ function stopServer() {
 app.whenReady().then(async () => {
   if (useWebMode) {
     // Режим A: подключаемся к веб-версии напрямую (без локального сервера).
-    applyWebToken();
-    createWindow();
+    // Дожидаемся сброса service worker / кэша partition, чтобы первая навигация
+    // loadURL() не была перехвачена старым сервис-воркером и не ушла как XHR.
+    await applyWebToken();
+    await createWindow();
   } else {
     // Режим B: поднимаем локальную копию сервера.
     if (!startServer()) {
@@ -247,7 +287,7 @@ app.whenReady().then(async () => {
       app.quit();
       return;
     }
-    createWindow();
+    await createWindow();
   }
 
   // Автообновление: только в упакованном приложении (не в dev). Проверяем и,
