@@ -38,6 +38,13 @@ logo-preview.html
 # ---- Android — отдельный git-репозиторий (biotime-android) ----
 /android/
 
+# ---- Desktop (Electron) — отдельный git-репозиторий (electron.git) ----
+# Папка electron-desktop/ — самостоятельный репозиторий сборки Windows-EXE
+# (https://github.com/andreyahmedov29-droid/electron.git). Вложенный .git не
+# позволяет корректно включить её в biotime.git как обычные файлы, поэтому
+# исходник живёт в своём репозитории, а здесь папка игнорируется.
+/electron-desktop/
+
 # ---- OS / IDE ----
 .DS_Store
 Thumbs.db
