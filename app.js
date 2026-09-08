@@ -6957,6 +6957,56 @@
       if (ev.key === "Enter") clearTimeout(scanInputTimer);
     });
   }
+  // USB-сканер (клавиатурный) на десктопе/вебе: считывание кода БЕЗ фокуса на поле.
+  // Когда окно «Отгрузка» открыто и курсор стоит НЕ на текстовом поле, сканер печатает
+  // код «в воздух» — символы уходят мимо printScanInput и теряются. Здесь перехватываем
+  // ввод глобально: быстрая серия печатных символов + Enter распознаётся как скан и
+  // отправляется (погрузка), независимо от того, чем занят фокус на странице.
+  // Текстовые поля (в т.ч. printScanInput) пропускаем — их ввод обрабатывается самими.
+  if (!(window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function")) {
+    let glScanBuf = "";
+    let glScanTs = 0;
+    let glScanTimer = null;
+    const glSendScan = () => {
+      const code = String(glScanBuf).trim();
+      glScanBuf = ""; glScanTs = 0;
+      if (glScanTimer) { clearTimeout(glScanTimer); glScanTimer = null; }
+      if (code) doScanLabel("load", code);
+    };
+    const glResetScan = () => {
+      glScanBuf = ""; glScanTs = 0;
+      if (glScanTimer) { clearTimeout(glScanTimer); glScanTimer = null; }
+    };
+    window.addEventListener("keydown", (ev) => {
+      if (!el.printModal || !el.printModal.open) { glResetScan(); return; }
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.tagName === "SELECT")) {
+        glResetScan();
+        return;
+      }
+      const t = Date.now();
+      // Сканер печатает символы почти без пауз. Пауза дольше 200 мс — это уже не скан.
+      if (glScanTs && (t - glScanTs) > 200) glScanBuf = "";
+      const k = ev.key;
+      if (k === "Enter") {
+        // Enter завершает скан: отправляем накопленный код (если он есть) и
+        // гасим Enter, чтобы он не активировал случайную кнопку под фокусом.
+        const code = String(glScanBuf).trim();
+        if (code) { ev.preventDefault(); glSendScan(); }
+        else glResetScan();
+        return;
+      }
+      if (k.length === 1 && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+        glScanBuf += k;
+        glScanTs = t;
+        // Автоотправка по паузе — для сканеров без Enter в конце.
+        if (glScanTimer) clearTimeout(glScanTimer);
+        glScanTimer = setTimeout(glSendScan, 300);
+      } else {
+        glResetScan();
+      }
+    });
+  }
   // Крестик в оверлее прогресса сканирования: закрывает оверлей и прекращает
   // автоматический перезапуск камеры (водитель сам решает, когда продолжить).
   if (el.scanOverlayClose) {
