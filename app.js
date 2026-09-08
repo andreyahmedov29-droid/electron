@@ -13,6 +13,7 @@
     canEditStatus: false,
     canManageShipment: false,
     canSeeShipment: false, // серверный флаг доступа к разделу «Отгрузка»
+    isLoader: false,       // роль «Погрузка»: видит только вкладку «Отгрузка»
     staff: [],         // [{ id, name, salary|null }]
     groups: [],        // [{ id, name, memberIds, moderatorId }]
     days: {},          // { "<YYYY-MM-DD>": { ownerId, segments } }
@@ -352,6 +353,7 @@
     state.isAdmin = !!s.me.isAdmin;
     state.isModerator = !!s.isModerator;
     state.isDriver = !!s.me.isDriver;
+    state.isLoader = !!s.me.isLoader;
     state.canEditStatus = !!s.canEditStatus;
     state.canManageShipment = !!s.canManageShipment;
     state.canSeeShipment = !!s.canSeeShipment;
@@ -2653,6 +2655,17 @@
   // при изменении ролей или переключении настроек — без перезагрузки страницы.
   function refreshNavTabs() {
     if (!el.tabs) return;
+    // Роль «Погрузка» — чистый погрузочный терминал: видна ТОЛЬКО вкладка
+    // «Отгрузка», все остальные (Табель/ЗП, Эфир, Доставка, Журнал и т.д.)
+    // скрыты. Возвращаемся сразу — общие правила подсветки ниже не нужны.
+    if (state.isLoader) {
+      el.tabs.querySelectorAll(".tab").forEach((t) => {
+        const isShipment = t.classList.contains("shipment-only");
+        t.classList.toggle("admin-visible", isShipment);
+        t.hidden = !isShipment;
+      });
+      return;
+    }
     const myRoutesVisible =
       (!!state.isAdmin && !!state.params.adminSeeRoutes) ||
       (!!state.isDriver && !!state.params.driverSeeRoutes);
@@ -3178,6 +3191,7 @@
       return `
         <div class="shipment-card${shipCollapsed ? " route-collapsed" : ""}" data-route-id="${escapeHtml(String(r.id))}">
           <div class="shipment-card-head">
+            <span class="drv-route-name" title="Название маршрута">${escapeHtml(r.routeName || "Маршрут")}</span>
             <span class="driver-route-date">${escapeHtml(dateStr)}</span>
             <span class="driver-route-driver">${escapeHtml(r.driverName || "—")}</span>
             ${badge}
@@ -5514,6 +5528,7 @@
         <div class="drv-route-card${drvCollapsed}">
           <div class="drv-route-card-head">
             <div class="drv-route-card-meta">
+              <span class="drv-route-name" title="Название маршрута">${escapeHtml(r.routeName || "Маршрут")}</span>
               <span class="drv-route-date">${escapeHtml(dateStr)}</span>
               <span class="drv-route-driver">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.6-3.4 3.3-5.5 7-5.5s6.4 2.1 7 5.5"/></svg>
@@ -7702,13 +7717,21 @@
     );
     // Show/hide the feature tabs (Мои маршруты / Маршрутизация) reactively.
     refreshNavTabs();
-    // Восстанавливаем вкладку, на которой пользователь был до перезагрузки
-    // (если сохранённая вкладка доступна его роли — switchTab сам уведёт на
-    // «Зарплату»/доступную, если нет).
-    try {
-      const savedTab = localStorage.getItem("biotime_active_tab");
-      if (savedTab) switchTab(savedTab);
-    } catch { /* ignore */ }
+    // Роль «Погрузка» — чистый терминал: всегда открывается на «Отгрузке»
+    // (единственная доступная вкладка), настройки недоступны, сохранённая
+    // вкладка игнорируется.
+    if (state.isLoader) {
+      switchTab("shipment");
+      if (el.settingsBtn) el.settingsBtn.classList.add("hidden");
+    } else {
+      // Восстанавливаем вкладку, на которой пользователь был до перезагрузки
+      // (если сохранённая вкладка доступна его роли — switchTab сам уведёт на
+      // «Зарплату»/доступную, если нет).
+      try {
+        const savedTab = localStorage.getItem("biotime_active_tab");
+        if (savedTab) switchTab(savedTab);
+      } catch { /* ignore */ }
+    }
     render();
     // Автообновление Android-APK: веб (со сессией) опрашивает сервер и, если там
     // версия выше установленной, показывает окно обновления.

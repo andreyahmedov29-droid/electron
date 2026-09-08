@@ -775,6 +775,25 @@ function isDriver(user, dbData) {
   );
 }
 
+// «Погрузка» — сотрудник группы склада, чьё имя содержит «погрузк» (например
+// группа «Погрузка»). Такой пользователь — чистый погрузочный терминал: он
+// видит ТОЛЬКО вкладку «Отгрузка» и не отображается другим в Табеле, расчёте
+// ЗП и «В эфире». Выделение по имени группы (как «Водители» для isDriver).
+function isLoader(user, dbData) {
+  return (dbData.groups || []).some(
+    (g) => /погрузк/i.test(String(g.name || "")) && (g.memberIds || []).includes(user.id)
+  );
+}
+
+// Проверка «погрузчик» по id сотрудника (для фильтрации списков видимости:
+// Табель, расчёт ЗП, «В эфире», Журнал — погрузчик там не показывается).
+function isLoaderById(staffId, dbData) {
+  const uid = String(staffId);
+  return (dbData.groups || []).some(
+    (g) => /погрузк/i.test(String(g.name || "")) && (g.memberIds || []).includes(uid)
+  );
+}
+
 // Узкое определение «водителя» ТОЛЬКО для карты «Трекинг»: учитываем лишь
 // участников группы, чьё имя ТОЧНО «Водители»/«Водитель». Глобальная isDriver
 // ловит все группы со словом «водител» (резервные/сменные и т.п.), но на карту
@@ -1412,6 +1431,9 @@ function canManageStatus(user, dbData, staffId) {
 function canSeeShipment(user, dbData) {
   if (!user) return false;
   if (isAdmin(user, dbData)) return true;
+  // «Погрузка» — чистый погрузочный терминал: доступ к «Отгрузке» у него
+  // включён всегда, независимо от showShipment и shipmentGroups.
+  if (isLoader(user, dbData)) return true;
   const p = dbData.params || {};
   if (p.showShipment !== true) return false;
   const ids = Array.isArray(p.shipmentGroups) ? p.shipmentGroups : [];
@@ -1471,21 +1493,52 @@ function visibleStaff(user, dbData) {
   // портала он приходит как ADMIN (или добавлен в список администраторов
   // приложения). Назначение модератором группы имеет приоритет: в «В эфире»,
   // отчёте и календаре он видит только своих.
+  // Погрузчиков (роль «Погрузка») исключаем из любых списков видимости —
+  // чистый погрузочный терминал не фигурирует в Табеле, расчёте ЗП и «Эфире».
+  const notLoader = (s) => !isLoaderById(s && s.id, dbData);
   if (isModerator(user, dbData)) {
     const ids = moderatorVisibleIds(user, dbData);
-    return dbData.staff.filter((s) => ids.has(s.id));
+    return dbData.staff.filter((s) => ids.has(s.id) && notLoader(s));
   }
-  if (isAdmin(user, dbData)) return dbData.staff;
+  if (isAdmin(user, dbData)) return dbData.staff.filter(notLoader);
   const ids = moderatorVisibleIds(user, dbData);
-  if (ids.size > 0) return dbData.staff.filter((s) => ids.has(s.id));
-  return dbData.staff.filter((s) => s.id === user.id);
+  if (ids.size > 0) return dbData.staff.filter((s) => ids.has(s.id) && notLoader(s));
+  return dbData.staff.filter((s) => s.id === user.id && notLoader(s));
+}
+
+// Клонирует день (db.days[key]), убирая сегменты и статусы погрузчиков (роль
+// «Погрузка»). Возвращает null, если после очистки в дне ничего не осталось.
+function dayWithoutLoaders(rec, dbData) {
+  const byEmp = rec && rec.byEmployee && typeof rec.byEmployee === "object" ? rec.byEmployee : {};
+  const statuses = rec && rec.statuses && typeof rec.statuses === "object" ? rec.statuses : {};
+  const cleanByEmp = {};
+  for (const sid in byEmp) {
+    if (!isLoaderById(sid, dbData)) cleanByEmp[sid] = byEmp[sid];
+  }
+  const cleanStatuses = {};
+  let anyStatus = false;
+  for (const sid in statuses) {
+    if (!isLoaderById(sid, dbData)) { cleanStatuses[sid] = statuses[sid]; anyStatus = true; }
+  }
+  const clean = {};
+  if (Object.keys(cleanByEmp).length > 0) clean.byEmployee = cleanByEmp;
+  if (anyStatus) clean.statuses = cleanStatuses;
+  return Object.keys(clean).length > 0 ? clean : null;
 }
 
 function visibleDays(user, dbData) {
   const ids = moderatorVisibleIds(user, dbData);
   // Модератор всегда видит только дни членов своих групп — даже если по роли
   // он ADMIN (приоритет модераторства), см. visibleStaff.
-  if (ids.size === 0 && isAdmin(user, dbData)) return dbData.days;
+  if (ids.size === 0 && isAdmin(user, dbData)) {
+    // Админ видит все дни, кроме дней погрузчиков (их в табеле нет).
+    const out = {};
+    for (const key in dbData.days) {
+      const clean = dayWithoutLoaders(dbData.days[key], dbData);
+      if (clean) out[key] = clean;
+    }
+    return out;
+  }
   const canSeeOthers = ids.size > 0;
   const out = {};
   for (const key in dbData.days) {
@@ -1508,10 +1561,10 @@ function visibleDays(user, dbData) {
     const byEmp = rec.byEmployee && typeof rec.byEmployee === "object" ? rec.byEmployee : {};
     const visibleEmp = {};
     for (const sid in byEmp) {
-      if (ids.has(sid)) visibleEmp[sid] = byEmp[sid];
+      if (ids.has(sid) && !isLoaderById(sid, dbData)) visibleEmp[sid] = byEmp[sid];
     }
     const statusKeys = rec.statuses && typeof rec.statuses === "object"
-      ? Object.keys(rec.statuses).filter((id) => ids.has(id))
+      ? Object.keys(rec.statuses).filter((id) => ids.has(id) && !isLoaderById(id, dbData))
       : [];
     if (Object.keys(visibleEmp).length === 0 && statusKeys.length === 0) continue;
     const copy = {};
@@ -1527,13 +1580,16 @@ function visibleDays(user, dbData) {
 }
 
 function visibleLog(user, dbData) {
-  if (isAdmin(user, dbData)) return dbData.log;
+  if (isAdmin(user, dbData)) {
+    // Журнал погрузчиков не показываем (их нет в учёте).
+    return dbData.log.filter((e) => !isLoaderById(e && e.ownerId, dbData));
+  }
   // A moderator sees the journal entries of their group members (+ their own), so
   // they can audit timer presses, statuses and manual time edits of their people.
   if (isModerator(user, dbData)) {
     const ids = moderatorVisibleIds(user, dbData);
     ids.add(user.id);
-    return dbData.log.filter((e) => e.ownerId && ids.has(e.ownerId));
+    return dbData.log.filter((e) => e.ownerId && ids.has(e.ownerId) && !isLoaderById(e.ownerId, dbData));
   }
   return dbData.log.filter((e) => !e.ownerId || e.ownerId === user.id);
 }
@@ -2140,7 +2196,7 @@ async function handleApi(req, res, urlPath) {
     // The group scope governs EVERYONE — including admins and moderators — so the
     // "Переработка" / "За подработку" timer blocks match the group that is allowed
     // to see them.
-    const me = { id: user.id, name: user.name, role: user.role, isAdmin: admin, isDriver: isDriver(user, db) };
+    const me = { id: user.id, name: user.name, role: user.role, isAdmin: admin, isDriver: isDriver(user, db), isLoader: isLoader(user, db) };
     me.diag = adminDiag(user, db);
     me.seeOverHours = staffSeesOver(db, user.id, "hours");
     me.seeOverSum = staffSeesOver(db, user.id, "sum");
