@@ -1,5 +1,5 @@
 {
   "versionCode": 20,
   "versionName": "1.1.12",
-  "notes": "Авторелиз 1.1.12 (commit 9aa6ac9)"
+  "notes": "Фикс: сброс кэша/service worker при старте — десктоп тянет свежий фронтенд"
 }

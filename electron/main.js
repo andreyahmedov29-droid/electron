@@ -177,6 +177,20 @@ function createWindow() {
     },
   });
 
+  // Постоянная сессия persist:biotime держит кэш и service worker между
+  // перезапусками — поэтому WebView мог закэшировать старую версию app.js
+  // (и выбор клиента для печати не работает), даже когда сервер уже раздаёт
+  // свежий код. Перед загрузкой окна сбрасываем HTTP-кэш и кэш service
+  // worker / Cache Storage, чтобы всегда тянулся актуальный фронтенд.
+  // Cookies и сессия входа не трогаем — авторизация на шлюзе сохраняется.
+  try {
+    const ses = session.fromPartition("persist:biotime");
+    ses.clearCache().catch(() => {});
+    ses.clearStorageData({
+      storages: ["cachestorage", "serviceworkers"],
+    }).catch(() => {});
+  } catch (_) { /* очистка кэша — необязательный шаг */ }
+
   mainWindow.loadURL(APP_URL);
 
   // Внешние ссылки (портал, документация) открываем во внешнем браузере.
