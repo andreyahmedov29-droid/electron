@@ -3799,35 +3799,52 @@
       el.printClientsTiles.innerHTML = "";
       return;
     }
-    el.printClientsTiles.innerHTML = clients.map((c, i) => {
-      const done = Number(c.totalCount) > 0 && Number(c.loadedCount) >= Number(c.totalCount);
-      const cls = [
-        "print-client-tile",
-        i === printClientIndex ? "is-active" : "",
-        done ? "is-done" : "",
-      ].filter(Boolean).join(" ");
-      // Показываем прогресс отгрузки: «отгружено / всего». Для полностью
-      // отгруженного — «отгружено N» (плитка серая). Это позволяет везти места
-      // разных клиентов в любой последовательности и видеть, сколько уже сделано.
-      const total = Number(c.totalCount) || 0;
-      const loaded = Number(c.loadedCount) || 0;
-      const places = done
-        ? `отгружено ${loaded}`
-        : `${loaded} / ${total}`;
-      // Плитка «отгруженного» клиента остаётся серой (is-done), но НЕ блокируется:
-      // в процессе отгрузки могут найтись новые места, и тогда нужно ДОПЕЧАТАТЬ
-      // этикетки клиенту, у которого всё уже погружено. disabled мешал это сделать.
-    return `
-        <button type="button" class="${cls}" data-client-index="${i}" title="${done ? "Клиент отгружен — можно допечатать новые места" : ""}">
-          <span class="tile-name">${escapeHtml(c.client || "—")}</span>
-          <span class="tile-places">${places}</span>
-        </button>
-      `;
-    }).join("");
-    // Доступность кнопки «Допечатать места» зависит от того, полностью ли
-    // погружен выбранный клиент. Если весь клиент ещё не отгружен (боксы не
-    // созданы или создана лишь часть) — допечатка не нужна, места печатают
-    // обычной кнопкой «Печать этикеток» через выбор клиента.
+    // Кнопки-плитки создаются ОДИН раз (когда контейнер ещё пуст), а при
+    // последующих вызовах мы только переключаем классы и обновляем текст.
+    // Это важно для десктопа (Electron): если пересоздавать innerHTML прямо под
+    // курсором в момент клика, событие click успевает «прицелиться» в заново
+    // отрисованную первую плитку и сбросить выбор на клиента 0 (в логе видно
+    // «clientIndex=1 → clientIndex=0 за ~60 мс»). Стабильные кнопки устраняют
+    // этот повторный вызов.
+    // Пересоздаём только если кнопок ещё нет ИЛИ их число не совпадает с числом
+    // клиентов (маршрут мог измениться). При одинаковом количестве — обновляем
+    // классы/текст, не трогая DOM (защита от сброса выбора в Electron).
+    const existing = el.printClientsTiles.querySelectorAll(".print-client-tile");
+    if (existing.length !== clients.length) {
+      el.printClientsTiles.innerHTML = clients.map((c, i) => {
+        const done = Number(c.totalCount) > 0 && Number(c.loadedCount) >= Number(c.totalCount);
+        const cls = [
+          "print-client-tile",
+          i === printClientIndex ? "is-active" : "",
+          done ? "is-done" : "",
+        ].filter(Boolean).join(" ");
+        const total = Number(c.totalCount) || 0;
+        const loaded = Number(c.loadedCount) || 0;
+        const places = done ? `отгружено ${loaded}` : `${loaded} / ${total}`;
+        return `
+          <button type="button" class="${cls}" data-client-index="${i}" title="${done ? "Клиент отгружен — можно допечатать новые места" : ""}">
+            <span class="tile-name">${escapeHtml(c.client || "—")}</span>
+            <span class="tile-places">${places}</span>
+          </button>
+        `;
+      }).join("");
+    } else {
+      // Контейнер уже заполнен — обновляем только активную подсветку/текст.
+      const buttons = Array.from(el.printClientsTiles.querySelectorAll(".print-client-tile"));
+      buttons.forEach((btn, i) => {
+        const c = clients[i];
+        const done = c ? (Number(c.totalCount) > 0 && Number(c.loadedCount) >= Number(c.totalCount)) : false;
+        btn.classList.toggle("is-active", i === printClientIndex);
+        btn.classList.toggle("is-done", !!done);
+        btn.title = done ? "Клиент отгружен — можно допечатать новые места" : "";
+        const placesEl = btn.querySelector(".tile-places");
+        if (placesEl && c) {
+          const total = Number(c.totalCount) || 0;
+          const loaded = Number(c.loadedCount) || 0;
+          placesEl.textContent = done ? `отгружено ${loaded}` : `${loaded} / ${total}`;
+        }
+      });
+    }
     updatePrintAppendBtn();
   }
 
@@ -3854,12 +3871,27 @@
     const r = shipmentsCache.find((x) => String(x.id) === String(printRouteId));
     const clients = r && Array.isArray(r.clients) ? r.clients : [];
     if (idx < 0 || idx >= clients.length) return;
-    // Раньше «отгруженный» клиент (все места погружены) блокировался — выбрать и
-    // допечатать новые места было нельзя. Теперь любой клиент выбирается, чтобы
-    // можно было допечатать этикетки найденных позже мест.
+    // Если активная плитка уже та же — ничего не делаем (не пересоздаём DOM).
+    if (idx === printClientIndex) return;
     printClientIndex = idx;
-    renderPrintClientsTiles();
+    // Лёгкая смена активной плитки: только переключить CSS-класс is-active,
+    // НЕ пересоздавая innerHTML кнопок. Пересоздание пальтиток во время
+    // обработки клика ломало переключение в изолированном окне Electron
+    // (DOM кнопки под кликом заменялся, событие/фокус сбивались и выбор
+    // «откатывался» на первого клиента). Обновление классов этого лишено.
+    applyPrintActiveTile();
     refreshPrintLabels();
+  }
+
+  // Переключает класс is-active между плитками, не трогая их innerHTML.
+  function applyPrintActiveTile() {
+    const wrap = el.printClientsTiles;
+    if (!wrap) return;
+    const tiles = wrap.querySelectorAll(".print-client-tile");
+    tiles.forEach((tile) => {
+      const idx = Number(tile.dataset.clientIndex);
+      tile.classList.toggle("is-active", idx === printClientIndex);
+    });
   }
 
   // Пересчитывает счётчики отгруженных мест ВСЕХ клиентов маршрута и перерисовывает
@@ -3958,20 +3990,53 @@
     return out;
   }
 
+  // Звуковая и тактильная обратная связь при сканировании боксов на телефоне
+  // (Android-приложение / браузер). Успешное сканирование озвучивается «Хорошо»,
+  // ошибочное — «Плохо» + длинная вибрация. Используются веб-API SpeechSynthesis
+  // (голос) и navigator.vibrate (вибрация), поэтому работает на любом устройстве
+  // и доезжает до телефона вместе с веб-версией (пересборка APK не нужна).
+  function playScanFeedback(ok) {
+    try {
+      const text = ok ? "Хорошо" : "Плохо";
+      // Голосовая озвучка (TTS). Не блокирует работу, если синтеза нет.
+      if ("speechSynthesis" in window) {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = "ru-RU";
+        u.rate = 1;
+        // cancel предыдущей фразы, чтобы быстрые сканы не наслаивались.
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(u);
+      }
+      // Вибрация: успех — короткий «тик», ошибка — тройная продолжительная.
+      if ("vibrate" in navigator) {
+        if (ok) {
+          navigator.vibrate([60, 40, 60]);
+        } else {
+          navigator.vibrate([250, 80, 250, 80, 400]);
+        }
+      }
+    } catch (_) { /* прямая обратная связь не должна ломать сканирование */ }
+  }
+
   // Выполнение отметки через сервер: POST /api/labels/scan { code, action }.
   // Возвращает true при успешной отметке — вызывающий (qrScanCallback) по этому
   // значению решает, продолжать ли непрерывное сканирование.
   async function doScanLabel(action, code) {
     // Код мог прийти со сканера с русской раскладкой — приводим к латинице.
     const norm = normalizeLabelCode(String(code || "").trim());
-    if (!norm) { setPrintScanStatus("Укажите код этикетки", "err"); return false; }
+      if (!norm) { setPrintScanStatus("Укажите код этикетки", "err"); return false; }
     try {
       const r = await api("/api/labels/scan", {
         method: "POST",
         body: JSON.stringify({ code: norm, action }),
       });
-      if (!r) { setPrintScanStatus("Нет ответа от сервера", "err"); return false; }
+      if (!r) {
+        setPrintScanStatus("Нет ответа от сервера", "err");
+        playScanFeedback(false);
+        return false;
+      }
       if (r.ok && r.label) {
+        playScanFeedback(true);
         // Обновляем статус места в локальном списке сразу, чтобы живой счётчик
         // пересчитался мгновенно, не дожидаясь повторного GET /api/labels.
         const updated = r.label;
@@ -3999,6 +4064,7 @@
         refreshShipmentTileCounters();
         return true;
       } else if (r.error) {
+        playScanFeedback(false);
         setPrintScanStatus(String(r.error), "err");
         return false;
       }
