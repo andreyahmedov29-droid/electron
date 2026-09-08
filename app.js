@@ -5425,6 +5425,16 @@
     } catch { /* admin-only */ }
   }
 
+  // Клиентская версия причины блокировки маршрута — для тултипа замка 🔒.
+  // Дублирует серверную routeLockReason, чтобы подсказка была видна и до запроса.
+  function routeLockReasonLabel(r) {
+    const p = (r && r.progress) || {};
+    if (p.status === "done") return "Маршрут завершён";
+    if (p.status === "active") return "Маршрут ведётся водителем — редактировать нельзя";
+    if (p.shipmentStartedAt) return "Маршрут в сборке/отгрузке на складе — редактировать нельзя";
+    return "Маршрут занят (в работе или в сборке)";
+  }
+
   function renderDriverRoutes(routes) {
     if (el.driverRoutesCount) {
       el.driverRoutesCount.textContent = routes.length
@@ -5481,7 +5491,17 @@
 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="9" rx="1.4"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
 </button>`;
       } else if (routeLocked) {
-        editDelBtns = `<span class="drv-route-locked" title="Маршрут занят (в работе / в сборке)">🔒</span>`;
+        // Замок + (для админа/распорядителя склада) кнопка «Разблокировать» —
+        // снимает залипшую блокировку маршрута (водитель не завершил / склад
+        // начал сборку и прервал). Завершённый маршрут (done) разблокировке
+        // не подлежит — для него отдельная ветка выше.
+        const canUnlock = state.isAdmin || state.canManageShipment;
+        editDelBtns = `<span class="drv-route-locked" title="${escapeHtml(routeLockReasonLabel(r))}">🔒</span>` +
+          (canUnlock
+            ? `<button type="button" class="drv-ico-btn driver-route-unlock" data-id="${escapeHtml(r.id)}" title="Разблокировать маршрут (снять залипший статус)" aria-label="Разблокировать маршрут">
+<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="9" rx="1.4"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/><circle cx="12" cy="15" r="1.5"/></svg>
+</button>`
+            : "");
       } else {
         editDelBtns = `<button type="button" class="drv-ico-btn driver-route-edit" data-id="${escapeHtml(r.id)}" title="Редактировать точки" aria-label="Редактировать точки маршрута">
 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 6.5l3 3"/></svg>
@@ -5522,6 +5542,34 @@
     el.driverRoutesList.querySelectorAll(".driver-route-del-locked").forEach((btn) => {
       btn.addEventListener("click", () => askRouteDeleteCode(btn.dataset.id));
     });
+    el.driverRoutesList.querySelectorAll(".driver-route-unlock").forEach((btn) => {
+      btn.addEventListener("click", () => unlockDriverRoute(btn.dataset.id));
+    });
+  }
+
+  // «Разблокировать» залипший маршрут: снимает статус active (водитель не
+  // завершил) и/или флаг сборки склада (shipmentStartedAt). С подтверждением —
+  // операция влияет на боевые данные. Доступно админу или распорядителю склада
+  // (сервер повторно проверяет права). Завершённый маршрут не трогаем.
+  async function unlockDriverRoute(id) {
+    const r = (driverRoutesCache || []).find((x) => String(x.id) === String(id));
+    const reason = r ? routeLockReasonLabel(r) : "";
+    const text = reason
+      ? `${reason}. Разблокировка вернёт маршрут в режим настройки — состав и порядок точек снова можно будет менять. Продолжить?`
+      : "Разблокировать маршрут? Это вернёт его в режим настройки.";
+    const ok = window.confirm(text);
+    if (!ok) return;
+    try {
+      const res = await api("/api/routes/unlock", { method: "POST", body: JSON.stringify({ routeId: id }) });
+      if (res && res.ok) {
+        toast("Маршрут разблокирован");
+        loadDriverRoutes();
+      } else if (res && res.error) {
+        toast(res.error);
+      }
+    } catch (e) {
+      toast((e && e.message) || "Не удалось разблокировать маршрут");
+    }
   }
 
   async function saveDriverRoute() {
@@ -5565,15 +5613,19 @@
       const r = await api("/api/drivers/routes", {
         method: "POST",
         body: JSON.stringify(
+          Object.assign(
+            { routeName: (el.driverRouteName ? el.driverRouteName.value.trim() : "") || undefined },
           editingRouteId
             ? { action: "update", id: editingRouteId, date, driverId, driverName, clients: chosen }
             : { date, driverId, driverName, clients: chosen }
+          )
         ),
       });
       if (r && Array.isArray(r.routes)) renderDriverRoutes(r.routes);
       editingRouteId = null;
       selectedRouteClientIds.clear();
       routeOrderIds = [];
+      if (el.driverRouteName) el.driverRouteName.value = "";
       routeClientSearchValue = "";
       if (el.routeClientSearch) el.routeClientSearch.value = "";
       renderRouteClientOptions();
@@ -5696,6 +5748,7 @@
     editingRouteId = id;
     if (el.driverRouteDate) el.driverRouteDate.value = r.date || "";
     if (el.driverRouteDriver && r.driverId) el.driverRouteDriver.value = r.driverId;
+    if (el.driverRouteName) el.driverRouteName.value = r.routeName || "";
     selectedRouteClientIds.clear();
     routeOrderIds = [];
     (r.clients || []).forEach((rc) => {

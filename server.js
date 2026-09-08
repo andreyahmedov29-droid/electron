@@ -791,6 +791,21 @@ function isDriversGroupOnly(user, dbData) {
 // каждая точка несёт id, state и таймстемпы, а маршрут — объект progress.
 // Используется при чтении, чтобы клиент всегда видел полную структуру, не
 // перезаписывая БД на каждом GET.
+// Человекочитаемая причина, по которой маршрут заблокирован для редактирования.
+// Уточняет «почему так пишет»: вместо общего «маршрут занят» показывает, кто
+// сейчас держит маршрут — водитель в пути или склад в сборке/отгрузке.
+function routeLockReason(progress) {
+  const p = progress || {};
+  if (p.status === "done") return "Завершённый маршрут нельзя редактировать";
+  if (p.status === "active") {
+    return "Маршрут ведётся водителем — редактировать нельзя (водитель не завершил маршрут)";
+  }
+  if (p.shipmentStartedAt) {
+    return "Маршрут в сборке/отгрузке на складе — редактировать нельзя (склад начал сборку)";
+  }
+  return "Маршрут занят (в работе или в сборке) — редактировать нельзя";
+}
+
 function normalizeRouteProgress(route) {
   if (!route) return route;
   const clone = JSON.parse(JSON.stringify(route));
@@ -3221,15 +3236,14 @@ async function handleApi(req, res, urlPath) {
       if (!found) return sendJson(res, 404, { error: "Маршрут не найден" });
       // Маршрут запрещено редактировать, если он завершён, взят в работу водителем
       // или склад уже начал сборку/отгрузку: состав и порядок остановок зафиксированы.
+      // Причину блокировки показываем точечно: «ведётся водителем» / «в сборке на
+      // складе» — чтобы пользователь понимал, почему маршрут недоступен для правки.
       if (found.progress) {
         const locked = found.progress.status === "done"
           || found.progress.status === "active"
           || !!found.progress.shipmentStartedAt;
         if (locked) {
-          const reason = found.progress.status === "done"
-            ? "Завершённый маршрут нельзя редактировать"
-            : "Маршрут занят (в работе или в сборке) — редактировать нельзя";
-          return sendJson(res, 409, { error: reason });
+          return sendJson(res, 409, { error: routeLockReason(found.progress) });
         }
       }
       const clients = Array.isArray(body.clients)
@@ -3245,6 +3259,9 @@ async function handleApi(req, res, urlPath) {
       if (body.date) found.date = String(body.date).slice(0, 10);
       if (body.driverId) found.driverId = String(body.driverId).slice(0, 60);
       if (body.driverName !== undefined) found.driverName = String(body.driverName || "").slice(0, 200);
+      if (body.routeName !== undefined) {
+        found.routeName = String(body.routeName || "").trim().slice(0, 60) || "Маршрут";
+      }
       found.clients = clients;
       found.at = Date.now();
       await persistDb();
@@ -3253,6 +3270,12 @@ async function handleApi(req, res, urlPath) {
     const date = String(body.date || "").slice(0, 10);
     const driverId = String(body.driverId || "").slice(0, 60);
     const driverName = String(body.driverName || "").slice(0, 200);
+    // Название маршрута задаёт САМ диспетчер произвольной строкой (по сути это
+    // НЕ «слот» Утро/Обед/Вечер — их автоподстановки больше нет). Если диспетчер
+    // ничего не ввёл, по умолчанию ставится «"ОБЕД"» (с кавычками) — в списке
+    // такой маршрут читается как «Маршрут "ОБЕД"». Диспетчер может создать
+    // сколько угодно маршрутов на день — по одному на каждое введённое название.
+    const routeName = String(body.routeName || `"ОБЕД"`).trim().slice(0, 60) || `"ОБЕД"`;
     const clients = Array.isArray(body.clients)
       ? body.clients.slice(0, 50).map((c) => ({
           client: String(c.client || "").slice(0, 200),
@@ -3265,12 +3288,10 @@ async function handleApi(req, res, urlPath) {
     if (!date || !driverId || clients.length === 0) {
       return sendJson(res, 400, { error: "Укажите дату, водителя и хотя бы одного клиента" });
     }
-    // Автоматическое имя маршрута по текущему времени: Утро (<12), Обед (12–17), Вечер (>17).
-    const hour = new Date().getHours();
-    const routeName = hour < 12 ? "Утро" : (hour < 17 ? "Обед" : "Вечер");
     db.driverRoutes = db.driverRoutes || [];
-    // На одну дату у водителя один маршрут на слот (Утро/Обед/Вечер): повторное
-    // создание того же слота заменяет существующий, а не плодит дубликаты.
+    // На одну дату и водителя маршруты различаются ИМЕНЕМ слота (которое задаёт
+    // диспетчер): одно и то же имя заменяет существующий маршрут, разные имена —
+    // создают отдельные маршруты (отдельные отгрузки).
     const existIdx = db.driverRoutes.findIndex(
       (r) => r.date === date && r.driverId === driverId && r.routeName === routeName
     );
@@ -3283,10 +3304,7 @@ async function handleApi(req, res, urlPath) {
           || existing.progress.status === "active"
           || !!existing.progress.shipmentStartedAt;
         if (locked) {
-          const reason = existing.progress.status === "done"
-            ? "Завершённый маршрут нельзя редактировать"
-            : "Маршрут занят (в работе или в сборке) — редактировать нельзя";
-          return sendJson(res, 409, { error: reason });
+          return sendJson(res, 409, { error: routeLockReason(existing.progress) });
         }
       }
       db.driverRoutes[existIdx].clients = clients;
@@ -3306,6 +3324,78 @@ async function handleApi(req, res, urlPath) {
     if (db.driverRoutes.length > 3000) db.driverRoutes = db.driverRoutes.slice(-3000);
     await persistDb();
     return sendJson(res, 200, { ok: true, routes: db.driverRoutes });
+  }
+
+  // ---- POST /api/routes/unlock   ({ routeId })
+  // «Расфиксирование» залипшего маршрута: снимает флаги блокировки, из-за которых
+  // маршрут нельзя редактировать, хотя реальной работы по нему уже нет.
+  // Два типичных «залипших» случая:
+  //   • водитель нажал «Начать маршрут» (status стал "active"), но не завершил его —
+  //     статус остался active навсегда, хотя водитель уже не ведёт маршрут;
+  //   • склад начал сборку (shipmentStartedAt), но не завершил отгрузку (shippedAt
+  //     не выставлен) — сборка снялась/прервалась, а флаг остался.
+  // Правило безопасности: НЕ расфиксируем завершённый маршрут (status "done") —
+  // это финальное состояние, оно снимается только кодом удаления и не «залипает»
+  // по ошибке. Также НЕ трогаем маршрут, отгрузка которого реально завершена
+  // (shippedAt выставлен): его занятость — легитимная, просто склад забыл «завершить».
+  // Доступ: администратор или распорядитель склада. Запуск этой операции требует
+  // явного подтверждения пользователя на фронте (кнопка «Разблокировать»).
+  if (urlPath === "/api/routes/unlock" && method === "POST") {
+    if (!admin && !canManageShipment(user, db)) {
+      return sendJson(res, 403, { error: "forbidden" });
+    }
+    const body = await readBody(req);
+    const routeId = String(body.routeId || "");
+    const route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
+    if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
+    const p = route.progress || {};
+    // Завершённый водителем маршрут расфиксации не подлежит.
+    if (p.status === "done") {
+      return sendJson(res, 409, { error: "Завершённый маршрут расфиксировать нельзя" });
+    }
+    // Отгрузка, реально завершённая складом (shippedAt), — не «залипший» случай:
+    // маршрут легитимно стоит в очереди водителя. Такой расфиксировать не даём.
+    if (p.shippedAt) {
+      return sendJson(res, 409, { error: "Отгрузка маршрута завершена — нечего расфиксировать" });
+    }
+    // Реальная блокировка могла быть от водителя (active) или от склада (shipmentStartedAt).
+    let releases = 0;
+    const before = routeLockReason(p);
+    if (p.status === "active") {
+      p.status = "idle";
+      releases++;
+    }
+    if (p.shipmentStartedAt) {
+      delete p.shipmentStartedAt;
+      delete p.shipmentStartedBy;
+      releases++;
+    }
+    // Если водитель был в пути (клиенты не все «pending»), возвращаем точки к
+    // исходному состоянию «ожидание» и чистим тайминги — маршрут снова настраиваем.
+    (Array.isArray(route.clients) ? route.clients : []).forEach((c) => {
+      if (c && typeof c === "object") {
+        c.state = "pending";
+        c.transitStart = null;
+        c.transitEnd = null;
+        c.siteStart = null;
+        c.siteEnd = null;
+      }
+    });
+    if (releases === 0) {
+      return sendJson(res, 200, {
+        ok: true,
+        note: "Маршрут и так не был заблокирован",
+        route: normalizeRouteProgress(route),
+      });
+    }
+    route.at = Date.now();
+    await persistDb();
+    return sendJson(res, 200, {
+      ok: true,
+      released: releases,
+      before: before,
+      route: normalizeRouteProgress(route),
+    });
   }
 
   // ---- POST /api/drivers/routes/optimize   ({ clientIds, baseAddress? })

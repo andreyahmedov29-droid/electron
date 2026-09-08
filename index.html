@@ -385,6 +385,14 @@
                 <select id="driverRouteDriver" class="select-input"></select>
               </div>
             </div>
+            <div class="drv-field">
+              <label class="drv-field-label" for="driverRouteName">Название маршрута</label>
+              <input id="driverRouteName" class="text-input" type="text"
+                value='"ОБЕД"'
+                placeholder='Напр.: "УТРО", "Рейс 2", "Доставка на юг"'
+                title="Название маршрута (не слот). Если не указать — подставится «\"ОБЕД\"». Можно создать сколько угодно маршрутов на день с разными названиями."
+                autocomplete="off" />
+            </div>
 
             <div class="drv-route-label">Последовательность остановок</div>
             <div class="route-multiselect" id="driverRouteClients">
