@@ -24,6 +24,7 @@
   <div class="grid-bg"></div>
 
   <header class="topbar">
+    <div class="topbar-inner">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">
         <svg class="brand-mark-svg" viewBox="0 0 48 48" width="30" height="30" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -85,6 +86,7 @@
           <path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.7a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.5 2.7h4l.5-2.7a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/>
         </svg>
       </button>
+    </div>
     </div>
   </header>
 
@@ -350,8 +352,12 @@
                   <label class="drv-field-label" for="bundleAddress">Общий адрес связки</label>
                   <input id="bundleAddress" class="text-input" type="text" placeholder="Адрес, общий для выбранных контрагентов" />
                 </div>
+                <div class="bundle-field">
+                  <label class="drv-field-label" for="bundleName">Единое название (необязательно)</label>
+                  <input id="bundleName" class="text-input" type="text" placeholder="Например: STP, Торговый дом … (покажется в отгрузке вместо адреса)" />
+                </div>
                 <div class="bundle-actions">
-                  <button type="button" class="drv-mini-btn drv-mini-primary" id="bundleCreateBtn">Связать на адрес</button>
+                  <button type="button" class="drv-mini-btn drv-mini-primary" id="bundleCreateBtn">Связать</button>
                 </div>
               </div>
 
@@ -388,9 +394,9 @@
             <div class="drv-field">
               <label class="drv-field-label" for="driverRouteName">Название маршрута</label>
               <input id="driverRouteName" class="text-input" type="text"
-                value='"ОБЕД"'
+                value=""
                 placeholder='Напр.: "УТРО", "Рейс 2", "Доставка на юг"'
-                title="Название маршрута (не слот). Если не указать — подставится «\"ОБЕД\"». Можно создать сколько угодно маршрутов на день с разными названиями."
+                title="Название маршрута. Укажите своё название — оно будет показано в списке маршрутов. Можно создать сколько угодно маршрутов на день с разными названиями."
                 autocomplete="off" />
             </div>
 
@@ -484,6 +490,10 @@
               <div class="report-stat">
                 <span class="report-stat-value" id="motionMove">0</span>
                 <span class="report-stat-label">в пути</span>
+              </div>
+              <div class="report-stat">
+                <span class="report-stat-value" id="motionSite">0</span>
+                <span class="report-stat-label">сдача</span>
               </div>
               <div class="report-stat">
                 <span class="report-stat-value" id="motionLunch">0</span>
@@ -654,6 +664,12 @@
             autocomplete="off" spellcheck="false"
             placeholder="Код этикетки (USB-сканер)" />
         </div>
+        <div class="print-scan-source">
+          <span class="print-scan-source-label">Сканер:</span>
+          <button type="button" class="mini-btn print-scan-src" data-src="camera" id="scanSrcCamera" title="Использовать камеру телефона">📷 Камера</button>
+          <button type="button" class="mini-btn print-scan-src" data-src="external" id="scanSrcExternal" title="Использовать встроенный/внешний сканер ТСД (кнопка сканера, клавиатурный ввод)">📡 Внешний (ТСД)</button>
+        </div>
+        <div class="print-scan-hint" id="printScanHint" hidden></div>
         <div class="print-scan-status" id="printScanStatus"></div>
         <div class="print-labels-list" id="printLabelsList"></div>
       </div>
@@ -1133,10 +1149,10 @@
   <dialog class="modal" id="routeDeleteModal">
     <div class="postpone-card">
       <div class="modal-head">
-        <h3>Удалить завершённый маршрут?</h3>
+        <h3>Удалить маршрут?</h3>
         <button class="icon-btn modal-close" id="routeDeleteClose" aria-label="Закрыть">&times;</button>
       </div>
-      <p class="modal-note">Маршрут уже завершён (водитель сдал все точки). Удаление сотрёт историю доставки и этикетки мест. Чтобы подтвердить удаление, введите код из «Параметры»:</p>
+      <p class="modal-note">Это удалит маршрут, его историю доставки и этикетки мест. Чтобы подтвердить удаление, введите код из «Параметры»:</p>
       <input class="text-input" id="routeDeleteInput" type="password" autocomplete="off" placeholder="Код удаления" />
       <div class="route-confirm-actions" style="margin-top:16px; display:flex; gap:8px; justify-content:flex-end;">
         <button type="button" class="ctrl" id="routeDeleteCancel">Отмена</button>

@@ -150,21 +150,27 @@ body {
    Топбар и навигация
    ========================================================================== */
 .topbar {
-  position: sticky;
+  position: fixed;
   top: 0;
-  z-index: 50;
+  left: 0;
+  right: 0;
+  z-index: 999;
+  /* Фиксированная шапка: сплошная непрозрачная плашка на всю ширину, чтобы
+     навигация всегда оставалась наверху и была читаема над любым контентом. */
+  background: var(--panel-solid);
+  border-bottom: 1px solid var(--line-strong);
+  box-shadow: 0 6px 26px rgba(0, 0, 0, 0.35);
+}
+
+/* Центрированная широкая «дорога» внутри фиксированной шапки */
+.topbar-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px 28px;
   max-width: 1120px;
   margin: 0 auto;
-  background: linear-gradient(180deg, rgba(10, 11, 16, 0.72), rgba(10, 11, 16, 0.45));
-  backdrop-filter: blur(22px) saturate(150%);
-  -webkit-backdrop-filter: blur(22px) saturate(150%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 14px 40px -18px rgba(0, 0, 0, 0.7);
+  padding: 18px 28px;
 }
 
 .brand {
@@ -218,12 +224,15 @@ body {
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 4px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  /* Кнопки вверху БЕЗ подложки: рядом чистый текст на фоне страницы */
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
 }
 
 .tab {
@@ -235,22 +244,29 @@ body {
   font-weight: 600;
   font-size: 13px;
   letter-spacing: 0.03em;
-  padding: 9px 18px;
-  border-radius: 999px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border-bottom: 2px solid transparent;
   cursor: pointer;
-  position: relative;
-  transition: color var(--t-fast) var(--ease), background var(--t-med) var(--ease), transform var(--t-fast) var(--ease);
+  white-space: nowrap;
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
 
 .tab:hover {
   color: var(--ink);
-  transform: translateY(-1px);
+  /* Подсветка при наведении: тёплый полупрозрачный блик, без плашки */
+  background: rgba(255, 171, 56, 0.14);
+  box-shadow: 0 0 0 1px rgba(255, 171, 56, 0.28), 0 6px 16px -8px rgba(255, 171, 56, 0.55);
+  border-bottom-color: transparent;
 }
 
 .tab.active {
-  background: linear-gradient(180deg, rgba(255, 171, 56, 0.30), rgba(255, 171, 56, 0.12));
+  /* Активная вкладка — подчёркивание, без фоновой плашки */
+  background: transparent;
   color: var(--amber-soft);
-  box-shadow: inset 0 0 0 1px rgba(255, 171, 56, 0.4), 0 6px 22px rgba(255, 171, 56, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  font-weight: 700;
+  border-bottom-color: var(--amber-soft);
+  box-shadow: none;
 }
 
 /* Вкладка «Отчёт» — только для админа */
@@ -422,10 +438,10 @@ body {
   letter-spacing: 0.06em;
   text-transform: capitalize;
   color: var(--ink-dim);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 8px 15px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 8px 2px;
   white-space: nowrap;
 }
 
@@ -433,10 +449,10 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 5px 13px 5px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 5px 2px;
   color: var(--ink);
   max-width: 240px;
 }
@@ -495,7 +511,8 @@ body {
   position: relative;
   z-index: 2;
   max-width: 1120px;
-  margin: 14px auto 64px;
+  /* Верхний отступ даёт место фиксированной шапке (см. .topbar). */
+  margin: 88px auto 64px;
   padding: 0 20px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -4605,9 +4622,12 @@ dialog.admin-modal[open] {
   .stage { grid-template-columns: 1fr; }
   .dial-time { font-size: 60px; }
 
-  .topbar { flex-wrap: wrap; }
+  /* Вкладки уходят на вторую строку фиксированной шапки — увеличиваем отступ
+     контента, чтобы страница целиком не пряталась под двухрядным тулбаром. */
+  .topbar-inner { flex-wrap: wrap; }
   .tabs { order: 3; width: 100%; justify-content: center; }
   .topbar-right { margin-left: auto; }
+  .stage { margin-top: 142px; }
 }
 
 @media (max-width: 640px) {
@@ -4712,8 +4732,9 @@ dialog.admin-modal[open] {
 }
 
 @media (max-width: 480px) {
-  .topbar { padding: 14px 14px; }
+  .topbar-inner { padding: 14px 14px; }
   .stage { padding: 0 12px; }
+  .stage { margin-top: 138px; }
   .clock-card { padding: 18px 15px 22px; }
   .totals { grid-template-columns: 1fr; }
   .controls { grid-template-columns: 1fr; }
@@ -5149,6 +5170,10 @@ body {
   padding-right: env(safe-area-inset-right);
 }
 .topbar {
+  /* Плашка поднимается под «чёлку» iPhone — фон тянется в safe-area */
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.topbar-inner {
   padding-top: calc(18px + env(safe-area-inset-top, 0px));
 }
 .modal[open] {
@@ -5442,6 +5467,19 @@ button.icon-btn svg,
   min-width: 0;
 }
 .bundle-card-addr svg { flex-shrink: 0; margin-top: 1px; }
+.bundle-card-name {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 4px;
+}
+.bundle-card-name .drv-field-label { margin: 0; }
+.bundle-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.bundle-name-row .bundle-name-input { flex: 1; min-width: 0; }
 .bundle-member {
   display: inline-flex;
   align-items: center;
@@ -5480,7 +5518,7 @@ button.icon-btn svg,
     flex-wrap: wrap;
     justify-content: center;
   }
-  .topbar { gap: 10px; }
+  .topbar-inner { gap: 10px; }
 }
 @media (max-width: 480px) {
   .tab { padding: 8px 14px; font-size: 12px; }
@@ -5624,16 +5662,17 @@ button.icon-btn svg,
    строку (центрированно), а на очень широких расширяем каркас до 1280px,
    чтобы всё влезало в одну строку. --- */
 @media (max-width: 1300px) {
-  .topbar { flex-wrap: wrap; }
+  .topbar-inner { flex-wrap: wrap; }
   .tabs {
     order: 3;
     width: 100%;
     justify-content: center;
   }
   .topbar-right { margin-left: auto; }
+  .stage { margin-top: 142px; }
 }
 @media (min-width: 1301px) {
-  .topbar { max-width: 1280px; }
+  .topbar-inner { max-width: 1280px; }
   #page-timer .stage,
   #page-calendar .stage,
   #page-live .stage,
@@ -5820,6 +5859,69 @@ button.icon-btn svg,
 .motion-table .site-cell { color: var(--ink); }
 .motion-table .idle-cell { color: var(--ink-dim); }
 .motion-sort { font-size: 10.5px; color: var(--ink-faint); letter-spacing: 0.02em; }
+
+/* Раскрывающиеся строки водителей с детальной статистикой по маршрутам */
+.motion-row { cursor: pointer; }
+.motion-row:hover { background: rgba(255, 255, 255, 0.04); }
+.motion-row.is-open { background: rgba(255, 171, 56, 0.06); }
+.motion-detail td {
+  background: rgba(255, 255, 255, 0.02);
+  border-top: 1px solid var(--line);
+  padding: 10px 16px;
+}
+.motion-route-detail { max-width: 640px; text-align: left; }
+.motion-route-detail.empty { color: var(--ink-faint); font-size: 12px; }
+.motion-route-title {
+  font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--ink-faint); margin: 0 0 8px;
+}
+.motion-route-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.motion-route-table th {
+  text-align: left; font-size: 11px; color: var(--ink-faint);
+  padding: 6px 10px; font-weight: 600;
+}
+.motion-route-table td {
+  text-align: left !important; padding: 6px 10px; font-size: 13px;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.motion-route-table td:first-child { color: var(--ink); font-weight: 600; }
+
+/* Третий уровень: список клиентов внутри маршрута (раскрывается кликом) */
+.motion-route-row { cursor: pointer; }
+.motion-route-row:hover { background: rgba(255, 171, 56, 0.08); }
+.motion-route-row.is-clients-open { background: rgba(255, 171, 56, 0.10); }
+.route-clients-row td {
+  padding: 6px 10px 10px 22px;
+  background: rgba(0, 0, 0, 0.12);
+}
+.motion-route-detail { overflow-x: auto; }
+.motion-route-table, .motion-clients-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.motion-route-table th, .motion-route-table td,
+.motion-clients-table th, .motion-clients-table td {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.motion-clients-table th {
+  text-align: left; font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--ink-faint); padding: 5px 10px; font-weight: 600;
+}
+.motion-clients-table td {
+  text-align: left !important; padding: 5px 10px; font-size: 12.5px;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.motion-clients-table td:nth-child(1) { color: var(--ink); font-weight: 600; }
+/* Устойчивые ширины колонок клиентов (без адреса): клиент, км, в пути, сдача, мест */
+.motion-clients-table th:nth-child(1), .motion-clients-table td:nth-child(1) { width: 26%; }
+.motion-clients-table th:nth-child(2), .motion-clients-table td:nth-child(2) { width: 18%; }
+.motion-clients-table th:nth-child(3), .motion-clients-table td:nth-child(3) { width: 20%; }
+.motion-clients-table th:nth-child(4), .motion-clients-table td:nth-child(4) { width: 20%; }
+.motion-clients-table th:nth-child(5), .motion-clients-table td:nth-child(5) { width: 16%; }
 
 .rms-stops {
   display: flex;
@@ -6254,6 +6356,40 @@ button.icon-btn svg,
   gap: 8px;
   margin-top: 8px;
 }
+.print-scan-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.print-scan-source-label {
+  font-size: 12px;
+  color: var(--muted, #9aa3b2);
+}
+.print-scan-src {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  cursor: pointer;
+  transition: 0.15s ease;
+}
+.print-scan-src:hover { border-color: var(--accent, #f59e0b); color: var(--accent, #f59e0b); }
+.print-scan-src.is-active {
+  border-color: var(--accent, #f59e0b);
+  background: rgba(245, 158, 11, 0.14);
+  color: #fff;
+  font-weight: 700;
+}
+.print-scan-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted, #9aa3b2);
+}
 .print-scan-input {
   width: 100%;
   min-width: 0;
@@ -6355,6 +6491,27 @@ button.icon-btn svg,
   background: rgba(239, 68, 68, 0.18);
   border-color: rgba(239, 68, 68, 0.6);
   color: #f87171;
+}
+.print-place .pp-print {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: transparent;
+  color: var(--ink, #e6e6e6);
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.print-place .pp-print:hover {
+  background: rgba(125, 216, 125, 0.16);
+  border-color: rgba(125, 216, 125, 0.55);
+  color: #7dd87d;
 }
 
 /* Плитки клиентов окна «Отгрузка»: клиенты вместо выпадающего списка.

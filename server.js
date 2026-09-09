@@ -1,5 +1,6 @@
 const http = require("node:http");
 const https = require("node:https");
+const zlib = require("node:zlib");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
@@ -445,6 +446,7 @@ function loadDb() {
       bundleId: c.bundleId || null,
       logo: c.logo || null,
       logoText: c.logoText || "",
+      bundleName: c.bundleName || "",
     }));
     return dbOut;
   } catch {
@@ -851,6 +853,36 @@ function normalizeRouteProgress(route) {
       return c;
     });
   return clone;
+}
+
+// Нормализует одну точку маршрута-остановку. Каждая точка — одна ОСТАНОВКА
+// (адрес). Для связки (несколько контрагентов на одном адресе) точка несёт
+// список members — контрагентов этой остановки. Тогда в маршруте связка
+// считается одним клиентом: одна печать этикеток, одна выгрузка/сдача.
+function normalizeRouteClient(c) {
+  const members = Array.isArray(c && c.members)
+    ? c.members
+        .filter((m) => !!m && (m.client || m.address))
+        .slice(0, 50)
+        .map((m) => ({
+          client: String(m.client || "").slice(0, 200),
+          address: String(m.address || "").slice(0, 500),
+          bundleId: m.bundleId ? String(m.bundleId).slice(0, 60) : null,
+          logo: m.logo ? String(m.logo).slice(0, 200000) : null,
+          logoText: String(m.logoText || "").toUpperCase().slice(0, 5),
+          bundleName: String(m.bundleName || "").slice(0, 200),
+        }))
+    : undefined;
+  const base = {
+    client: String((c && c.client) || "").slice(0, 200),
+    address: String((c && c.address) || "").slice(0, 500),
+    bundleId: c && c.bundleId ? String(c.bundleId).slice(0, 60) : null,
+    logo: c && c.logo ? String(c.logo).slice(0, 200000) : null,
+    logoText: String((c && c.logoText) || "").toUpperCase().slice(0, 5),
+    bundleName: String((c && c.bundleName) || "").slice(0, 200),
+  };
+  if (members && members.length > 0) base.members = members;
+  return base;
 }
 
 // Обогащает точки маршрута водителя счётчиком выгрузки мест клиента: сколько
@@ -2596,15 +2628,26 @@ async function handleApi(req, res, urlPath) {
     if (body.action === "bundle") {
       const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean) : [];
       const bundleAddress = String(body.address || "").slice(0, 500).trim();
+      const bundleName = String(body.name || "").slice(0, 200).trim();
       if (ids.length < 2) return sendJson(res, 422, { error: "Выберите хотя бы двух клиентов для связки" });
       if (!bundleAddress) return sendJson(res, 422, { error: "Укажите общий адрес связки" });
       const have = ids.filter((id) => db.driverClients.some((c) => c.id === id));
       if (have.length === 0) return sendJson(res, 404, { error: "Клиенты не найдены" });
       const bundleId = `b-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      // Единый «логин» (бренд-аббревиатура logoText/логотип) связки: если хотя
+      // бы у одного связанного клиента задан logoText (например «STP»), назначаем
+      // его ВСЕМ участникам связки — чтобы в маршруте у связанных клиентов был
+      // прописан один общий код, а не пустые значения у остальных.
+      const bundleMembers = db.driverClients.filter((c) => have.includes(c.id));
+      const commonLogoText = (bundleMembers.find((c) => c && c.logoText) || {}).logoText || "";
+      const commonLogo = (bundleMembers.find((c) => c && c.logo) || {}).logo || null;
       for (const c of db.driverClients) {
         if (have.includes(c.id)) {
           c.bundleId = bundleId;
           c.bundleAddress = bundleAddress;
+          if (bundleName) c.bundleName = bundleName;
+          if (commonLogoText) c.logoText = String(commonLogoText).toUpperCase().slice(0, 5);
+          if (commonLogo) c.logo = commonLogo;
         }
       }
       await persistDb();
@@ -2619,6 +2662,21 @@ async function handleApi(req, res, urlPath) {
         delete found.bundleAddress;
         await persistDb();
       }
+      return sendJson(res, 200, { ok: true, clients: db.driverClients });
+    }
+    // Единое название связки: задать/изменить bundleName у ВСЕХ участников
+    // указанной связки (bundleId). Пустое имя убирает название.
+    if (body.action === "bundle-name") {
+      const bundleId = String(body.bundleId || "");
+      const name = String(body.name || "").slice(0, 200).trim();
+      if (!bundleId) return sendJson(res, 400, { error: "Связка не указана" });
+      const members = db.driverClients.filter((c) => c.bundleId === bundleId);
+      if (members.length === 0) return sendJson(res, 404, { error: "Связка не найдена" });
+      for (const c of members) {
+        if (name) c.bundleName = name;
+        else delete c.bundleName;
+      }
+      await persistDb();
       return sendJson(res, 200, { ok: true, clients: db.driverClients });
     }
     // Удаление клиента. Проверка имени/адреса здесь не нужна — ветка идёт
@@ -3004,6 +3062,10 @@ async function handleApi(req, res, urlPath) {
     const t = (Number.isFinite(Number(body.clientTime)) && Number(body.clientTime) > 0)
       ? Number(body.clientTime) : now;
     let warning = null;
+    // Признак «удачного» сканирования: фактически изменился статус места. Повторный
+    // «пик» сканера уже обработанного места статус не меняет — такой дубль в журнал
+    // не пишем, чтобы в журнал попадало ровно одно первое сканирование на место.
+    let changed = false;
     if (action === "load") {
       if (found.status === "loaded" || found.status === "delivered") {
         warning = found.status === "delivered" ? "Место уже отгружено и выгружено" : "Место уже погружено";
@@ -3011,6 +3073,7 @@ async function handleApi(req, res, urlPath) {
         found.status = "loaded";
         found.loadedAt = t;
         found.loadedBy = user.id != null ? String(user.id) : null;
+        changed = true;
       }
     } else { // unload
       if (found.status === "created") {
@@ -3021,28 +3084,34 @@ async function handleApi(req, res, urlPath) {
         found.status = "delivered";
         found.deliveredAt = t;
         found.deliveredBy = user.id != null ? String(user.id) : null;
+        changed = true;
       }
     }
     // Журнал сканирования мест (раздел «Журнал», видят все): фиксируем каждый
-    // факт сканирования на погрузке (load) и выгрузке (unload) с именем
-    // пользователя и временем до секунды. Сколько записей хранить — настраивается
-    // админом в «Параметры» (db.params.scanLogLimit); по умолчанию 30000.
-    const scanLogLimit = Number(db.params && db.params.scanLogLimit) || 30000;
-    db.scanLog = db.scanLog || [];
-    db.scanLog.push({
-      ts: t,
-      userId: user.id != null ? String(user.id) : null,
-      userName: String(user.name || ""),
-      action, // "load" (погрузка) | "unload" (выгрузка)
-      code: String(found.code || ""),
-      client: String(found.client || ""),
-      address: String(found.address || ""),
-      routeId: found.routeId != null ? String(found.routeId) : null,
-      status: String(found.status || ""),
-      warning: warning || null,
-    });
-    if (db.scanLog.length > scanLogLimit) db.scanLog = db.scanLog.slice(-scanLogLimit);
-    await persistDb();
+    // ЛИШЬ удачное сканирование (статус реально изменился) — первый скан на погрузке
+    // (load) и выгрузке (unload) с именем пользователя и временем до секунды. Каждую
+    // последующую дублирующую сработку («пик») того же места в журнал не вносим.
+    if (changed) {
+      const scanLogLimit = Number(db.params && db.params.scanLogLimit) || 30000;
+      db.scanLog = db.scanLog || [];
+      db.scanLog.push({
+        ts: t,
+        userId: user.id != null ? String(user.id) : null,
+        userName: String(user.name || ""),
+        action, // "load" (погрузка) | "unload" (выгрузка)
+        code: String(found.code || ""),
+        client: String(found.client || ""),
+        address: String(found.address || ""),
+        routeId: found.routeId != null ? String(found.routeId) : null,
+        status: String(found.status || ""),
+        warning: null,
+      });
+      if (db.scanLog.length > scanLogLimit) db.scanLog = db.scanLog.slice(-scanLogLimit);
+    }
+    // Запись БД на диск выполняем асинхронно (не ждём завершения перед ответом):
+    // сам скан уже обработан в памяти — так отклик ТСД не ждёт медленную запись
+    // большого JSON, а «Хорошо/Плохо» приходит без задержки после сканирования.
+    persistDb().catch(() => {});
     return sendJson(res, 200, { ok: true, label: found, warning });
   }
 
@@ -3118,19 +3187,28 @@ async function handleApi(req, res, urlPath) {
     const withKm = (r) => {
       const rr = enrichUnloadProgress(normalizeRouteProgress(r), db.labels);
       const id = String(rr.id || "");
-      // Дорожный км (из кэша) — если его ещё нет, на лету подставляем км по
-      // прямой и запускаем фоновый дорожный расчёт; следующий просмотр покажет
-      // уже дорожное значение, совпадающее с мостами карты.
+      // Приоритет километража для карточки списка:
+      //   1) дорожный км из кэша 2ГИС (routeKmRoad: база → точки → возврат) —
+      //      он совпадает с дорожными мостами схемы маршрута, чтобы число в
+      //      списке и на схеме показывалось одинаково (Вариант 2);
+      //   2) km, сохранённый при построении/сохранении маршрута (route.km);
+      //   3) км по прямой (гаверсинус) как мгновенный фолбэк + запуск фонового
+      //      дорожного расчёта, чтобы следующий просмотр показал дорожный км.
       const cached = routeKmCache[id];
       if (Number.isFinite(Number(cached))) {
         rr.km = Number(cached);
       } else {
+        const saved = Number(rr && rr.km);
+        if (Number.isFinite(saved) && saved >= 0 && typeof rr.km === "number") {
+          rr.km = saved;
+        } else {
         rr.km = routeKm(rr); // быстрый фолбэк по прямой
         if (!routeKmPending[id]) {
           routeKmPending[id] = true;
           routeKmRoad(rr).then((km) => {
             if (Number.isFinite(Number(km))) routeKmCache[id] = Number(km);
           }).catch(() => {}).finally(() => { delete routeKmPending[id]; });
+        }
         }
       }
       return rr;
@@ -3173,6 +3251,9 @@ async function handleApi(req, res, urlPath) {
           return {
             client: c.client || "",
             address: c.address || "",
+            members: Array.isArray(c.members) && c.members.length > 0
+              ? c.members.map((m) => ({ client: m.client || "" }))
+              : undefined,
             state: c.state || "pending",
             // Причина переноса точки (если есть): нужна разделу «Доставка», чтобы
             // диспетчер видел, почему точка перенесена. Раньше сервер её не отдавал.
@@ -3255,23 +3336,18 @@ async function handleApi(req, res, urlPath) {
       if (idx < 0) return sendJson(res, 404, { error: "Маршрут не найден" });
       const target = db.driverRoutes[idx];
       const p = target.progress || {};
-      // Маршрут, который водитель прямо сейчас ведёт (статус active), нельзя
-      // удалить даже администратору: история в пути и время точек должны
-      // сохраняться. Это правило не обходится кодом.
-      if (p.status === "active") {
-        return sendJson(res, 409, { error: "Маршрут в работе — удалить нельзя" });
-      }
-      // Завершённый маршрут (или тот, что взят складом в сборку/отгрузку) удаляется
-      // только по коду доступа, заданному админом в «Параметры» (routeDeleteCode).
-      // Без кода удаление завершённой истории запрещено — так историю доставки не
-      // потерять случайно. Обычные (не завершённые, не в сборке) маршруты удаляются
-      // без кода, как и раньше.
-      const finished = p.status === "done" || !!p.shipmentStartedAt;
-      if (finished) {
+      // Маршрут, который занят — водитель ведёт его прямо сейчас (active), склад
+      // взял в сборку/отгрузку (shipmentStartedAt) или он завершён (done), —
+      // удаляется ТОЛЬКО по коду доступа, заданному админом в «Параметры»
+      // (routeDeleteCode). Админ может удалить такой маршрут в любой момент, но
+      // обязательно подтвердив кодом — чтобы историю доставки не потерять
+      // случайно. Обычные (не занятые) маршруты удаляются без кода, как и раньше.
+      const occupied = p.status === "done" || p.status === "active" || !!p.shipmentStartedAt;
+      if (occupied) {
         const expected = String((db.params && db.params.routeDeleteCode) || "").trim();
         const given = String(body.code || "").trim();
         if (!expected) {
-          return sendJson(res, 409, { error: "Код удаления завершённого маршрута не задан в «Параметры»" });
+          return sendJson(res, 409, { error: "Код удаления занятого маршрута не задан в «Параметры»" });
         }
         if (!given || given !== expected) {
           return sendJson(res, 403, { error: "Неверный код удаления" });
@@ -3281,6 +3357,9 @@ async function handleApi(req, res, urlPath) {
       // Заодно убираем этикетки мест этого маршрута — иначе в хранилище этикеток
       // остаётся мусор от удалённого маршрута.
       db.labels = (db.labels || []).filter((l) => String(l.routeId) !== String(id));
+      // Удаляем из кэша дорожного км (routeKmCache) след удалённого маршрута.
+      delete routeKmCache[id];
+      delete routeKmPending[id];
       await persistDb();
       return sendJson(res, 200, { ok: true, routes: db.driverRoutes });
     }
@@ -3303,13 +3382,7 @@ async function handleApi(req, res, urlPath) {
         }
       }
       const clients = Array.isArray(body.clients)
-        ? body.clients.slice(0, 50).map((c) => ({
-            client: String(c.client || "").slice(0, 200),
-            address: String(c.address || "").slice(0, 500),
-            bundleId: c.bundleId ? String(c.bundleId).slice(0, 60) : null,
-            logo: c.logo ? String(c.logo).slice(0, 200000) : null,
-            logoText: String(c.logoText || "").toUpperCase().slice(0, 5),
-          })).filter((c) => c.client || c.address)
+        ? body.clients.slice(0, 50).map(normalizeRouteClient).filter((c) => c.client || c.address)
         : [];
       if (clients.length === 0) return sendJson(res, 400, { error: "Укажите хотя бы одного клиента" });
       if (body.date) found.date = String(body.date).slice(0, 10);
@@ -3320,26 +3393,36 @@ async function handleApi(req, res, urlPath) {
       }
       found.clients = clients;
       found.at = Date.now();
+      // Километраж из построения маршрута: клиент передаёт сумму мостов, которую
+      // админ видел при построении. Сохраняем её, чтобы карточка списка всегда
+      // показывала то же число, что и построение.
+      if (Number.isFinite(Number(body.km)) && Number(body.km) >= 0) {
+        found.km = Math.round(Number(body.km) * 10) / 10;
+      } else {
+        // Состав/порядок точек изменились, а новый км построения не передан —
+        // сбрасываем сохранённый км, чтобы карточка не показывала устаревшее
+        // число; дорожное значение подтянет фоновый кэш (routeKmCache).
+        delete found.km;
+        delete routeKmCache[id];
+        delete routeKmPending[id];
+      }
       await persistDb();
       return sendJson(res, 200, { ok: true, routes: db.driverRoutes });
     }
     const date = String(body.date || "").slice(0, 10);
     const driverId = String(body.driverId || "").slice(0, 60);
     const driverName = String(body.driverName || "").slice(0, 200);
-    // Название маршрута задаёт САМ диспетчер произвольной строкой (по сути это
-    // НЕ «слот» Утро/Обед/Вечер — их автоподстановки больше нет). Если диспетчер
-    // ничего не ввёл, по умолчанию ставится «"ОБЕД"» (с кавычками) — в списке
-    // такой маршрут читается как «Маршрут "ОБЕД"». Диспетчер может создать
-    // сколько угодно маршрутов на день — по одному на каждое введённое название.
-    const routeName = String(body.routeName || `"ОБЕД"`).trim().slice(0, 60) || `"ОБЕД"`;
+    // Название маршрута задаёт САМ диспетчер произвольной строкой. Оно является
+    // обязательным: именно его видно в списке маршрутов и отчётах. Автоподстановки
+    // «"ОБЕД"» больше нет — маршрут не должен получать случайное название.
+    // Диспетчер может создать сколько угодно маршрутов на день — по одному на
+    // каждое введённое название.
+    const routeName = String(body.routeName || "").trim().slice(0, 60);
+    if (!routeName) {
+      return sendJson(res, 400, { error: "Укажите название маршрута" });
+    }
     const clients = Array.isArray(body.clients)
-      ? body.clients.slice(0, 50).map((c) => ({
-          client: String(c.client || "").slice(0, 200),
-          address: String(c.address || "").slice(0, 500),
-          bundleId: c.bundleId ? String(c.bundleId).slice(0, 60) : null,
-          logo: c.logo ? String(c.logo).slice(0, 200000) : null,
-          logoText: String(c.logoText || "").toUpperCase().slice(0, 5),
-        })).filter((c) => c.client || c.address)
+      ? body.clients.slice(0, 50).map(normalizeRouteClient).filter((c) => c.client || c.address)
       : [];
     if (!date || !driverId || clients.length === 0) {
       return sendJson(res, 400, { error: "Укажите дату, водителя и хотя бы одного клиента" });
@@ -3365,6 +3448,9 @@ async function handleApi(req, res, urlPath) {
       }
       db.driverRoutes[existIdx].clients = clients;
       db.driverRoutes[existIdx].at = Date.now();
+      if (Number.isFinite(Number(body.km)) && Number(body.km) >= 0) {
+        db.driverRoutes[existIdx].km = Math.round(Number(body.km) * 10) / 10;
+      }
     } else {
       db.driverRoutes.push({
         id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
@@ -3373,6 +3459,9 @@ async function handleApi(req, res, urlPath) {
         driverName,
         routeName,
         clients,
+        km: (Number.isFinite(Number(body.km)) && Number(body.km) >= 0)
+          ? Math.round(Number(body.km) * 10) / 10
+          : undefined,
         addedBy: user.id,
         at: Date.now(),
       });
@@ -3827,6 +3916,11 @@ async function handleApi(req, res, urlPath) {
       if (!cur || cur.state !== "on_site") {
         return sendJson(res, 409, { error: "Нет точки, на которой вы сейчас находитесь" });
       }
+      // Сдача допустима только после «Завершить выгрузку»: пока водитель не
+      // завершил выгрузку мест, точку закрыть (сдать) нельзя.
+      if (cur.unloadFinished !== true) {
+        return sendJson(res, 409, { error: "Сначала завершите выгрузку" });
+      }
       // Сдача в связке: вся группа (все «на точке») завершается с единым
       // временем, затем вся следующая группа уходит в путь.
       groupOf(activeIdx)
@@ -4184,6 +4278,7 @@ async function handleApi(req, res, urlPath) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) date = motionDayKey(Date.now());
     const now = Date.now();
     const agg = {}; // driverId -> { name, km, moveSec, siteSec, lunchSec, points }
+    const routesPerDriver = {}; // driverId -> [{ id, name, routeName, moveSec, siteSec, lunchSec, points }]
     (db.driverRoutes || []).forEach((r) => {
       if (!r || r.date !== date) return;
       const prog = r.progress || {};
@@ -4228,6 +4323,60 @@ async function handleApi(req, res, urlPath) {
       a.siteSec += siteSec;
       a.lunchSec += totalLunch;
       a.points += points;
+      // Детализация по маршрутам (для раскрытия строки водителя).
+      const cli = Array.isArray(r.clients) ? r.clients : [];
+      let cliTotal = 0, cliDelivered = 0, cliInTransit = 0, places = 0;
+      cli.forEach((c) => {
+        cliTotal += 1;
+        const st = c && c.state;
+        if (st === "delivered" || st === "postponed") cliDelivered += 1;
+        else if (st === "in_transit") cliInTransit += 1;
+        places += Number.isFinite(c && c.labelQty) ? (Number(c.labelQty) || 0) : 0;
+      });
+      // Детализация по клиентам маршрута (для раскрытия маршрута → список клиентов):
+      // время в пути до клиента, время на сдачу, километраж до клиента и места.
+      let prevLat = Number.isFinite(prog.baseLat) ? prog.baseLat : null;
+      let prevLon = Number.isFinite(prog.baseLon) ? prog.baseLon : null;
+      const cliDetail = cli.map((c) => {
+        const tp = Number.isFinite(c.transitPaused) ? c.transitPaused : 0;
+        let ts = Number.isFinite(c.transitStart) ? c.transitStart : 0;
+        let te = Number.isFinite(c.transitEnd) ? c.transitEnd : 0;
+        let ss = Number.isFinite(c.siteStart) ? c.siteStart : 0;
+        let se = Number.isFinite(c.siteEnd) ? c.siteEnd : 0;
+        if (c.state === "in_transit" && ts && !te) te = now;
+        if (c.state === "on_site" && ss && !se) se = now;
+        let km = 0;
+        if (Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+          if (prevLat != null && prevLon != null) {
+            km = haversineKm({ lat: prevLat, lon: prevLon }, { lat: c.lat, lon: c.lon });
+          }
+          prevLat = c.lat; prevLon = c.lon;
+        }
+        return {
+          client: String(c.client || ""),
+          address: String(c.address || ""),
+          state: String(c.state || ""),
+          moveSec: Math.round(((ts && te && te > ts) ? Math.max(0, te - ts - tp) : 0) / 1000),
+          siteSec: Math.round(((ss && se && se > ss) ? (se - ss) : 0) / 1000),
+          km: Math.round(km * 10) / 10,
+          placesDone: Number.isFinite(c.placesDone) ? c.placesDone : 0,
+          placesTotal: Number.isFinite(c.placesTotal) ? c.placesTotal : 0,
+        };
+      });
+      const rd = routesPerDriver[key] || (routesPerDriver[key] = []);
+      rd.push({
+        id: String(r.id != null ? r.id : ""),
+        name: r.routeName || r.driverName || "Маршрут",
+        moveSec: Math.round(moveSec / 1000),
+        siteSec: Math.round(siteSec / 1000),
+        lunchSec: Math.round(totalLunch / 1000),
+        points,
+        cliTotal,
+        cliDelivered,
+        cliInTransit,
+        places,
+        clients: cliDetail,
+      });
     });
     // Пробег из ФАКТИЧЕСКОГО GPS-трека водителя за день, но ТОЛЬКО по перегонам
     // маршрута (интервалам движения между точками). Личные/утренние/вечерние
@@ -4310,6 +4459,7 @@ async function handleApi(req, res, urlPath) {
       siteSec: Math.round(e.siteSec / 1000),
       lunchSec: Math.round(e.lunchSec / 1000),
       points: e.points,
+      routes: (routesPerDriver[id] || []).sort((x, y) => (y.points - x.points) || (y.moveSec - x.moveSec)),
     })).sort((x, y) => (y.km - x.km) || (y.moveSec - x.moveSec));
     return sendJson(res, 200, { ok: true, date, rows });
   }
@@ -4714,7 +4864,28 @@ const server = http.createServer(async (req, res) => {
       }
       const ext = path.extname(filePath).toLowerCase();
       if (ext === ".html") return serveHtml(res, data);
-      res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
+      const type = MIME[ext] || "application/octet-stream";
+      // gzip-сжатие текстовой статики (js/css/json/svg/webmanifest): уменьшает
+      // объём app.js/styles.css в разы, заметно ускоряя первую загрузку WebView
+      // на мобильных и ТСД (пока Service Worker кэш ещё пуст). Изображения не
+      // трогаем — они уже сжаты и сжимать их бессмысленно.
+      // Манифест (.webmanifest) НЕ сжимаем: это маленький PWA-файл, который
+      // браузер требует строго как JSON без обёрток — gzip тут лишь риск
+      // «Manifest: Syntax error» при некоторых прокси/загрузчиках манифеста.
+      const GZIP_EXT = new Set([".js", ".css", ".json", ".svg", ".txt", ".md", ".xml"]);
+      if (GZIP_EXT.has(ext) && /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""))) {
+        try {
+          const gz = zlib.gzipSync(data, { level: 9 });
+          res.writeHead(200, {
+            "Content-Type": type,
+            "Content-Encoding": "gzip",
+            "Vary": "Accept-Encoding",
+            "Content-Length": gz.length,
+          });
+          return res.end(gz);
+        } catch { /* сжатие не вышло — отдаём как есть */ }
+      }
+      res.writeHead(200, { "Content-Type": type });
       res.end(data);
     });
   } catch (e) {

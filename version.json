@@ -1,5 +1,5 @@
 {
-  "versionCode": 14,
-  "versionName": "1.0.13",
-  "notes": "Авторелиз macOS 1.0.13 (commit a1e2919)"
+  "versionCode": 17,
+  "versionName": "1.0.16",
+  "notes": "Звук «Хорошо/Плохо» при выгрузке + надёжный бип через Web Audio на ТСД и погрузке"
 }
