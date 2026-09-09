@@ -900,10 +900,21 @@ function enrichUnloadProgress(route, labels) {
     const mine = all.filter(
       (l) => String(l.routeId) === String(route.id) && Number(l.clientIndex) === i
     );
-    const total = mine.length;
+    // «Всего мест для выгрузки» = только ПОГРУЖЕННЫЕ (loaded|delivered). Места со
+    // статусом "created" (напечатаны, но не погружены складом) в знаменатель
+    // выгрузки НЕ входят: их водитель физически выгрузить не может, и их наличие
+    // не должно завышать счётчик («8/7 из-за одного created») и блокировать
+    // водителя, у которого фактически выгружено всё погруженное. Это унифицирует
+    // счёт с веб-счётчиком (scanProgress при unload считает need = loaded).
+    const total = mine.filter((l) => l.status === "loaded" || l.status === "delivered").length;
     const done = mine.filter((l) => l.status === "delivered").length;
+    // Места со статусом "created" (напечатаны, но не погружены складом) — на
+    // выгрузку они НЕ влияют (см. total выше), но показываем их число отдельно,
+    // чтобы водитель/диспетчер видели, что склад мог «не доложить» место.
+    const created = mine.filter((l) => l.status === "created").length;
     c.unloadTotal = total;
     c.unloadDone = done;
+    c.unloadCreated = created;
     // «Готово к завершению выгрузки»: все места выгружены, либо у клиента вовсе
     // нет этикеток (печатать нечего — завершить выгрузку разрешено).
     c.unloadReady = total === 0 ? true : done === total;
@@ -3998,7 +4009,10 @@ async function handleApi(req, res, urlPath) {
       const mine = (db.labels || []).filter(
         (l) => String(l.routeId) === String(route.id) && Number(l.clientIndex) === ci
       );
-      const total = mine.length;
+      // Тот же контракт, что в enrichUnloadProgress: «всего мест» = только
+      // погруженные (loaded|delivered), иначе одно created-место заблокировало бы
+      // «Завершить выгрузку», хотя водитель выгрузил всё погруженное.
+      const total = mine.filter((l) => l.status === "loaded" || l.status === "delivered").length;
       const done = mine.filter((l) => l.status === "delivered").length;
       const allowIncomplete = db.params && db.params.allowFinishUnloadIncomplete === true;
       if (total > 0 && done < total && !allowIncomplete) {

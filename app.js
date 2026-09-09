@@ -4297,13 +4297,11 @@
     return out;
   }
 
-  // Звуковая и тактильная обратная связь при сканировании боксов на телефоне
-  // (Android-приложение / браузер / ТСД). Успешное сканирование — «Хорошо»
-  // (короткий акцентный бип + голосовая озвучка «Хорошо» + короткая вибрация),
-  // ошибочное — «Плохо» (низкий длинный гудок + голос «Плохо» + длинная вибрация).
-  // Базовый звук идёт через Web Audio API (бип) — работает в любом WebView,
-  // включая ТСД, где штатных голосов SpeechSynthesis нет и «Хорошо/Плохо» молчит.
-  // Речь (TTS) и вибрация — дополнительные слои поверх бипа.
+  // Звуковая и тактильная обратная связь при сканировании боксов.
+  // ОСНОВНОЙ канал — голос: «Хорошо» / «Плохо» (SpeechSynthesis). Как только
+  // найден русский TTS-голос, бип заглушается до еле слышного «тика», чтобы
+  // голос был главным. Если на устройстве (некоторые ТСД/WebView) голосовых
+  // движков нет — остаётся бип как запасной сигнал. Вибрация — третий слой.
   let _scanCtx = null;
   function scanBeep(ok) {
     try {
@@ -4327,26 +4325,72 @@
         o.stop(start + dur + 0.03);
       };
       if (ok) {
-        tone(880, now, 0.07, 0.14);          // «тик» успеха
-        tone(880, now + 0.13, 0.07, 0.14);   // двойной — отличить от ошибки
+        tone(880, now, 0.05, 0.06);          // лёгкий «тик» успеха
+        tone(880, now + 0.11, 0.05, 0.06);
       } else {
-        tone(180, now, 0.3, 0.16);           // низкий длинный гудок
-        tone(90, now + 0.05, 0.28, 0.16);
+        tone(180, now, 0.22, 0.07);          // тихий длинный гудок
+        tone(90, now + 0.05, 0.2, 0.07);
       }
     } catch (_) { /* без звука нельзя допустить сбой всего сканирования */ }
   }
-  function playScanFeedback(ok) {
+  // Кэш найденных голосов SpeechSynthesis (загружаются асинхронно).
+  let _voicesLoaded = false;
+  function pickRussianVoice() {
+    if (!("speechSynthesis" in window)) return null;
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices || !voices.length) return null;
+    // Приоритет: явный русский, затем любой с lang, начинающимся на ru.
+    return voices.find((v) => v.lang && v.lang.toLowerCase() === "ru-ru")
+      || voices.find((v) => v.lang && v.lang.toLowerCase().startsWith("ru"))
+      || null;
+  }
+  function playScanFeedback(ok, spokenText) {
     try {
-      scanBeep(ok);
-      const text = ok ? "Хорошо" : "Плохо";
-      // Голосовая озвучка (TTS). Не блокирует работу, если синтеза нет.
+      // Кастомная фраза (например, «уже отгружено») перекрывает стандартные
+      // «Хорошо»/«Плохо»: озвучиваем её, а бип/вибрация идут по флагу `ok`.
+      const text = (spokenText && String(spokenText).trim()) || (ok ? "Хорошо" : "Плохо");
+      let spoke = false;
       if ("speechSynthesis" in window) {
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = "ru-RU";
-        u.rate = 1;
-        // cancel предыдущей фразы, чтобы быстрые сканы не наслаивались.
-        window.speechSynthesis.cancel();
-        window.speechSynthesis.speak(u);
+        // Голоса подгружаются не сразу — подписываемся на событие первый раз.
+        if (!_voicesLoaded) {
+          window.speechSynthesis.onvoiceschanged = () => { _voicesLoaded = true; };
+          _voicesLoaded = (window.speechSynthesis.getVoices() || []).length > 0;
+        }
+        const voice = pickRussianVoice();
+        // Говорим голосом, ТОЛЬКО если реально доступен хотя бы один голос (TTS
+        // движок есть). На ТСД/WebView без речевого движка getVoices() пуст, и
+        // speak() безмолвно НЕ выдаёт звук — если считать это «озвучиванием»
+        // (spoke=true), бип как запасной канал не сыграет вовсе. Поэтому бип
+        // зарезервирован под случай, когда голоса нет вообще: speak() никогда
+        // не вызовется, звук гарантированно остаётся за последним каналом.
+        if (voice || (window.speechSynthesis.getVoices() || []).length) {
+          const u = new SpeechSynthesisUtterance(text);
+          u.lang = "ru-RU";
+          u.rate = 0.95;
+          u.volume = 1;
+          if (voice) u.voice = voice;
+          // cancel предыдущей фразы, чтобы быстрые сканы не наслаивались.
+          window.speechSynthesis.cancel();
+          window.speechSynthesis.speak(u);
+          spoke = true;
+        }
+      }
+      // Нативный голос APK (AndroidBridge): когда веб-речи нет (getVoices() пуст
+      // на ТСД/WebView без речевого движка), озвучиваем «Хорошо/Плохо» голосом
+      // нативного TextToSpeech из APK — он работает на любом устройстве, где
+      // установлена системная речь. Голос и здесь остаётся приоритетнее бипа.
+      if (!spoke && window.AndroidBridge && typeof window.AndroidBridge.hasTts === "function") {
+        try {
+          if (window.AndroidBridge.hasTts() && typeof window.AndroidBridge.speak === "function") {
+            window.AndroidBridge.speak(text);
+            spoke = true;
+          }
+        } catch (_) { /* натив недоступен — уходим на бип */ }
+      }
+      // Бип — только как последний запасной канал (когда нет ни веб-речи, ни
+      // нативного TTS в APK), чтобы ни один скан не остался без звука.
+      if (!spoke) {
+        scanBeep(ok);
       }
       // Вибрация: успех — короткий «тик», ошибка — тройная продолжительная.
       if ("vibrate" in navigator) {
@@ -4382,7 +4426,15 @@
         return false;
       }
       if (r.ok && r.label) {
-        if (!optimistic) playScanFeedback(true);
+        // Повторный скан уже обработанного места (оптимизм уже сыграл «Хорошо»
+        // выше): сервер вернул warning — переигрываем на «Плохо» и озвучиваем
+        // отказ. На погрузке грузчик на ТСД слышит «Уже отгружено»; на выгрузке
+        // — соответствующий текст warning («Место уже выгружено» и т.п.).
+        if (r.warning) {
+          playScanFeedback(false, action === "load" ? "Уже отгружено" : r.warning);
+        } else if (!optimistic) {
+          playScanFeedback(true);
+        }
         // Обновляем статус места в локальном списке сразу, чтобы живой счётчик
         // пересчитался мгновенно, не дожидаясь повторного GET /api/labels.
         const updated = r.label;
@@ -4410,13 +4462,22 @@
         refreshShipmentTileCounters();
         return true;
       } else if (r.error) {
-        if (optimistic) playScanFeedback(false);
+        // Невалидный/не-отгрузочный стикер (кода нет среди этикеток → optimistic
+        // false) или иная ошибка сервера: озвучиваем «Плохо» ВСЕГДА, а не только
+        // когда оптимистичный «Хорошо» нужно перебить. Иначе чужой штрихкод
+        // отклоняется молча (только текст «Этикетка не найдена» без звука).
+        playScanFeedback(false);
         setPrintScanStatus(String(r.error), "err");
         return false;
       }
       return false;
     } catch (e) {
-      if (optimistic) playScanFeedback(false);
+      // api() на HTTP-ошибку (например 404 «Этикетка не найдена» для не-отгрузочного
+      // стикера) БРОСАЕТ исключение, а не возвращает {error:...}, поэтому сюда
+      // приходит любой отказ сканирования. «Плохо» озвучиваем ВСЕГДА (а не только
+      // когда оптимистичный «Хорошо» нужно перебить): иначе чужой штрихкод на ТСД
+      // отклоняется молча — только текст ошибки без голоса.
+      playScanFeedback(false);
       setPrintScanStatus((e && (e.error || e.message)) || "Ошибка сканирования", "err");
       return false;
     }
@@ -4740,6 +4801,7 @@
         // Счётчик «выгружено / всего» считает сервер из этикеток клиента.
         const unTotal = Number(c.unloadTotal) || 0;
         const unDone = Number(c.unloadDone) || 0;
+        const unCreated = Number(c.unloadCreated) || 0; // напечатаны, но не погружены складом
         const unReady = c.unloadReady === true;       // все места выгружены (или их нет)
         const unFinished = c.unloadFinished === true; // водитель нажал «Завершить выгрузку»
         // Разрешает ли админ завершить выгрузку при неполном сканировании.
@@ -4763,8 +4825,15 @@
           const cls = unReady ? " ok" : "";
           unloadCountHtml = `<span class="rms-unload-count${cls}">Выгружено ${unDone} из ${unTotal}${unReady ? " ✓" : ""}</span>`;
         }
+        // Места, которые склад напечатал, но не погрузил (статус "created"). На
+        // выгрузку они не влияют (счётчик «Выгружено N из M» их не учитывает), но
+        // показываем их отдельной пометкой, чтобы было видно «недогруз склада».
+        const createdNoteHtml = unCreated > 0
+          ? `<div class="rms-unload-note">⚠ ${unCreated} место не погружено складом — выгрузка счёрчена без него</div>`
+          : "";
         let unloadBlock = `<div class="rms-unload">
           ${unloadCountHtml}
+          ${createdNoteHtml}
           <div class="rms-stop-actions">
             <button type="button" class="rms-stop-btn primary" data-route-action="scan_unload" data-route-id="${escapeHtml(r.id)}" data-client-idx="${i}" ${scanDisabled ? "disabled" : ""} title="${escapeHtml(scanHint)}">Сканировать выгрузку</button>
             <button type="button" class="rms-stop-btn ghost" data-route-action="finish_unload" data-route-id="${escapeHtml(r.id)}" ${finishDisabled ? "disabled" : ""} title="${escapeHtml(finishHint)}">${unFinished ? "Выгрузка завершена" : "Завершить выгрузку"}</button>

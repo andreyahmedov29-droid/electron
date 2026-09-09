@@ -6178,6 +6178,17 @@ button.icon-btn svg,
   background: rgba(125, 216, 125, 0.1);
   border-color: rgba(125, 216, 125, 0.3);
 }
+.rms-unload-note {
+  align-self: flex-start;
+  margin-left: 31px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--red-soft, #ff7a7a);
+  background: rgba(255, 122, 122, 0.08);
+  border: 1px solid rgba(255, 122, 122, 0.22);
+  border-radius: var(--radius-xs);
+  padding: 3px 10px;
+}
 .rms-stop-btn {
   cursor: pointer;
   border-radius: var(--radius-sm);
