@@ -245,6 +245,47 @@
     if (n > 0) showOfflineBadge(n); else hideOfflineBadge();
   }
 
+  // ================== Локальный кэш «Моих маршрутов» ==================
+  // Данные маршрутов водителя персистятся в localStorage, чтобы в зоне без
+  // интернета (офлайн-старт приложения или потеря связи после открытия) водитель
+  // ВСЁ РАВНО видел свой маршрут и точки и мог нажимать кнопки («Прибыл»,
+  // «Сдача», «Перенос», «На базу»). Сами нажатия уже ставятся в офлайн-очередь
+  // и автосинхронизируются при появлении сети; кэш лишь поднимает картинку.
+  // Кэш привязан к пользователю: на переиспользуемом устройстве чужой водитель
+  // чужие маршруты не увидит.
+  const ROUTES_CACHE_PREFIX = "biotime.myRoutesCache.";
+  function myRoutesCacheKey() {
+    const uid = state && state.me && state.me.id;
+    return ROUTES_CACHE_PREFIX + (uid != null ? String(uid) : "anon");
+  }
+  function persistMyRoutes() {
+    if (!Array.isArray(myRoutesCache)) return;
+    try {
+      const data = {
+        savedForUserId: (state && state.me && state.me.id) != null ? state.me.id : null,
+        savedAt: Date.now(),
+        routes: myRoutesCache,
+      };
+      localStorage.setItem(myRoutesCacheKey(), JSON.stringify(data));
+    } catch { /* переполнение/приватный режим */ }
+  }
+  // Читает кэш из localStorage и возвращает массив маршрутов, если он валиден и
+  // принадлежит текущему пользователю. При несовпадении/повреждении — null.
+  function hydrateMyRoutes() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(myRoutesCacheKey()));
+      if (!raw || !Array.isArray(raw.routes)) return null;
+      const uid = state && state.me && state.me.id;
+      // Если мы ещё не знаем пользователя (loadState не дошёл), отдаём как есть:
+      // почти всегда это тот же водитель на своём устройстве. Если знаем и он
+      // не совпал — не отдаём чужие маршруты.
+      if (uid != null && raw.savedForUserId != null && String(uid) !== String(raw.savedForUserId)) {
+        return null;
+      }
+      return raw.routes;
+    } catch { return null; }
+  }
+
   // Оптимистичное применение действия к локальному кэшу маршрута: без сети
   // переключаем стадию текущей точки, чтобы водитель видел результат сразу.
   // Это лишь временная картинка — после успешной отправки очереди приходит
@@ -289,6 +330,10 @@
       return;
     }
     route._offlinePending = (Number(route._offlinePending) || 0) + 1;
+    // Оптимистичная смена стадии сохраняется в localStorage: если водитель
+    // применил действие офлайн и закрыл приложение до синхронизации очереди,
+    // после рестарта точка не «откатится» к старому состоянию.
+    persistMyRoutes();
   }
 
   // Отправляет накопленную очередь на сервер последовательно (важен порядок
@@ -3111,7 +3156,7 @@
         <div class="rms-stop${activeCls}">
           <div class="rms-stop-top">
             <span class="rms-stop-idx">${i + 1}</span>
-            <span class="rms-stop-name">${escapeHtml(c.client || "")} ${timeLine} ${places}</span>
+            <span class="rms-stop-name">${escapeHtml((c.members && c.members.length) ? (c.bundleName || c.address || c.client || "Связка") : (c.client || ""))} ${timeLine} ${places}</span>
           </div>
           ${c.address ? `<div class="rms-stop-addr">${escapeHtml(c.address)}</div>` : ""}
           ${timerHtml}
@@ -3174,16 +3219,29 @@
           // перерисовку (например, до нажатия «Завершить выгрузку»).
           const cl = (x.clients || []).map((c) => {
             if (!c) return "";
-            return [c.state || c.status, c.unloadDone ?? "", c.unloadTotal ?? "", c.unloadFinished ? "f" : ""].join(":");
+            return [c.state || c.status, c.unloadDone ?? "", c.unloadTotal ?? "",
+                    c.unloadFinished ? "f" : "", c.bundleName || ""].join(":");
           }).join(",");
           return [x.id, x.date, x.status, x.placesDone, x.placesTotal, cl].join("|");
         }));
         if (!silent && sig === lastMyRoutesSig) return; // не изменилось — не перерисовываем
         myRoutesCache = r.routes;
         lastMyRoutesSig = sig;
+        persistMyRoutes(); // свежие данные маршрута — в localStorage для офлайн-старта
         if (!silent) renderMyRoutesList(myRoutesCache);
       }
-    } catch { /* keep current */ }
+    } catch {
+      // Нет сети (офлайн-старт или связь пропала). Если данных в памяти ещё нет —
+      // поднимаем закешированный маршрут, чтобы водитель видел кнопки и мог
+      // продолжать работу офлайн (нажатия уйдут в офлайн-очередь при появлении сети).
+      if (!Array.isArray(myRoutesCache) || myRoutesCache.length === 0) {
+        const cached = hydrateMyRoutes();
+        if (cached) {
+          myRoutesCache = cached;
+          if (!silent) renderMyRoutesList(myRoutesCache);
+        }
+      }
+    }
   }
 
   function renderMyRoutesList(routes) {
@@ -3276,7 +3334,20 @@
       return;
     }
     const sig = JSON.stringify(routes.map((x) => {
-      const cl = (x.clients || []).map((c) => (c && (c.state || c.status)) || "").join(",");
+      // Сигнатура должна ловить ЛЮБЫЕ изменения, влияющие на карточку отгрузки:
+      // стадию точки, счётчики мест (печать стикеров / отгрузка не меняют stage,
+      // но меняют loadedCount/totalCount/labelQty), единое название связки и
+      // состав участников. Иначе при печати стикеров или отгрузке товара карточка
+      // не перерисуется, пока пользователь не «перещёлкнет» клиента.
+      const cl = (x.clients || []).map((c) => c ? [
+        c.state || c.status || "",
+        Number(c.loadedCount) || 0,
+        Number(c.totalCount) || 0,
+        Number(c.labelQty) || 0,
+        c.bundleName || "",
+        c.unloadFinished ? "f" : "",
+        (Array.isArray(c.members) ? c.members.map((m) => (m && m.client) || "").join(",") : ""),
+      ].join(":") : "").join(",");
       return [x.id, x.date, (x.progress ? x.progress.shippedAt : "") || 0,
               (x.progress ? x.progress.shipmentStartedAt : "") || 0, cl].join("|");
     }));
@@ -3694,7 +3765,7 @@
         : "Допечатка доступна, только когда все боксы клиента уже погружены";
       return `
         <button type="button" class="${cls}" data-append-client-index="${i}" title="${appendTitle}"${done ? "" : " disabled"}>
-          <span class="tile-name">${escapeHtml(c.client || "—")}</span>
+          <span class="tile-name">${escapeHtml((c.members && c.members.length) ? (c.bundleName || c.address || c.client || "Связка") : (c.client || "—"))}</span>
           <span class="tile-places">${done ? "отгружен · " + places : places}</span>
         </button>
       `;
@@ -4905,7 +4976,7 @@
         <div class="rms-stop${activeCls}">
           <div class="rms-stop-top">
             <span class="rms-stop-idx">${i + 1}</span>
-            <span class="rms-stop-name">${escapeHtml(members ? (c.address || c.client || "Связка") : c.client)}
+            <span class="rms-stop-name">${escapeHtml(members ? (c.bundleName || c.address || c.client || "Связка") : c.client)}
               ${doneMark}
               ${st === "in_transit" ? '<span class="rms-stop-tag">едем</span>' : ""}
               ${st === "on_site" ? '<span class="rms-stop-tag">на месте</span>' : ""}
@@ -5030,6 +5101,7 @@
         const idx = myRoutesCache.findIndex((x) => String(x.id) === String(r.route.id));
         if (idx >= 0) myRoutesCache[idx] = r.route;
         else myRoutesCache.unshift(r.route);
+        persistMyRoutes();
         renderMyRoutesList(myRoutesCache);
       }
     } catch (e) {
@@ -5070,6 +5142,7 @@
         const idx = myRoutesCache.findIndex((x) => String(x.id) === String(r.route.id));
         if (idx >= 0) myRoutesCache[idx] = r.route;
         else myRoutesCache.unshift(r.route);
+        persistMyRoutes();
         renderMyRoutesList(myRoutesCache);
       }
     } catch (e) {
@@ -5921,7 +5994,7 @@
           <li class="drv-stop">
             <span class="drv-stop-idx">${i + 1}</span>
             <span class="drv-stop-body">
-              <span class="drv-stop-name">${escapeHtml(members ? (c.address || c.client || "Связка") : c.client)}</span>
+              <span class="drv-stop-name">${escapeHtml(members ? (c.bundleName || c.address || c.client || "Связка") : c.client)}</span>
               ${c.address ? `<span class="drv-stop-addr">${escapeHtml(c.address)}</span>` : ""}
               ${members
                 ? `<span class="drv-stop-members">${members.map((m) => escapeHtml(m.client)).join(", ")}</span>`
@@ -6078,6 +6151,7 @@
       const stop = {
         client: single ? head.client : (g.addr || head.client || "Связка"),
         address: g.addr || head.address || "",
+        bundleName: head.bundleName || "",
         bundleId: single || allSameBundle ? (head.bundleId || null) : null,
         logo: head.logo || "",
         logoText: head.logoText || "",
@@ -6086,6 +6160,7 @@
         stop.members = g.items.map((m) => ({
           client: m.client,
           address: m.bundleAddress || m.address || "",
+          bundleName: m.bundleName || (head.bundleName || ""),
           bundleId: m.bundleId || null,
           logo: m.logo || "",
           logoText: m.logoText || "",
@@ -8501,4 +8576,96 @@
   };
   window.addEventListener("pagehide", persistOnUnload);
   window.addEventListener("beforeunload", persistOnUnload);
+})();
+
+/* ================================================================
+   Автообновление веб-версии (мягкое, без внезапного релоада)
+   ----------------------------------------------------------------
+   Логика: серверная версия (sw.js) обновилась → новый service worker
+   установился и активировался (skipWaiting + clients.claim уже в sw.js),
+   событие controllerchange уведомляет страницу. В этот момент новый код
+   уже лежит в кэше, но документ ещё работает на старом. Показываем
+   баннер «Доступно обновление» и перезагружаемся ТОЛЬКО по кнопке
+   «Обновить» — чтобы не прерывать сканирование на складе внезапным
+   релоадом. «Позже» прячет баннер до следующего определения версии.
+   Отдельный самодостаточный блок: не зависит от приложения и не может
+   сломать его работу, если SW недоступен.
+   ================================================================ */
+(function updater() {
+  "use strict";
+
+  if (!("serviceWorker" in navigator)) return;
+
+  // Первый заход: controller ещё null. controllerchange при первой установке
+  // сработает, но обновлять нечего (мы уже на свежей версии) — пропускаем.
+  const hadController = !!navigator.serviceWorker.controller;
+  let bannerVisible = false;
+  let laterPressed = false;
+
+  function show() {
+    if (bannerVisible || laterPressed) return;
+    const b = document.getElementById("updBanner");
+    if (!b) return;
+    b.hidden = false;
+    bannerVisible = true;
+  }
+
+  function hide() {
+    const b = document.getElementById("updBanner");
+    if (b) b.hidden = true;
+    bannerVisible = false;
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    const later = document.getElementById("updLater");
+    const apply = document.getElementById("updApply");
+    if (later) {
+      later.addEventListener("click", function () {
+        laterPressed = true;
+        hide();
+      });
+    }
+    if (apply) {
+      apply.addEventListener("click", function () {
+        // Принудительно пропускаем кэш, чтобы после релоада точно пришёл новый код.
+        location.reload();
+      });
+    }
+  });
+
+  // Новый SW активировался и взял контроль. Второй и последующие заходы —
+  // это сигнал, что на сервере есть новая версия → показать баннер.
+  if (hadController) {
+    navigator.serviceWorker.addEventListener("controllerchange", show);
+  }
+
+  // Фоновый апдейт: проверяем наличие новой версии раз в 15 минут, чтобы
+  // баннер появлялся и у пользователей, которые долго держат вкладку открытой
+  // без навигации (controllerchange может не сработать без явной проверки).
+  // updatefound + statechange до activated дублирует controllerchange на тот
+  // случай, если на первой установке мы его пропустили, а версия изменилась.
+  function armUpdater(reg) {
+    let wasActivated = reg.active ? reg.active.state === "activated" : false;
+    reg.addEventListener("updatefound", function () {
+      const nw = reg.installing;
+      if (!nw) return;
+      nw.addEventListener("statechange", function () {
+        if (nw.state === "activated") {
+          wasActivated = true;
+          // На первой установке reg.active ещё не было — это и есть новое
+          // обновление относительно состояния контроллера, показать баннер.
+          if (!hadController && !navigator.serviceWorker.controller) return;
+          if (hadController) show();
+        }
+      });
+    });
+  }
+
+  navigator.serviceWorker.ready.then(function (reg) {
+    armUpdater(reg);
+    // Периодически спрашиваем сервер о новой версии sw.js.
+    setInterval(function () {
+      reg.update().catch(function () { /* нет сети — ничего страшного */ });
+    }, 15 * 60 * 1000);
+  });
 })();

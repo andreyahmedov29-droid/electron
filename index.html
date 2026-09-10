@@ -100,6 +100,18 @@
     </div>
   </div>
 
+  <!-- Полоса «доступно обновление»: появляется, когда серверная версия приложения
+       (service worker) обновилась, но страница ещё работает на старой. Релоад
+       происходит ТОЛЬКО по кнопке — чтобы не прерывать сканирование на складе. -->
+  <div class="net-banner upd-banner" id="updBanner" role="status" hidden>
+    <div class="net-banner-inner">
+      <span class="net-banner-icon" aria-hidden="true">🔄</span>
+      <span class="net-banner-text" id="updBannerText">Доступно новое обновление приложения.</span>
+      <button type="button" class="mini-btn net-banner-btn upd-banner-btn" id="updLater">Позже</button>
+      <button type="button" class="mini-btn net-banner-btn upd-banner-btn" id="updApply">Обновить</button>
+    </div>
+  </div>
+
   <main class="stage">
     <section class="tab-page" id="page-timer">
       <section class="clock-card" id="clockCard">

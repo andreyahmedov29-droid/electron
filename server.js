@@ -885,6 +885,41 @@ function normalizeRouteClient(c) {
   return base;
 }
 
+// Подтягивает ЕДИНОЕ название связки (bundleName) у точек маршрута из актуальной
+// базы контрагентов (db.driverClients), если в самой точке оно пусто. Это чинит
+// и старые маршруты, созданные до того, как единое название стало копироваться
+// в точку: диспетчер задал «Единое название» связки (bundle-name), а в сохранённой
+// точке поля bundleName не было. Резолв по общему bundleId: у всех участников
+// связки bundleName один и тот же. Возвращает клон маршрута.
+function withResolvedBundleNames(route, dbData) {
+  if (!route || !Array.isArray(route.clients)) return route;
+  const clients = dbData && Array.isArray(dbData.driverClients) ? dbData.driverClients : [];
+  // Индекс единого названия по bundleId: <>-первый непустой bundleName связки.
+  const nameByBundle = new Map();
+  for (const cl of clients) {
+    if (!cl || !cl.bundleId || !cl.bundleName) continue;
+    const bid = String(cl.bundleId);
+    if (!nameByBundle.has(bid)) nameByBundle.set(bid, String(cl.bundleName));
+  }
+  const clone = JSON.parse(JSON.stringify(route));
+  clone.clients = (clone.clients || []).map((c) => {
+    if (!c) return c;
+    const bid = c.bundleId ? String(c.bundleId) : "";
+    const resolved = bid && !c.bundleName ? (nameByBundle.get(bid) || "") : (c.bundleName || "");
+    if (resolved) c.bundleName = resolved;
+    // Та же логика для участников связки (members).
+    if (Array.isArray(c.members)) {
+      c.members = c.members.map((m) => {
+        if (!m) return m;
+        if (!m.bundleName) m.bundleName = resolved;
+        return m;
+      });
+    }
+    return c;
+  });
+  return clone;
+}
+
 // Обогащает точки маршрута водителя счётчиком выгрузки мест клиента: сколько
 // этикеток уже выгружено (status "delivered"), сколько всего, и готов ли клиент
 // к завершению выгрузки. Считается по хранилищу этикеток: код места клиента —
@@ -2813,7 +2848,7 @@ async function handleApi(req, res, urlPath) {
     const routes = (db.driverRoutes || [])
       .filter((r) => !!r)
       .map((r) => {
-        const route = normalizeRouteProgress(r);
+        const route = withResolvedBundleNames(normalizeRouteProgress(r), db);
         // Количество отгруженных мест по каждому клиенту маршрута: этикетки
         // (db.labels) привязаны к паре routeId + clientIdx, статус "loaded" —
         // место погружено складом. Счётчики уезжают во фронт, чтобы в карточке
@@ -2854,7 +2889,7 @@ async function handleApi(req, res, urlPath) {
     route.progress.shippedAt = Date.now();
     route.progress.shippedBy = user.id != null ? String(user.id) : null;
     await persistDb();
-    return sendJson(res, 200, { ok: true, route: normalizeRouteProgress(route) });
+    return sendJson(res, 200, { ok: true, route: withResolvedBundleNames(normalizeRouteProgress(route), db) });
   }
 
   // Вернуть маршрут обратно к отгрузке (отменить завершение): снимает отметку
@@ -2877,7 +2912,7 @@ async function handleApi(req, res, urlPath) {
       delete route.progress.shippedBy;
     }
     await persistDb();
-    return sendJson(res, 200, { ok: true, route: normalizeRouteProgress(route) });
+    return sendJson(res, 200, { ok: true, route: withResolvedBundleNames(normalizeRouteProgress(route), db) });
   }
 
   // Начать отгрузку маршрута: склад помечает, что приступил к отгрузке клиентов.
@@ -2895,7 +2930,7 @@ async function handleApi(req, res, urlPath) {
       route.progress.shipmentStartedBy = user.id != null ? String(user.id) : null;
     }
     await persistDb();
-    return sendJson(res, 200, { ok: true, route: normalizeRouteProgress(route) });
+    return sendJson(res, 200, { ok: true, route: withResolvedBundleNames(normalizeRouteProgress(route), db) });
   }
 
   // ---- Этикетки отгрузки (трекинг мест по QR) ----
@@ -3196,7 +3231,7 @@ async function handleApi(req, res, urlPath) {
     const filterDate = (arr) => (date ? arr.filter((r) => r.date === date) : arr);
     // Админ видит все маршруты; водитель — только свои; остальным — доступ запрещён.
     const withKm = (r) => {
-      const rr = enrichUnloadProgress(normalizeRouteProgress(r), db.labels);
+      const rr = enrichUnloadProgress(withResolvedBundleNames(normalizeRouteProgress(r), db), db.labels);
       const id = String(rr.id || "");
       // Приоритет километража для карточки списка:
       //   1) дорожный км из кэша 2ГИС (routeKmRoad: база → точки → возврат) —
@@ -3248,7 +3283,7 @@ async function handleApi(req, res, urlPath) {
     const params = new URLSearchParams(q);
     const date = String(params.get("date") || "").slice(0, 10);
     const list = (date ? (db.driverRoutes || []).filter((r) => r.date === date) : db.driverRoutes || [])
-      .map(normalizeRouteProgress)
+      .map((r) => withResolvedBundleNames(normalizeRouteProgress(r), db))
       .map((r) => {
         // Счётчики мест по клиенту: всего этикеток и сколько выгружено (delivered).
         // Код места — «BG<routeId>-<clientIndex+1>-<place>» (см. enrichUnloadProgress).
@@ -3262,6 +3297,7 @@ async function handleApi(req, res, urlPath) {
           return {
             client: c.client || "",
             address: c.address || "",
+            bundleName: c.bundleName || "",
             members: Array.isArray(c.members) && c.members.length > 0
               ? c.members.map((m) => ({ client: m.client || "" }))
               : undefined,
@@ -3541,7 +3577,7 @@ async function handleApi(req, res, urlPath) {
       return sendJson(res, 200, {
         ok: true,
         note: "Маршрут и так не был заблокирован",
-        route: normalizeRouteProgress(route),
+        route: withResolvedBundleNames(normalizeRouteProgress(route), db),
       });
     }
     route.at = Date.now();
@@ -3550,7 +3586,7 @@ async function handleApi(req, res, urlPath) {
       ok: true,
       released: releases,
       before: before,
-      route: normalizeRouteProgress(route),
+      route: withResolvedBundleNames(normalizeRouteProgress(route), db),
     });
   }
 
@@ -3854,7 +3890,7 @@ async function handleApi(req, res, urlPath) {
     // счётчиком выгрузки мест клиентов. Клонируем (normalizeRouteProgress), чтобы
     // вычисляемые поля unloadTotal/unloadDone/unloadReady не попали в БД.
     const routeResp = () =>
-      ({ ok: true, route: enrichUnloadProgress(normalizeRouteProgress(route), db.labels) });
+      ({ ok: true, route: enrichUnloadProgress(withResolvedBundleNames(normalizeRouteProgress(route), db), db.labels) });
 
     // «Рабочий день завершён» определяется из основного таймера: у водителя в этот
     // день есть закрытый (с указанным концом) work-сегмент. Тогда взять новый

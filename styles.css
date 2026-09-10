@@ -1570,7 +1570,11 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 .report-table .col-name { text-align: center; font-weight: 600; color: var(--ink); min-width: 90px; }
 .report-table .col-dow { font-size: 9px; color: var(--ink-faint); }
 .report-table tbody td.day-offempty { color: transparent; }
-.report-table th.dow-we, .report-table td.dow-we { background: rgba(255, 255, 255, 0.028); }
+/* Выходные дни (сб/вс) — заметно выделяем красным фоном, чтобы визуально
+   отделить нерабочие ячейки табеля от рабочих. Метки статусов (Б/ОТ/ДО и т.п.)
+   внутри ячейки имеют собственный фон и остаются читаемыми поверх. */
+.report-table th.dow-we, .report-table td.dow-we { background: rgba(255, 122, 107, 0.10); }
+.report-table th.dow-we { color: var(--red-soft); }
 
 .report-table td.mark {
   display: inline-grid;
@@ -6353,6 +6357,24 @@ button.icon-btn svg,
 @media (max-width: 520px) {
   .net-banner-inner { flex-wrap: wrap; }
 }
+
+/* Полоса «доступно обновление»: нейтральный сине-зелёный фон, чтобы не путать
+   с красной полосой «нет связи». Прячется по кнопке «Позже». */
+.upd-banner {
+  background: linear-gradient(180deg, rgba(80, 180, 255, 0.16), rgba(80, 180, 255, 0.07));
+  border-bottom: 1px solid rgba(80, 180, 255, 0.4);
+}
+.upd-banner .net-banner-icon { color: var(--accent, #4fb3ff); }
+.upd-banner-btn {
+  background: rgba(80, 180, 255, 0.12);
+  border: 1px solid rgba(80, 180, 255, 0.45);
+  color: var(--ink);
+}
+.upd-banner-btn:hover {
+  background: rgba(80, 180, 255, 0.22);
+  border-color: rgba(80, 180, 255, 0.7);
+}
+.upd-banner-btn#updApply { font-weight: 600; }
 
 /* ===== Сканирование этикеток отгрузки (модалка печати) ===== */
 .print-scan-block {
