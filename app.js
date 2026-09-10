@@ -3,6 +3,7 @@
 
   // UI-only preference keeps living in localStorage (per browser). Everything else is server-side.
   const COLLAPSE_KEY = "biotime.collapsed";
+  const FINISH_KEY = "biotime.finishKey";
   const CAL_START = { year: 2026, month: 8 }; // сентябрь 2026 (month 0-based)
 
   // ---- State (server-backed) ----
@@ -25,7 +26,13 @@
     phase: "idle",     // idle | working | paused | finished
     segments: [],      // today's segments
     dayKey: null,
-    finishKey: null,   // day the employee explicitly finished ("Завершить работу")
+    // День, который сотрудник явно завершил («Завершить работу»). Персистится в
+    // localStorage: если завершение не успело уйти на сервер (нет сети) и страница
+    // перезагрузится, флаг не потеряется — таймер не «оживёт» и не будет
+    // автозакрыт в неверный момент (см. refreshToday).
+    finishKey: (() => {
+      try { return localStorage.getItem(FINISH_KEY) || null; } catch { return null; }
+    })(),
     collapsed: collapsedSet(),
     loading: true,
   };
@@ -350,7 +357,19 @@
     updateOfflineBadge(ops.length);
     for (const op of ops) {
       try {
-        if (op.kind === "scan") {
+        if (op.kind === "save_day") {
+          // Завершение рабочего дня, отправленное в офлайн-очередь при потере сети:
+          // доставляем закрытое состояние дня (сегменты с заданным end), чтобы таймер
+          // не остался открытым на сервере и не был автозакрыт в неверный момент.
+          await api("/api/day", {
+            method: "POST",
+            body: JSON.stringify({
+              key: op.dayKey,
+              segments: Array.isArray(op.segments) ? op.segments : [],
+              clientTime: op.clientTime,
+            }),
+          });
+        } else if (op.kind === "scan") {
           await api("/api/labels/scan", {
             method: "POST",
             body: JSON.stringify({
@@ -498,10 +517,35 @@
       if (prev.end == null && sg.end != null) seen.set(key, sg);
     }
     state.segments = [...seen.values()];
-    await api("/api/day", {
-      method: "POST",
-      body: JSON.stringify({ key: state.dayKey, segments: state.segments }),
-    });
+    try {
+      await api("/api/day", {
+        method: "POST",
+        body: JSON.stringify({ key: state.dayKey, segments: state.segments }),
+      });
+      // Успешная доставка — если в очереди была отложенная запись этого дня, снимаем её,
+      // чтобы она не перезаписала уже актуальные данные более поздним сохранением.
+      const ops = readOfflineOps();
+      const leftover = ops.filter((o) => !(o.kind === "save_day" && o.dayKey === state.dayKey));
+      if (leftover.length !== ops.length) writeOfflineOps(leftover);
+    } catch (e) {
+      if (isOfflineError(e)) {
+        // НЕТ СЕТИ: закрытие дня («Завершить работу») не должно теряться. Если нажать
+        // «Завершить» без связи, сегменты уже закрыты в памяти (end задан), но на сервер
+        // не ушли — сервер считал бы таймер открытым и автозакрыл бы его позже в неверный
+        // момент (вплоть до «завершил 18:19, а записалось 02:59»). Кладём закрытое состояние
+        // дня в офлайн-очередь и доставим его при появлении сети.
+        enqueueOfflineOp({
+          id: offlineOpId(),
+          kind: "save_day",
+          dayKey: state.dayKey,
+          segments: state.segments.slice(),
+          clientTime: Date.now(),
+        });
+        showOfflineBadge(readOfflineOps().length);
+      } else {
+        throw e; // Серверная ошибка не про сеть — пробрасываем, как и раньше.
+      }
+    }
     // Update the local days cache so the calendar reflects the change immediately.
     if (!state.days[state.dayKey]) state.days[state.dayKey] = {};
     if (!(state.days[state.dayKey].byEmployee && typeof state.days[state.dayKey].byEmployee === "object")) {
@@ -1085,6 +1129,7 @@
     }
     state.phase = "finished";
     state.finishKey = state.dayKey; // day finished — prevent an open segment re-living
+    try { localStorage.setItem(FINISH_KEY, state.dayKey || ""); } catch { /* приватный режим */ }
     syncWorkActiveToNative(false);
     render();
     showFinishToast();

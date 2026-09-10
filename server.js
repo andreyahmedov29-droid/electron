@@ -600,11 +600,19 @@ function maybeAutoBackup(now) {
   return writeAutoBackup(true);
 }
 
-// Timestamp of the last millisecond of the local day containing `ts`
-// (23:59:59.999) — the instant an employee's running timer belongs to.
+// Timestamp of the last millisecond (23:59:59.999) of the COMPANY day containing
+// `ts` — the instant an employee's running timer belongs to. Считаем в поясе
+// КОМПАНИИ (serverTzOffset(), по умолчанию UTC+3), а не в системном поясе
+// сервера (часто UTC): иначе автозакрытие незакрытого таймера ставит конец в
+// 23:59 UTC, что в МСК показывается как 02:59 СЛЕДУЮЩЕГО дня — «завершил
+// 18:19, а записалось 02:59».
 function endOfDayMs(ts) {
-  const d = new Date(ts);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() - 1;
+  const off = serverTzOffset(); // +180 — UTC+3 Москва
+  // Приводим ts к «компанийному» календарному дню: смещаем на off и берём дату по UTC.
+  const shifted = new Date(ts + off * 60000);
+  // Конец текущего компанийного дня = начало СЛЕДУЮЩЕГО компанийного дня минус 1 мс:
+  // следующий день начинается в 00:00 по компанийному = в (00:00 − off) по UTC.
+  return Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate() + 1) - off * 60000 - 1;
 }
 
 // Auto-close any open work timer (`end == null`) whose day has already ended, so
