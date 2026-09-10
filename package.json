@@ -1,6 +1,6 @@
 {
   "name": "biotime-desktop",
-  "version": "1.1.16",
+  "version": "1.1.17",
   "description": "BIOTIME — десктоп-приложение для Windows (Electron) с автообновлением",
   "author": "ПрофМаркетСистем",
   "main": "electron/main.js",
