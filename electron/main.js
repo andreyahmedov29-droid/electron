@@ -32,6 +32,11 @@ const { autoUpdater } = require("electron-updater");
 // Токен в код/сборку не включается.
 let _cfg = {};
 let _cfgPathUsed = "";
+// Актуальный адрес веб-версии. Он же используется в «автомиграции»: если в
+// biotime.config.json на компьютере лежит устаревший appUrl, его не нужно чистить
+// вручную — при первом запуске новой сборки Electron сам заменит его на этот.
+const CURRENT_APP_URL = "https://app-0191dabf28dc.vibecode.bitrix24.tech";
+const LEGACY_APP_URLS = ["app-2660de1a180b.vibecode.bitrix24.tech"];
 try {
   // Толерантный поиск конфига: папки userData ("BIOTIME"/"biotime-desktop") и
   // имена файла (biotime.config.json / biotime.config), чтобы не зависеть от того,
@@ -54,6 +59,22 @@ try {
       }
     }
   }
+  // Автомиграция: устаревший appUrl из конфига заменяем на актуальный и сразу
+  // перезаписываем файл, чтобы на каждом компьютере новая ссылка подхватилась
+  // сама, без ручного удаления/правки конфига на каждой машине.
+  if (_cfg && typeof _cfg.appUrl === "string" && _cfgPathUsed) {
+    const old = String(_cfg.appUrl);
+    const outdated = LEGACY_APP_URLS.some((l) => old.indexOf(l) >= 0);
+    if (outdated) {
+      _cfg.appUrl = CURRENT_APP_URL;
+      try {
+        fs.writeFileSync(_cfgPathUsed, JSON.stringify(_cfg, null, 2), "utf8");
+        console.log("[cfg] Устаревший appUrl обновлён на " + CURRENT_APP_URL + " (" + _cfgPathUsed + ")");
+      } catch (e) {
+        console.log("[cfg] Не удалось перезаписать конфиг:", e && e.message);
+      }
+    }
+  }
 } catch { /* необязательный конфиг — при отсутствии используем env/fallback */ }
 console.log(_cfgPathUsed
   ? "[cfg] Конфиг прочитан: " + _cfgPathUsed
@@ -62,7 +83,7 @@ console.log(_cfgPathUsed
 const WEB_APP_URL =
   process.env.BIOTIME_APP_URL ||
   (_cfg.appUrl && String(_cfg.appUrl)) ||
-  "https://app-0191dabf28dc.vibecode.bitrix24.tech";
+  CURRENT_APP_URL;
 const ACCESS_TOKEN = process.env.BIOTIME_ACCESS_TOKEN || (_cfg.accessToken || "");
 // Имя принтера для прямой печати этикеток (без диалога). Если не задано —
 // печатаем на принтер по умолчанию Windows. Пропишите в biotime.config.json
