@@ -17,13 +17,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;800&family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=RELEASE" />
 </head>
 <body>
   <div class="noise"></div>
   <div class="grid-bg"></div>
 
   <header class="topbar">
+    <div class="topbar-inner">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">
         <svg class="brand-mark-svg" viewBox="0 0 48 48" width="30" height="30" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -71,6 +72,7 @@
       <button class="tab admin-only-drivers" data-tab="drivers" hidden>Маршрутизация</button>
       <button class="tab driver-only-tab" data-tab="myroutes" hidden>Мои маршруты</button>
       <button class="tab shipment-only" data-tab="shipment" hidden>Отгрузка</button>
+      <button class="tab" data-tab="scanlog">Журнал</button>
     </nav>
     <div class="topbar-right">
       <div class="user-chip" id="userChip" hidden>
@@ -85,6 +87,7 @@
         </svg>
       </button>
     </div>
+    </div>
   </header>
 
   <!-- Полоса «нет связи с сервером»: появляется при сетевых сбоях (в т.ч. когда
@@ -94,6 +97,18 @@
       <span class="net-banner-icon" aria-hidden="true">⚠</span>
       <span class="net-banner-text" id="netBannerText">Нет связи с сервером. Проверьте интернет и отключите VPN, если он блокирует приложение.</span>
       <button type="button" class="mini-btn net-banner-btn" id="netRetry">Проверить</button>
+    </div>
+  </div>
+
+  <!-- Полоса «доступно обновление»: появляется, когда серверная версия приложения
+       (service worker) обновилась, но страница ещё работает на старой. Релоад
+       происходит ТОЛЬКО по кнопке — чтобы не прерывать сканирование на складе. -->
+  <div class="net-banner upd-banner" id="updBanner" role="status" hidden>
+    <div class="net-banner-inner">
+      <span class="net-banner-icon" aria-hidden="true">🔄</span>
+      <span class="net-banner-text" id="updBannerText">Доступно новое обновление приложения.</span>
+      <button type="button" class="mini-btn net-banner-btn upd-banner-btn" id="updLater">Позже</button>
+      <button type="button" class="mini-btn net-banner-btn upd-banner-btn" id="updApply">Обновить</button>
     </div>
   </div>
 
@@ -167,7 +182,6 @@
         </div>
         <div class="delivery-toolbar">
           <input id="deliveryDateFilter" class="text-input routes-date-filter" type="date" />
-          <button type="button" class="mini-btn" id="deliveryRefresh">Обновить</button>
         </div>
         <div class="delivery-list" id="deliveryList">
           <div class="empty-hint">Загрузка...</div>
@@ -350,8 +364,12 @@
                   <label class="drv-field-label" for="bundleAddress">Общий адрес связки</label>
                   <input id="bundleAddress" class="text-input" type="text" placeholder="Адрес, общий для выбранных контрагентов" />
                 </div>
+                <div class="bundle-field">
+                  <label class="drv-field-label" for="bundleName">Единое название (необязательно)</label>
+                  <input id="bundleName" class="text-input" type="text" placeholder="Например: STP, Торговый дом … (покажется в отгрузке вместо адреса)" />
+                </div>
                 <div class="bundle-actions">
-                  <button type="button" class="drv-mini-btn drv-mini-primary" id="bundleCreateBtn">Связать на адрес</button>
+                  <button type="button" class="drv-mini-btn drv-mini-primary" id="bundleCreateBtn">Связать</button>
                 </div>
               </div>
 
@@ -385,6 +403,14 @@
                 <select id="driverRouteDriver" class="select-input"></select>
               </div>
             </div>
+            <div class="drv-field">
+              <label class="drv-field-label" for="driverRouteName">Название маршрута</label>
+              <input id="driverRouteName" class="text-input" type="text"
+                value=""
+                placeholder='Напр.: "УТРО", "Рейс 2", "Доставка на юг"'
+                title="Название маршрута. Укажите своё название — оно будет показано в списке маршрутов. Можно создать сколько угодно маршрутов на день с разными названиями."
+                autocomplete="off" />
+            </div>
 
             <div class="drv-route-label">Последовательность остановок</div>
             <div class="route-multiselect" id="driverRouteClients">
@@ -402,6 +428,11 @@
                 <span class="drv-chip drv-chip-amber" id="routeSelectedCount">0</span>
               </div>
               <div class="rms-selected" id="routeClientSelected"></div>
+            </div>
+
+            <div class="drv-route-waybills" id="routeWaybillsBlock" hidden>
+              <div class="drv-route-label">Расходные накладные (обязательно перед созданием)</div>
+              <div class="route-waybills-list" id="routeWaybillsList"></div>
             </div>
 
             <div class="rms-auto-route">
@@ -463,7 +494,6 @@
             <div class="drv-report-sub">Дашборд движения водителей · пробег и время по датам</div>
             <div class="driver-map-toolbar">
               <input id="motionDateFilter" class="text-input routes-date-filter" type="date" />
-              <button type="button" class="mini-btn" id="motionRefresh">Обновить</button>
             </div>
             <div class="report-summary motion-summary" id="motionSummary">
               <div class="report-stat">
@@ -477,6 +507,10 @@
               <div class="report-stat">
                 <span class="report-stat-value" id="motionMove">0</span>
                 <span class="report-stat-label">в пути</span>
+              </div>
+              <div class="report-stat">
+                <span class="report-stat-value" id="motionSite">0</span>
+                <span class="report-stat-label">сдача</span>
               </div>
               <div class="report-stat">
                 <span class="report-stat-value" id="motionLunch">0</span>
@@ -519,8 +553,8 @@
             <div class="drv-report-sub">Живая карта водителей · обновляется автоматически</div>
             <div class="driver-map-toolbar">
               <span class="drv-chip" id="driverMapCount">—</span>
+              <span class="drv-chip drv-chip-diag" id="driverTrackStatus" hidden></span>
               <input id="driverTrackDate" class="text-input routes-date-filter" type="date" title="Выбрать день для отображения маршрутов" />
-              <button type="button" class="mini-btn" id="driverMapRefresh">Обновить</button>
             </div>
             <div class="driver-map" id="driverMap">
               <div class="empty-hint" id="driverMapHint">Загрузка карты…</div>
@@ -560,12 +594,59 @@
           <div>
             <h2 class="cal-title">Отгрузка</h2>
             <p class="cal-subtitle">Маршруты водителей, ожидающие отгрузки. Пока склад не завершил отгрузку, водитель не может начать маршрут.</p>
+            <div class="shipment-subtabs">
+              <div class="shipment-subtab-group">
+                <button type="button" class="shipment-subtab is-active" id="shipmentSubtabActive">В работе</button>
+              </div>
+              <div class="shipment-subtab-group">
+                <button type="button" class="shipment-subtab" id="shipmentSubtabDone">Завершённые отгрузки</button>
+              </div>
+            </div>
           </div>
-          <button class="ctrl ctrl-soft" id="shipmentRefresh">Обновить</button>
         </div>
-        <div class="shipment-list" id="shipmentList">
-          <div class="empty-hint">Загрузка маршрутов…</div>
+        <div class="shipment-list" id="shipmentListActive"></div>
+        <div class="shipment-list" id="shipmentListDone" hidden></div>
+      </section>
+    </section>
+
+    <!-- Журнал сканирования мест (погрузка на складе и выгрузка водителем).
+         Видят все пользователи. Записи: дата/время до секунды, пользователь,
+         действие, код этикетки, клиент, адрес, статус. -->
+    <section class="tab-page" id="page-scanlog" hidden>
+      <section class="cal-card">
+        <div class="cal-card-head">
+          <div>
+            <h2 class="cal-title">Журнал</h2>
+            <p class="cal-subtitle">Сканирование мест — погрузка на складе и выгрузка водителем, с точным временем до секунды.</p>
+          </div>
         </div>
+
+        <div class="scanlog-filters" id="scanlogFilters">
+          <button type="button" class="mini-btn scanlog-filter is-active" data-action="load" role="tab">Погрузка</button>
+          <button type="button" class="mini-btn scanlog-filter" data-action="unload" role="tab">Выгрузка</button>
+          <button type="button" class="mini-btn scanlog-filter" data-action="waybill" role="tab">Сборка</button>
+        </div>
+
+        <div class="scanlog-ranges" id="scanlogRanges">
+          <label class="scanlog-filter-field scanlog-search-field">
+            <span class="scanlog-filter-caption">Поиск по клиенту</span>
+            <input class="scanlog-search" id="scanlogSearch" type="text" autocomplete="off" spellcheck="false"
+              placeholder="Введите название клиента…" />
+          </label>
+          <label class="scanlog-filter-field scanlog-date-field" id="scanlogLoadDateField">
+            <span class="scanlog-filter-caption">Отгрузка за дату</span>
+            <input class="scanlog-date" id="scanlogDateLoad" type="date" />
+          </label>
+          <label class="scanlog-filter-field scanlog-date-field" id="scanlogUnloadDateField" hidden>
+            <span class="scanlog-filter-caption">Выгрузка за дату</span>
+            <input class="scanlog-date" id="scanlogDateUnload" type="date" />
+          </label>
+        </div>
+
+        <div class="scanlog-wrap">
+          <table class="scanlog-table" id="scanlogTable"></table>
+        </div>
+        <div class="scanlog-empty" id="scanlogEmpty" hidden>Пока нет записей о сканировании мест.</div>
       </section>
     </section>
   </main>
@@ -574,7 +655,7 @@
   <dialog class="modal" id="printModal">
     <div class="account-card">
       <div class="modal-head">
-        <h3>Печать этикеток</h3>
+        <h3>Отгрузка</h3>
         <button class="icon-btn modal-close" id="printClose" aria-label="Закрыть">&times;</button>
       </div>
       <div class="driver-route-form-grid">
@@ -588,6 +669,8 @@
       <div class="route-confirm-actions">
         <button class="mini-btn route-confirm-cancel" id="printCancel" type="button">Отмена</button>
         <button class="mini-btn route-confirm-ok" id="printConfirm" type="button">Печать этикеток</button>
+        <button class="mini-btn route-confirm-append" id="printAppendBtn" type="button" title="Допечатать дополнительные места, не трогая уже созданные">Допечатать места</button>
+        <button class="mini-btn route-confirm-ok route-confirm-danger" id="printShipmentComplete" type="button">Завершить отгрузку</button>
       </div>
       <div class="print-scan-block">
         <!-- Выгрузка мест теперь выполняется водителем в «Моих маршрутах»,
@@ -595,9 +678,41 @@
         <div class="drv-route-label">Сканирование мест (статусы)</div>
         <div class="print-scan-actions">
           <button class="mini-btn" id="scanLoadBtn" type="button">Сканировать: погрузка</button>
+          <input class="text-input print-scan-input" id="printScanInput" type="text"
+            autocomplete="off" spellcheck="false"
+            placeholder="Код этикетки (USB-сканер)" />
         </div>
+        <div class="print-scan-source">
+          <span class="print-scan-source-label">Сканер:</span>
+          <button type="button" class="mini-btn print-scan-src" data-src="camera" id="scanSrcCamera" title="Использовать камеру телефона">📷 Камера</button>
+          <button type="button" class="mini-btn print-scan-src" data-src="external" id="scanSrcExternal" title="Использовать встроенный/внешний сканер ТСД (кнопка сканера, клавиатурный ввод)">📡 Внешний (ТСД)</button>
+        </div>
+        <div class="print-scan-hint" id="printScanHint" hidden></div>
         <div class="print-scan-status" id="printScanStatus"></div>
         <div class="print-labels-list" id="printLabelsList"></div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Допечатка дополнительных мест (отдельное окно): выбор ЛЮБОГО клиента
+       маршрута — в т.ч. уже отгруженного/закрытого — и допечатка этикеток.
+       Данные сохраняются на сервере при каждом допечатывании (автосохранение). -->
+  <dialog class="modal" id="appendModal">
+    <div class="account-card">
+      <div class="modal-head">
+        <h3>Допечатать места</h3>
+        <button class="icon-btn modal-close" id="appendClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="append-hint">Выберите клиента (включая уже отгруженных) и укажите, сколько новых мест допечатать. Существующие этикетки и отгрузка не меняются.</p>
+      <div class="drv-route-label">Клиент
+        <div class="print-clients-tiles" id="appendClientsTiles"></div>
+      </div>
+      <div class="drv-route-label">Доп. мест
+        <input class="text-input" type="number" id="appendPlacesQty" min="1" max="200" value="1" />
+      </div>
+      <div class="route-confirm-actions">
+        <button class="mini-btn route-confirm-cancel" id="appendCancel" type="button">Закрыть</button>
+        <button class="mini-btn route-confirm-append" id="appendConfirm" type="button">Допечатать</button>
       </div>
     </div>
   </dialog>
@@ -620,6 +735,7 @@
         <button class="atab" data-sub="today">Время работы</button>
         <button class="atab" data-sub="groups">Группы</button>
         <button class="atab" data-sub="salaries">Оклады и дни</button>
+        <button class="atab" data-sub="multiplier">Множитель</button>
         <button class="atab" data-sub="log">Журнал</button>
         <button class="atab" data-sub="settings">Параметры</button>
         <button class="atab" data-sub="admins">Администраторы</button>
@@ -704,6 +820,61 @@
           <button class="jtab" data-jkind="manual">Время</button>
         </nav>
         <div class="journal-list" id="logList" data-jkind="status"></div>
+      </div>
+
+      <!-- Множитель подработки: индивидуальные правила (сотрудник/группа/все + дни недели) -->
+      <div class="asub" data-sub="multiplier" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Множитель подработки</h4>
+            <p class="sub-note">Повышенный тариф к переработке: для конкретного сотрудника, группы или всех, в выбранные дни недели.</p>
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading" id="multRuleFormTitle">Новое правило</h5>
+          <div class="multiplier-grid">
+            <div class="field">
+              <label for="multRuleTarget">Для кого</label>
+              <select id="multRuleTarget" class="select-input">
+                <option value="all">Для всех сотрудников</option>
+                <option value="staff">Конкретный сотрудник</option>
+                <option value="group">Группа сотрудников</option>
+              </select>
+            </div>
+            <div class="field" id="multRuleSubjectField">
+              <label id="multRuleSubjectLabel" for="multRuleSubject">Сотрудник / группа</label>
+              <select id="multRuleSubject" class="select-input"></select>
+            </div>
+            <div class="field">
+              <label for="multRuleDate">День</label>
+              <input id="multRuleDate" class="text-input" type="date" />
+            </div>
+            <div class="field">
+              <label for="multRuleFrom">С</label>
+              <input id="multRuleFrom" class="text-input" type="time" value="18:00" />
+            </div>
+            <div class="field">
+              <label for="multRuleTo">До</label>
+              <input id="multRuleTo" class="text-input" type="time" value="21:00" />
+            </div>
+            <div class="field">
+              <label for="multRuleValue">Множитель (×)</label>
+              <input id="multRuleValue" class="text-input" type="number" min="1" step="0.1" value="1.5" />
+            </div>
+          </div>
+          <span class="group-scope-label">Повышенный множитель действует в этот день с указанного времени до указанного (по переработке, попавшей в интервал). День обязателен: если день не выбран — множитель не применяется.</span>
+          <div class="mult-rule-actions">
+            <button type="button" class="ctrl ctrl-primary" id="multRuleAddBtn">Добавить правило</button>
+            <button type="button" class="ctrl ctrl-soft" id="multRuleCancelBtn" hidden>Отмена</button>
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading">Действующие правила</h5>
+          <div class="multiplier-status" id="multiplierStatus">—</div>
+          <div class="mult-rule-list" id="multRuleList"></div>
+        </div>
       </div>
 
       <!-- Настройки -->
@@ -812,6 +983,44 @@
               <span class="slider"></span>
             </label>
           </div>
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <div class="toggle-title">Водитель может менять порядок точек</div>
+              <div class="toggle-sub">Разрешить водителю в активном маршруте переставлять не пройденные точки (включая текущую, к которой он едет). Сданные точки и точка, где водитель стоит, остаются на месте.</div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="allowDriverReorderPoints" />
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="setting-row">
+            <div class="setting-text">
+              <span class="setting-title">Расходные накладные при сборке</span>
+              <span class="setting-sub">Разрешить складу загружать расходную накладную по маршруту/клиенту и собирать товар по сканированию штрихкода артикула (раздел «Отгрузка»). Если выключено — возможность скрыта.</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="allowWaybill" />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading">Удаление завершённых маршрутов</h5>
+          <p class="toggle-sub">Завершённый маршрут (водитель сдал все точки) по умолчанию удалить нельзя — так хранится история доставки. Задайте код ниже — и администратор сможет удалить завершённый маршрут, введя его по нажатию на замок 🔒 в карточке маршрута. Код хранится на сервере, водители его не видят.</p>
+          <div class="field">
+            <label for="routeDeleteCode">Код удаления</label>
+            <input id="routeDeleteCode" class="text-input" type="password" autocomplete="off" placeholder="например, 1234" />
+          </div>
+        </div>
+
+        <div class="params-section">
+          <h5 class="params-heading">Журнал сканирования</h5>
+          <p class="toggle-sub">Сколько записей журнала сканирования мест (погрузка/выгрузка) хранить. Более старые записи автоматически отбрасываются, чтобы база не разрасталась.</p>
+          <div class="field">
+            <label for="scanLogLimit">Хранить записей журнала</label>
+            <input id="scanLogLimit" class="text-input" type="number" min="100" max="200000" step="100" placeholder="30000" />
+          </div>
         </div>
 
         <div class="params-section">
@@ -825,22 +1034,9 @@
 
         <div class="params-section">
           <h5 class="params-heading">Множитель подработки</h5>
-          <p class="toggle-sub">Коэффициент к ставке переработки, действующий в указанный период (например 1,5).</p>
-          <div class="multiplier-grid">
-            <div class="field">
-              <label for="multiplierVal">Множитель</label>
-              <input id="multiplierVal" class="text-input" type="number" min="1" step="0.1" value="1.0" />
-            </div>
-            <div class="field">
-              <label for="multiplierFrom">Действует с</label>
-              <input id="multiplierFrom" class="text-input" type="date" />
-            </div>
-            <div class="field">
-              <label for="multiplierTo">по</label>
-              <input id="multiplierTo" class="text-input" type="date" />
-            </div>
-          </div>
-          <div class="multiplier-status" id="multiplierStatus">не активен</div>
+          <p class="toggle-sub">Правила повышенного тарифа (по сотрудникам, группам и дням недели) настраиваются на отдельной вкладке «Множитель».</p>
+          <button type="button" class="ctrl" id="goToMultiplierTab">Открыть настройки множителя</button>
+          <div class="multiplier-status" id="multiplierStatus">—</div>
         </div>
 
         <div class="params-section">
@@ -941,9 +1137,36 @@
         <div class="account-row"><span class="account-label">Администратор</span><span class="account-value" id="acctAdmin">—</span></div>
         <div class="account-row"><span class="account-label">Версия</span><span class="account-value" id="acctVersion">—</span></div>
         <div class="account-note" id="acctReason" hidden></div>
+        <button type="button" class="mini-btn account-logout-btn" id="accountLogout">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+            <polyline points="16 17 21 12 16 7"/>
+            <line x1="21" y1="12" x2="9" y2="12"/>
+          </svg>
+          <span>Выйти</span>
+        </button>
       </div>
     </div>
   </dialog>
+
+  <!-- Экран «Вход в приложение»: появляется после выхода. Обычная форма
+       логин/пароль не нужна — вход уже выполнен шлюзом платформы, поэтому
+       экран сообщает о выходе и кнопкой «Войти» возвращает (шлюз сам
+       подтвердит сессию). -->
+  <div class="auth-screen" id="authScreen" hidden>
+    <div class="auth-screen-card">
+      <span class="logo-biotime-mark" aria-hidden="true">
+        <svg viewBox="0 0 48 48" width="48" height="48" fill="none">
+          <circle cx="24" cy="24" r="22" fill="#0b2e33"/>
+          <path d="M24 13v20M19 18l5-5 5 5" stroke="#f6f3ea" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      <h1 class="auth-screen-title">Вы вышли из приложения</h1>
+      <p class="auth-screen-sub">Вход выполняется автоматически через Битрикс24. Чтобы продолжить работу, вернитесь — система сама распознает вашу учётную запись.</p>
+      <button type="button" class="ctrl ctrl-primary auth-screen-btn" id="authLoginBtn">Войти</button>
+      <p class="auth-screen-hint" id="authHint">После входа вы сможете отмечать время работы, оформлять доставку и видеть свою зарплату.</p>
+    </div>
+  </div>
 
   <!-- Доступно обновление Android-приложения: веб-интерфейс (со сессией шлюза)
        опрашивает /api/app/update-info и показывает окно, когда на сервере версия
@@ -994,6 +1217,73 @@
     </div>
   </dialog>
 
+  <dialog class="modal" id="routeDeleteModal">
+    <div class="postpone-card">
+      <div class="modal-head">
+        <h3>Удалить маршрут?</h3>
+        <button class="icon-btn modal-close" id="routeDeleteClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="modal-note">Это удалит маршрут, его историю доставки и этикетки мест. Чтобы подтвердить удаление, введите код из «Параметры»:</p>
+      <input class="text-input" id="routeDeleteInput" type="password" autocomplete="off" placeholder="Код удаления" />
+      <div class="route-confirm-actions" style="margin-top:16px; display:flex; gap:8px; justify-content:flex-end;">
+        <button type="button" class="ctrl" id="routeDeleteCancel">Отмена</button>
+        <button type="button" class="ctrl ctrl-finish" id="routeDeleteConfirm">Удалить маршрут</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Ручной ввод кода этикетки при выгрузке (водитель): неблокирующая модалка.
+       Заменяет нативный prompt(), который в Android WebView без WebChromeClient
+       зависает — из-за него «на каждой точке» перестают нажиматься кнопки и
+       приходится перезапускать приложение. -->
+  <dialog class="modal" id="driverScanModal">
+    <div class="postpone-card">
+      <div class="modal-head">
+        <h3>Код этикетки</h3>
+        <button class="icon-btn modal-close" id="driverScanClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="modal-note">Сканера нет на этом устройстве. Введите код этикетки (выгрузка):</p>
+      <input class="text-input" id="driverScanInput" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Код этикетки" enterkeyhint="go" />
+      <div class="route-confirm-actions" style="margin-top:16px; display:flex; gap:8px; justify-content:flex-end;">
+        <button type="button" class="ctrl" id="driverScanCancel">Отмена</button>
+        <button type="button" class="ctrl ctrl-finish" id="driverScanOk">Сканировать</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Модалка расходной накладной (склад при сборке) -->
+  <dialog class="modal" id="waybillModal">
+    <div class="postpone-card">
+      <div class="modal-head">
+        <h3 id="waybillTitle">Расходная накладная</h3>
+        <button class="icon-btn modal-close" id="waybillClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="waybill-body">
+        <div class="waybill-status" id="waybillStatus"></div>
+        <div class="waybill-scan-row">
+          <input class="text-input" id="waybillArtInput" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="Штрихкод / артикул" enterkeyhint="go" />
+          <input class="text-input waybill-qty-input" id="waybillQtyInput" type="number" min="1" step="1"
+                 value="1" title="Кол-во на стикере (если >1)" />
+          <button type="button" class="ctrl ctrl-primary" id="waybillScanBtn">Сканировать</button>
+        </div>
+        <div class="waybill-box-row">
+          <span class="waybill-box-cur" id="waybillBoxCur">Бокс: —</span>
+          <button type="button" class="ctrl ctrl-soft" id="waybillNewBoxBtn">Новый бокс</button>
+        </div>
+        <div class="waybill-del-box-row">
+          <select id="waybillDelBoxSel" class="select-input"></select>
+          <button type="button" class="ctrl ctrl-danger" id="waybillDelBoxBtn">Удалить бокс</button>
+        </div>
+        <div class="waybill-list" id="waybillList"></div>
+        <div class="waybill-finish-row">
+          <button type="button" class="ctrl ctrl-primary" id="waybillFinishBtn" disabled>Завершить сборку</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
   <div class="toast" id="toast"></div>
 
   <!-- Оверлей живого прогресса сканирования: крупно показывает клиента и
@@ -1025,6 +1315,6 @@
     }
   </script>
   <script src="qr.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=RELEASE"></script>
 </body>
 </html>

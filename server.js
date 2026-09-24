@@ -1,11 +1,83 @@
 const http = require("node:http");
 const https = require("node:https");
+const zlib = require("node:zlib");
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
+
+// ---- Единый источник версии (сервер / APK / desktop) ----
+// Файл version.json в корне проекта задаёт актуальную версию приложения.
+// APK-воркфлоу и сервер читают этот же файл: человек поднимает версию один раз
+// (правка version.json), а всё остальное подхватывается автоматически.
+const VERSION_FILE = path.join(ROOT, "version.json");
+function readVersionSource() {
+  try {
+    if (fs.existsSync(VERSION_FILE)) {
+      const raw = fs.readFileSync(VERSION_FILE, "utf8");
+      const j = JSON.parse(raw);
+      return {
+        versionCode: Number(j.versionCode) || 0,
+        versionName: String(j.versionName || ""),
+        notes: String(j.notes || ""),
+      };
+    }
+  } catch { /* невалидный/отсутствующий — вернём пустой объект ниже */ }
+  return { versionCode: 0, versionName: "", notes: "" };
+}
+function writeVersionSource(versionCode, versionName, notes) {
+  try {
+    const data = {
+      versionCode: Number(versionCode) || 1,
+      versionName: String(versionName || "1.0.0"),
+      notes: String(notes || ""),
+    };
+    fs.writeFileSync(VERSION_FILE, JSON.stringify(data, null, 2), "utf8");
+  } catch (err) {
+    console.error("[update] не удалось записать version.json:", err && (err.message || err));
+  }
+}
+
+// ---- Удалённый источник актуальной версии APK (обход шлюза) ----
+// Приложение Android задеплоено за Black Hole шлюзом, который авторизует КАЖДЫЙ
+// запрос и режет безсессионные POST (CI не может достучаться до /api/app/update,
+// возвращается 401 BH_LOGIN_REQUIRED до кода приложения). Поэтому версию APK
+// сервер получает НЕ от CI, а САМ — читая единый источник актуальной версии
+// прямо из публичного репозитория на GitHub (raw-файл version.json, который
+// CI обновляет автоинкрементом при каждом push). raw.githubusercontent доступен
+// без авторизации и не за шлюзом, поэтому update-info отдаёт актуальную версию
+// без ручной правки параметров и без токена.
+const REMOTE_VERSION_URL =
+  process.env.APP_UPDATE_SOURCE_URL ||
+  "https://raw.githubusercontent.com/andreyahmedov29-droid/biotime-android/main/version.json";
+// Кэш, чтобы не дёргать GitHub на каждый запрос (TTL ниже).
+let remoteApkCache = null;
+async function fetchRemoteApkVersion() {
+  const force = false;
+  if (remoteApkCache && Date.now() - remoteApkCache.fetchedAt < (REMOTE_TTL_MS || 60000)) {
+    return remoteApkCache.value;
+  }
+  try {
+    const res = await fetch(REMOTE_VERSION_URL, { method: "GET" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const j = await res.json();
+    const val = {
+      versionCode: Number(j.versionCode) || 0,
+      versionName: String(j.versionName || ""),
+      notes: String(j.notes || ""),
+    };
+    remoteApkCache = { fetchedAt: Date.now(), value: val };
+    return val;
+  } catch (err) {
+    // Если не удалось прочитать GitHub — возвращаем null, вызывающий код
+    // откатится на локальные источники (version.json сервера / env / дефолт).
+    remoteApkCache = { fetchedAt: Date.now(), value: null };
+    return null;
+  }
+}
+const REMOTE_TTL_MS = Number(process.env.APP_UPDATE_SOURCE_TTL_MS || 60000);
 
 // ---- Persistent storage in /data (survives redeploy) ----
 // Resolve with fallback so local runs still work.
@@ -145,11 +217,15 @@ function osrmMatchTrack(pts) {
 // Привязка трека к дорогам с разбиением на чанки (OSRM лимитирует число точек
 // на один запрос). Возвращает Promise<[[lat,lon],...]>; при полном отказе OSRM —
 // исходные точки.
+// Возвращает { path, snapped }: path — массив [[lat,lon],...], snapped — true
+// ТОЛЬКО если реально построена дорожная геометрия (TomTom или OSRM). Если
+// дорожные сервисы недоступны (нет ключей/таймаут/403) — snapped:false, path —
+// исходные точки. Так потребитель не примет «сырые» GPS-точки за дорожный путь.
 async function snapTrackToRoads(raw) {
   const clean = (raw || []).filter((p) =>
     Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])
   );
-  if (clean.length < 2) return clean.slice();
+  if (clean.length < 2) return { path: clean.slice(), snapped: false };
   // Эпсилон ~0.0002° (~20 м) — убираем дрожание GPS, сохраняя форму пути.
   let simp = douglasPeucker(clean, 0.0002);
   if (simp.length < 2) simp = [clean[0], clean[clean.length - 1]];
@@ -178,7 +254,7 @@ async function snapTrackToRoads(raw) {
     }
     // Если ни одна точка дорожной геометрии не получена (только прямые) —
     // возвращаем исходный след.
-    return out.length >= 2 ? out : clean.slice();
+    return { path: out.length >= 2 ? out : clean.slice(), snapped: true };
   }
 
   // 2) Fallback — OSRM /match (если когда-нибудь заработает).
@@ -192,7 +268,7 @@ async function snapTrackToRoads(raw) {
     if (snapped && snapped.length >= 2) { out.push(...snapped); anyMatch = true; }
     else { out.push(...chunk); }
   }
-  return anyMatch ? out : clean.slice();
+  return { path: anyMatch ? out : clean.slice(), snapped: anyMatch };
 }
 
 // ---- Automatic backup schedule ----
@@ -235,6 +311,11 @@ const KEY_FROM_ENVIRONMENT =
 const ENV_FILE = loadEnvUpwards(__dirname);
 const PORTAL_BASE = process.env.BITRIX_API_BASE_URL || "";
 const PORTAL_KEY = process.env.BITRIX_API_KEY || "";
+// Портальный прокси отвечает десятками секунд на живом портале (нормальная нагрузка,
+// а не сбой). Таймаут поэтому — минуты, а не секунды: обрыв на 30/60/90 с выбросил бы
+// ответ, который уже был в пути. Зависший портал при этом не должен вешать запрос
+// посетителя бесконечно, поэтому у fetch есть верхний предел ожидания.
+const PORTAL_TIMEOUT_MS = Number(process.env.PORTAL_TIMEOUT_MS || 180_000);
 
 // One honest line at startup: whether the portal key is present and where it came from.
 console.log(
@@ -251,20 +332,47 @@ async function portal(pathname, { method = "GET", body } = {}) {
     err.status = 503;
     throw err;
   }
-  const res = await fetch(`${PORTAL_BASE}${pathname}`, {
-    method,
-    headers: {
-      "X-Api-Key": PORTAL_KEY,
-      Accept: "application/json",
-      ...(body ? { "Content-Type": "application/json" } : {}),
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), PORTAL_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${PORTAL_BASE}${pathname}`, {
+      method,
+      headers: {
+        "X-Api-Key": PORTAL_KEY,
+        Accept: "application/json",
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: ctl.signal,
+    });
+  } catch (e) {
+    // Обрыв по таймауту или сети — это НЕ про ключ: портал просто не успел ответить.
+    clearTimeout(timer);
+    const err = new Error(e && e.name === "AbortError" ? "portal_timeout" : "portal_unreachable");
+    err.status = e && e.name === "AbortError" ? 504 : 502;
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  // Ответ портального прокси — всегда JSON. Но если адрес прокси настроен
+  // неверно (например, на поддомен приложения, а не на основной домен
+  // платформы /v1), Black Hole шлюз может вернуть 401 с ТЕКСТОВЫМ телом
+  // ("Authentication required. This is a Black Hole app subdomain…") вместо JSON.
+  // Неподтверждённый parse не должен вываливаться сырым исключением — превращаем
+  // его в корректную ошибку, а не отдаём клиенту «кашу» шлюза.
+  let data = null;
+  if (text) {
+    try { data = JSON.parse(text); } catch { data = null; }
+  }
   if (!res.ok) {
-    const err = new Error((data && data.error && data.error.message) || `portal_error_${res.status}`);
+    const err = new Error(
+      (data && data.error && data.error.message) ||
+      (res.status === 401 || res.status === 403 ? "portal_auth_failed" : `portal_error_${res.status}`)
+    );
     err.status = res.status;
+    if (res.status === 401 || res.status === 403) err.code = "portal_auth_failed";
     throw err;
   }
   return data && data.data !== undefined ? data.data : data;
@@ -281,6 +389,7 @@ function defaultDb() {
     driverClients: [],  // [{ id, client, address, addedBy, at }] — клиенты для водителей
     driverRoutes: [],   // [{ id, date, driverId, driverName, clients: [{client,address}], addedBy, at }]
     labels: [],         // [{ id, code, routeId, clientIdx, client, address, place, status, at }] — этикетки отгрузки
+    scanLog: [],        // [{ ts, userId, userName, action: "load"|"unload", code, client, routeId, status, warning }] — журнал сканирования мест
     lastSeen: {},       // { "<userId>": ts } — in-memory online presence (not persisted)
     liveLocations: {},  // { "<userId>": { lat, lon, at, routeId } } — in-memory live coords
     tracks: {},         // { "<userId>": [{ lat, lon, at }, ...] } — in-memory live path history
@@ -303,9 +412,31 @@ function defaultDb() {
       // отсканированы не все этикетки (иначе «Завершить выгрузку» блокируется,
       // пока остаются невыгруженные места). Админ включает в «Параметры».
       allowFinishUnloadIncomplete: false,
+      // Когда true, водитель может менять порядок НЕ пройденных (pending) точек
+      // сдачи внутри активного маршрута. Уже сданные / перенесённые точки и
+      // текущая точка водителя (in_transit / on_site) не перемещаются.
+      allowDriverReorderPoints: false,
+      // Код удаления ЗАВЕРШЁННОГО маршрута. Задаётся админом в «Параметры».
+      // Пусто = завершённый маршрут удалить нельзя даже админу (защита истории
+      // доставки). При заданном коде админ может удалить завершённый маршрут,
+      // введя требуемый код. Маршруты В РАБОТЕ (статус active) не удаляются никогда.
+      routeDeleteCode: "",
+      // Сколько записей журнала сканирования мест хранить (настраивается админом
+      // в «Параметры»). Последние scanLogLimit записей; более старые отбрасываются.
+      scanLogLimit: 30000,
       multiplier: 1,
       multFrom: null,
       multTo: null,
+      multGroups: [],
+      // Индивидуальные правила повышенного множителя подработки (новая вкладка
+      // «Множитель»). Каждое: { id, target: "all"|"staff"|"group", targetId, mult,
+      // days: [пн..вс, 0-based] }. Приоритет при поиске: конкретный сотрудник →
+      // группа → «для всех». Старые поля multiplier/multFrom/multTo/multGroups —
+      // легаси-fallback, пока multRules пуст (обратная совместимость).
+      multRules: [],
+      // Разрешить складу загружать расходную накладную по маршруту/клиенту и
+      // собирать товар по скану штрихкода артикула (раздел «Отгрузка»).
+      allowWaybill: false,
       // Версия обновления Android-APK, управляемая из «Параметры» приложения.
       // Пусто = берутся значения из окружения APP_UPDATE_* (или жёсткие дефолты ниже).
       updateVersionCode: null,
@@ -335,6 +466,7 @@ function loadDb() {
       driverClients: Array.isArray(parsed.driverClients) ? parsed.driverClients : base.driverClients,
       driverRoutes: Array.isArray(parsed.driverRoutes) ? parsed.driverRoutes : base.driverRoutes,
       labels: Array.isArray(parsed.labels) ? parsed.labels : base.labels,
+      scanLog: Array.isArray(parsed.scanLog) ? parsed.scanLog : base.scanLog,
       // lastSeen is intentionally in-memory only: online presence resets on restart.
       lastSeen: {},
       liveLocations: {},
@@ -356,6 +488,7 @@ function loadDb() {
       bundleId: c.bundleId || null,
       logo: c.logo || null,
       logoText: c.logoText || "",
+      bundleName: c.bundleName || "",
     }));
     return dbOut;
   } catch {
@@ -509,11 +642,19 @@ function maybeAutoBackup(now) {
   return writeAutoBackup(true);
 }
 
-// Timestamp of the last millisecond of the local day containing `ts`
-// (23:59:59.999) — the instant an employee's running timer belongs to.
+// Timestamp of the last millisecond (23:59:59.999) of the COMPANY day containing
+// `ts` — the instant an employee's running timer belongs to. Считаем в поясе
+// КОМПАНИИ (serverTzOffset(), по умолчанию UTC+3), а не в системном поясе
+// сервера (часто UTC): иначе автозакрытие незакрытого таймера ставит конец в
+// 23:59 UTC, что в МСК показывается как 02:59 СЛЕДУЮЩЕГО дня — «завершил
+// 18:19, а записалось 02:59».
 function endOfDayMs(ts) {
-  const d = new Date(ts);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() - 1;
+  const off = serverTzOffset(); // +180 — UTC+3 Москва
+  // Приводим ts к «компанийному» календарному дню: смещаем на off и берём дату по UTC.
+  const shifted = new Date(ts + off * 60000);
+  // Конец текущего компанийного дня = начало СЛЕДУЮЩЕГО компанийного дня минус 1 мс:
+  // следующий день начинается в 00:00 по компанийному = в (00:00 − off) по UTC.
+  return Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate() + 1) - off * 60000 - 1;
 }
 
 // Auto-close any open work timer (`end == null`) whose day has already ended, so
@@ -529,13 +670,23 @@ function autoCloseDayEndTimers(now) {
     for (const id in rec.byEmployee) {
       const entry = rec.byEmployee[id];
       if (!entry || !Array.isArray(entry.segments)) continue;
+      let entryChanged = false;
       for (const s of entry.segments) {
         // Защита от битых/мусорных записей в сегментах дня: элемент может быть
         // null или не-объектом, и s.kind на нём раньше ронял ВЕСЬ запрос (500).
         if (s && typeof s === "object" && s.kind === "work" && s.end == null && now > endOfDayMs(s.start)) {
           s.end = endOfDayMs(s.start);
+          entryChanged = true;
           changed = true;
         }
+      }
+      // Авто-закрытие дня должно не только проставить «конец» (end), но и
+      // формально завершить день сотрудника (finished:true). Иначе в табеле
+      // «Время работы» день выглядел бы незакрытым, и пришлось бы закрывать
+      // вручную (как у Глаголина/Заводнова за 11.09), хотя авто всё закрыл.
+      if (entryChanged && !entry.finished) {
+        entry.finished = true;
+        changed = true;
       }
     }
   }
@@ -686,10 +837,56 @@ function isDriver(user, dbData) {
   );
 }
 
+// «Погрузка» — сотрудник группы склада, чьё имя содержит «погрузк» (например
+// группа «Погрузка»). Такой пользователь — чистый погрузочный терминал: он
+// видит ТОЛЬКО вкладку «Отгрузка» и не отображается другим в Табеле, расчёте
+// ЗП и «В эфире». Выделение по имени группы (как «Водители» для isDriver).
+function isLoader(user, dbData) {
+  return (dbData.groups || []).some(
+    (g) => /погрузк/i.test(String(g.name || "")) && (g.memberIds || []).includes(user.id)
+  );
+}
+
+// Проверка «погрузчик» по id сотрудника (для фильтрации списков видимости:
+// Табель, расчёт ЗП, «В эфире», Журнал — погрузчик там не показывается).
+function isLoaderById(staffId, dbData) {
+  const uid = String(staffId);
+  return (dbData.groups || []).some(
+    (g) => /погрузк/i.test(String(g.name || "")) && (g.memberIds || []).includes(uid)
+  );
+}
+
+// Узкое определение «водителя» ТОЛЬКО для карты «Трекинг»: учитываем лишь
+// участников группы, чьё имя ТОЧНО «Водители»/«Водитель». Глобальная isDriver
+// ловит все группы со словом «водител» (резервные/сменные и т.п.), но на карту
+// пользователь хочет выводить только основную группу «Водители».
+function isDriversGroupOnly(user, dbData) {
+  const allowed = new Set(["водители", "водитель"]);
+  return (dbData.groups || []).some((g) => {
+    const n = String(g.name || "").trim().toLowerCase();
+    return allowed.has(n) && (g.memberIds || []).includes(user.id);
+  });
+}
+
 // Возвращает клон маршрута с гарантированно нормализованными полями прогресса:
 // каждая точка несёт id, state и таймстемпы, а маршрут — объект progress.
 // Используется при чтении, чтобы клиент всегда видел полную структуру, не
 // перезаписывая БД на каждом GET.
+// Человекочитаемая причина, по которой маршрут заблокирован для редактирования.
+// Уточняет «почему так пишет»: вместо общего «маршрут занят» показывает, кто
+// сейчас держит маршрут — водитель в пути или склад в сборке/отгрузке.
+function routeLockReason(progress) {
+  const p = progress || {};
+  if (p.status === "done") return "Завершённый маршрут нельзя редактировать";
+  if (p.status === "active") {
+    return "Маршрут ведётся водителем — редактировать нельзя (водитель не завершил маршрут)";
+  }
+  if (p.shipmentStartedAt) {
+    return "Маршрут в сборке/отгрузке на складе — редактировать нельзя (склад начал сборку)";
+  }
+  return "Маршрут занят (в работе или в сборке) — редактировать нельзя";
+}
+
 function normalizeRouteProgress(route) {
   if (!route) return route;
   const clone = JSON.parse(JSON.stringify(route));
@@ -718,6 +915,71 @@ function normalizeRouteProgress(route) {
   return clone;
 }
 
+// Нормализует одну точку маршрута-остановку. Каждая точка — одна ОСТАНОВКА
+// (адрес). Для связки (несколько контрагентов на одном адресе) точка несёт
+// список members — контрагентов этой остановки. Тогда в маршруте связка
+// считается одним клиентом: одна печать этикеток, одна выгрузка/сдача.
+function normalizeRouteClient(c) {
+  const members = Array.isArray(c && c.members)
+    ? c.members
+        .filter((m) => !!m && (m.client || m.address))
+        .slice(0, 50)
+        .map((m) => ({
+          client: String(m.client || "").slice(0, 200),
+          address: String(m.address || "").slice(0, 500),
+          bundleId: m.bundleId ? String(m.bundleId).slice(0, 60) : null,
+          logo: m.logo ? String(m.logo).slice(0, 200000) : null,
+          logoText: String(m.logoText || "").toUpperCase().slice(0, 5),
+          bundleName: String(m.bundleName || "").slice(0, 200),
+        }))
+    : undefined;
+  const base = {
+    client: String((c && c.client) || "").slice(0, 200),
+    address: String((c && c.address) || "").slice(0, 500),
+    bundleId: c && c.bundleId ? String(c.bundleId).slice(0, 60) : null,
+    logo: c && c.logo ? String(c.logo).slice(0, 200000) : null,
+    logoText: String((c && c.logoText) || "").toUpperCase().slice(0, 5),
+    bundleName: String((c && c.bundleName) || "").slice(0, 200),
+  };
+  if (members && members.length > 0) base.members = members;
+  return base;
+}
+
+// Подтягивает ЕДИНОЕ название связки (bundleName) у точек маршрута из актуальной
+// базы контрагентов (db.driverClients), если в самой точке оно пусто. Это чинит
+// и старые маршруты, созданные до того, как единое название стало копироваться
+// в точку: диспетчер задал «Единое название» связки (bundle-name), а в сохранённой
+// точке поля bundleName не было. Резолв по общему bundleId: у всех участников
+// связки bundleName один и тот же. Возвращает клон маршрута.
+function withResolvedBundleNames(route, dbData) {
+  if (!route || !Array.isArray(route.clients)) return route;
+  const clients = dbData && Array.isArray(dbData.driverClients) ? dbData.driverClients : [];
+  // Индекс единого названия по bundleId: <>-первый непустой bundleName связки.
+  const nameByBundle = new Map();
+  for (const cl of clients) {
+    if (!cl || !cl.bundleId || !cl.bundleName) continue;
+    const bid = String(cl.bundleId);
+    if (!nameByBundle.has(bid)) nameByBundle.set(bid, String(cl.bundleName));
+  }
+  const clone = JSON.parse(JSON.stringify(route));
+  clone.clients = (clone.clients || []).map((c) => {
+    if (!c) return c;
+    const bid = c.bundleId ? String(c.bundleId) : "";
+    const resolved = bid && !c.bundleName ? (nameByBundle.get(bid) || "") : (c.bundleName || "");
+    if (resolved) c.bundleName = resolved;
+    // Та же логика для участников связки (members).
+    if (Array.isArray(c.members)) {
+      c.members = c.members.map((m) => {
+        if (!m) return m;
+        if (!m.bundleName) m.bundleName = resolved;
+        return m;
+      });
+    }
+    return c;
+  });
+  return clone;
+}
+
 // Обогащает точки маршрута водителя счётчиком выгрузки мест клиента: сколько
 // этикеток уже выгружено (status "delivered"), сколько всего, и готов ли клиент
 // к завершению выгрузки. Считается по хранилищу этикеток: код места клиента —
@@ -733,10 +995,21 @@ function enrichUnloadProgress(route, labels) {
     const mine = all.filter(
       (l) => String(l.routeId) === String(route.id) && Number(l.clientIndex) === i
     );
-    const total = mine.length;
+    // «Всего мест для выгрузки» = только ПОГРУЖЕННЫЕ (loaded|delivered). Места со
+    // статусом "created" (напечатаны, но не погружены складом) в знаменатель
+    // выгрузки НЕ входят: их водитель физически выгрузить не может, и их наличие
+    // не должно завышать счётчик («8/7 из-за одного created») и блокировать
+    // водителя, у которого фактически выгружено всё погруженное. Это унифицирует
+    // счёт с веб-счётчиком (scanProgress при unload считает need = loaded).
+    const total = mine.filter((l) => l.status === "loaded" || l.status === "delivered").length;
     const done = mine.filter((l) => l.status === "delivered").length;
+    // Места со статусом "created" (напечатаны, но не погружены складом) — на
+    // выгрузку они НЕ влияют (см. total выше), но показываем их число отдельно,
+    // чтобы водитель/диспетчер видели, что склад мог «не доложить» место.
+    const created = mine.filter((l) => l.status === "created").length;
     c.unloadTotal = total;
     c.unloadDone = done;
+    c.unloadCreated = created;
     // «Готово к завершению выгрузки»: все места выгружены, либо у клиента вовсе
     // нет этикеток (печатать нечего — завершить выгрузку разрешено).
     c.unloadReady = total === 0 ? true : done === total;
@@ -745,23 +1018,162 @@ function enrichUnloadProgress(route, labels) {
   return route;
 }
 
+// Перепривязка этикеток маршрута при редактировании его состава. Этикетка
+// хранит clientIndex — позицию клиента в маршруте (код наклейки
+// «BG<routeId>-<clientIndex+1>-<place>», счётчики «Мест: N» идут по
+// Number(l.clientIndex) === позиции). Если порядок/состав клиентов изменился
+// (клиента переставили, убрали, добавили), а clientIndex у этикеток остался
+// старым, места «съезжают» на чужого клиента (Авилон ЗИЛ вдруг показывает 3
+// вместо ДЦ Алтуфьево). Сопоставляем каждую этикетку с новым клиентом по
+// адресу (осн.) / имени (фолбэк) и обновляем её clientIndex под актуальную
+// позицию. Этикетки, чей клиент исчез из маршрута, не трогаем (их индекс
+// перестанет совпадать, и счетчики по ним обнулятся — это честно помечает
+// «лишние» места).
+function relinkRouteLabels(routeId, newClients, labels) {
+  if (!Array.isArray(labels) || !Array.isArray(newClients)) return labels;
+  const keyOf = (c) => {
+    const addr = String((c && c.address) || "").trim().toLowerCase();
+    if (addr) return "a:" + addr;
+    const client = String((c && c.client) || "").trim().toLowerCase();
+    if (client) return "c:" + client;
+    return null;
+  };
+  // Карта «ключ клиента → новая позиция в маршруте».
+  const idxByKey = new Map();
+  newClients.forEach((c, i) => {
+    const k = keyOf(c);
+    if (k != null && !idxByKey.has(k)) idxByKey.set(k, i);
+  });
+  for (const l of labels) {
+    if (!l || String(l.routeId) !== String(routeId)) continue;
+    const k = keyOf({ address: l.address, client: l.client });
+    if (k != null && idxByKey.has(k)) l.clientIndex = idxByKey.get(k);
+  }
+  return labels;
+}
+
+// Протяжённость маршрута в км по последовательности остановок:
+// база → точки маршрута → возврат на базу (как в отчёте движения).
+// Маршрут хранит адреса точек, а не координаты, поэтому координаты берём из
+// справочника контрагентов (по совпадению адреса); фолбэк — координаты самой
+// точки, если они были сохранены ранее. Метод — гаверсинус: мгновенный, без
+// внешних вызовов, безопасен для рендера списка со ВСЕМИ маршрутами сразу.
+// Возвращает число (км) или null, если посчитать не по чему.
+function routeKm(route) {
+  if (!route) return null;
+  const path = [];
+  const prog = route.progress || {};
+  if (Number.isFinite(prog.baseLat) && Number.isFinite(prog.baseLon)) {
+    path.push({ lat: prog.baseLat, lon: prog.baseLon });
+  }
+  (Array.isArray(route.clients) ? route.clients : []).forEach((c) => {
+    if (!c) return;
+    let pt = null;
+    const addr = String(c.bundleAddress || c.address || "").trim().toLowerCase();
+    if (addr) {
+      const cc = (db.driverClients || []).find((x) =>
+        String(x.bundleAddress || x.address || "").trim().toLowerCase() === addr
+      );
+      if (cc && Number.isFinite(cc.lat) && Number.isFinite(cc.lon)) {
+        pt = { lat: cc.lat, lon: cc.lon };
+      }
+    }
+    if (!pt && Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+      pt = { lat: c.lat, lon: c.lon };
+    }
+    if (pt) path.push(pt);
+  });
+  // Возврат на базу — последний отрезок (если маршрут имеет базу).
+  if (path.length >= 2 && Number.isFinite(prog.baseLat) && Number.isFinite(prog.baseLon)) {
+    path.push({ lat: prog.baseLat, lon: prog.baseLon });
+  }
+  if (path.length < 2) return null;
+  let km = 0;
+  for (let i = 1; i < path.length; i++) {
+    if (path[i - 1] && path[i]) km += haversineKm(path[i - 1], path[i]);
+  }
+  return Math.round(km * 10) / 10;
+}
+
+// Кэш ДОРОЖНОЙ протяжённости маршрутов: routeId -> km (по дорогам, 2ГИС).
+// Считается в фоне при GET /api/drivers/routes (фолбэк в ответе — routeKm по
+// прямой) и кэшируется, чтобы следующий просмотр списка показал км, совпадающий
+// с дорожными мостами карты. Живёт в памяти — передеплой пересчитает заново.
+const routeKmCache = {};
+const routeKmPending = {};
+
+// Дорожная протяжённость маршрута (база → точки → возврат на базу) ОДНИМ вызовом
+// матрицы 2ГИС по всем точкам сразу (сумма соседних ячеек). Фолбэк — гаверсинус
+// по прямой (routeKm). Возвращает Promise<number|null>.
+async function routeKmRoad(route) {
+  if (!route) return null;
+  const path = [];
+  const prog = route.progress || {};
+  if (Number.isFinite(prog.baseLat) && Number.isFinite(prog.baseLon)) {
+    path.push({ lat: prog.baseLat, lon: prog.baseLon });
+  }
+  (Array.isArray(route.clients) ? route.clients : []).forEach((c) => {
+    if (!c) return;
+    let pt = null;
+    const addr = String(c.bundleAddress || c.address || "").trim().toLowerCase();
+    if (addr) {
+      const cc = (db.driverClients || []).find((x) =>
+        String(x.bundleAddress || x.address || "").trim().toLowerCase() === addr
+      );
+      if (cc && Number.isFinite(cc.lat) && Number.isFinite(cc.lon)) {
+        pt = { lat: cc.lat, lon: cc.lon };
+      }
+    }
+    if (!pt && Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+      pt = { lat: c.lat, lon: c.lon };
+    }
+    if (pt) path.push(pt);
+  });
+  if (path.length >= 2 && Number.isFinite(prog.baseLat) && Number.isFinite(prog.baseLon)) {
+    path.push({ lat: prog.baseLat, lon: prog.baseLon }); // возврат на базу
+  }
+  if (path.length < 2) return null;
+  // 1) По дорогам через матрицу 2ГИС (один вызов на весь маршрут).
+  try {
+    const matrix = await gisDistanceMatrix(path);
+    if (matrix && matrix.length >= path.length) {
+      let road = 0;
+      let ok = true;
+      for (let i = 1; i < path.length; i++) {
+        const d = matrix[i - 1] && matrix[i - 1][i];
+        if (!Number.isFinite(d)) { ok = false; break; }
+        road += d;
+      }
+      if (ok) return Math.round(road * 10) / 10;
+    }
+  } catch { /* запасной */ }
+  // 2) Фолбэк — по прямой.
+  let km = 0;
+  for (let i = 1; i < path.length; i++) {
+    if (path[i - 1] && path[i]) km += haversineKm(path[i - 1], path[i]);
+  }
+  return Math.round(km * 10) / 10;
+}
+
 // ---- Автопостроение маршрута по адресам клиентов (Яндекс.Карты) ----
 // Геокодирование адреса → координаты [lat, lon]. Ключ API берётся из окружения
 // (YANDEX_GEO_KEY), с фолбэком на ключ проекта (уже используется в test-yamaps).
 // Если сервис недоступен или адрес не распознан — возвращается null (не краш).
 const YANDEX_GEO_URL = "https://geocode-maps.yandex.ru/1.x/";
-// Рабочий ключ Geocoder HTTP API. Переопределяется через окружение
-// (YANDEX_GEO_KEY). Без заголовков User-Agent/Referer Яндex отвечает 403
-// «Invalid api key» даже на активный ключ — их обязательно шлём в запросе.
-const YANDEX_GEO_KEY = process.env.YANDEX_GEO_KEY || "92c61ff5-d3f3-4449-a201-ebb3196bb055";
+// Рабочий ключ Geocoder HTTP API. Задаётся через окружение (YANDEX_GEO_KEY) или
+// .env (не коммитится). Значение в коде НЕ хранится. Без заголовков User-Agent/
+// Referer Яндex отвечает 403 «Invalid api key» даже на активный ключ — их
+// обязательно шлём в запросе.
+const YANDEX_GEO_KEY = process.env.YANDEX_GEO_KEY || "";
 const GEO_HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
   "Referer": "https://developer.tech.yandex.ru/",
 };
-// Ключ JavaScript API Яндекс.Карт для живой карты администратора. Приходит из
-// окружения (YANDEX_MAPS_KEY); фолбэк — рабочий ключ этой разработки. Ключ JS API
-// всё равно виден в браузере (так устроен Я.Карты), поэтому нет секретности.
-const YANDEX_MAPS_KEY = process.env.YANDEX_MAPS_KEY || "2f4e9d71-43a9-4a4b-98f6-19f1bbaff0ed";
+// Ключ JavaScript API Яндекс.Карт для живой карты администратора. Задаётся через
+// окружение (YANDEX_MAPS_KEY) или .env (не коммитится). Ключ JS API всё равно
+// виден в браузере (так устроен Я.Карты), поэтому секретности нет, но в код
+// значение не вписываем — оно уходит в .env/окружение.
+const YANDEX_MAPS_KEY = process.env.YANDEX_MAPS_KEY || "";
 
 function geocodeAddress(address) {
   return new Promise((resolve) => {
@@ -851,9 +1263,116 @@ const OSRM_URL = (process.env.OSRM_URL || "https://routing.openstreetmap.de/rout
 // оптимизация использует реальное время проезда с учётом пробок. Без ключа
 // (или при ошибке/таймауте) безопасно откатывается на OSRM → гаверсинус.
 const TOMMOM_KEY = String(
-  process.env.TOMMOM_KEY ||
-    "ONGC3rAONPnxS1ZXwtTPjDD5mtHijyaT"
+  process.env.TOMMOM_KEY || ""
 );
+
+// ---- Автопостроение маршрута с учётом пробок на 2ГИС (российский сервис) ----
+// Бесплатный тариф разработчика 2ГИС: Distance Matrix API с учётом текущих
+// пробок (type: "jam"). Доступен из РФ, не требует зарубежных сервисов.
+// Ключ задаётся в окружении (GIS_API_KEY) или в .env (не коммитится) — в коде
+// не хранится. Если ключ не задан (или API не ответил), безопасно откатываемся
+// на TomTom → OSRM → прямую.
+const GIS_API_KEY = String(
+  process.env.GIS_API_KEY || ""
+).trim();
+
+// Запрашивает у 2ГИС Distance Matrix время в пути (сек) между всеми парами
+// точек с учётом текущих пробок (type: "jam"). Точки — [{lat, lon}, ...];
+// результат — number[][] (сек) или null при недоступности/ошибке.
+function gisDurationMatrix(points) {
+  return new Promise((resolve) => {
+    if (!GIS_API_KEY || points.length === 0) return resolve(null);
+    const n = points.length;
+    const payload = {
+      points: points.map((p) => ({ lat: Number(p.lat), lon: Number(p.lon) })),
+      sources: Array.from({ length: n }, (_, i) => i),
+      targets: Array.from({ length: n }, (_, i) => i),
+      transport: "driving",
+      type: "jam", // строить маршрут с учётом ТЕКУЩИХ пробок
+    };
+    const body = JSON.stringify(payload);
+    const url = "https://routing.api.2gis.com/get_dist_matrix?key=" +
+      encodeURIComponent(GIS_API_KEY) + "&version=2.0";
+    const req = https.request(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+    }, (res) => {
+      let data = "";
+      res.on("data", (c) => { data += c; });
+      res.on("end", () => {
+        try {
+          const j = JSON.parse(data);
+          const routes = j && Array.isArray(j.routes) ? j.routes : null;
+          if (!routes) return resolve(null);
+          const cell = (s, t) => {
+            const row = routes.find((r) => Number(r.source_id) === s && Number(r.target_id) === t);
+            if (!row || row.status !== "OK") return Infinity;
+            return Number.isFinite(Number(row.duration)) ? Number(row.duration) : Infinity;
+          };
+          const out = Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => cell(r, c)));
+          const ok = out.every((row) => row.every((t) => Number.isFinite(t) && t < Infinity));
+          return resolve(ok ? out : null);
+        } catch { resolve(null); }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(20000, () => { req.destroy(); resolve(null); });
+    req.end(body);
+  });
+}
+
+// Запрашивает у 2ГИС Distance Matrix РАССТОЯНИЕ (км) между всеми парами точек
+// по реальным дорогам с учётом текущих пробок (type: "jam"). Точки —
+// [{lat, lon}, ...]; результат — number[][] (км) или null при недоступности.
+// Используется для показа «км между точками маршрута» на экране выбора клиентов.
+function gisDistanceMatrix(points) {
+  return new Promise((resolve) => {
+    if (!GIS_API_KEY || points.length === 0) return resolve(null);
+    const n = points.length;
+    const payload = {
+      points: points.map((p) => ({ lat: Number(p.lat), lon: Number(p.lon) })),
+      sources: Array.from({ length: n }, (_, i) => i),
+      targets: Array.from({ length: n }, (_, i) => i),
+      transport: "driving",
+      // type "shortest" — детерминированный кратчайший маршрут по дорогам БЕЗ
+      // учёта текущих пробок. Раньше был "jam" (с пробками) — из-за этого
+      // километраж секций «плавал» между построениями одного и того же маршрута
+      // (2ГИС перекладывала путь в объезд пробок → км менялся). С "shortest"
+      // одинаковые точки всегда дают одинаковое расстояние. Для построения
+      // по времени пробки учитываются отдельно (матрицы TomTom/OSRM).
+      type: "shortest",
+    };
+    const body = JSON.stringify(payload);
+    const url = "https://routing.api.2gis.com/get_dist_matrix?key=" +
+      encodeURIComponent(GIS_API_KEY) + "&version=2.0";
+    const req = https.request(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+    }, (res) => {
+      let data = "";
+      res.on("data", (c) => { data += c; });
+      res.on("end", () => {
+        try {
+          const j = JSON.parse(data);
+          const routes = j && Array.isArray(j.routes) ? j.routes : null;
+          if (!routes) return resolve(null);
+          const cell = (s, t) => {
+            const row = routes.find((r) => Number(r.source_id) === s && Number(r.target_id) === t);
+            if (!row || row.status !== "OK") return Infinity;
+            // 2ГИС возвращает дистанцию в метрах — переводим в км.
+            return Number.isFinite(Number(row.distance)) ? Number(row.distance) / 1000 : Infinity;
+          };
+          const out = Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => cell(r, c)));
+          const ok = out.every((row) => row.every((t) => Number.isFinite(t) && t < Infinity));
+          return resolve(ok ? out : null);
+        } catch { resolve(null); }
+      });
+    });
+    req.on("error", () => resolve(null));
+    req.setTimeout(20000, () => { req.destroy(); resolve(null); });
+    req.end(body);
+  });
+}
 
 // Запрашивает у TomTom Routing Matrix время в пути (сек) между всеми парами
 // точек. Точки — [{lat, lon}, ...]; результат — number[][] или null.
@@ -1084,6 +1603,9 @@ function canManageStatus(user, dbData, staffId) {
 function canSeeShipment(user, dbData) {
   if (!user) return false;
   if (isAdmin(user, dbData)) return true;
+  // «Погрузка» — чистый погрузочный терминал: доступ к «Отгрузке» у него
+  // включён всегда, независимо от showShipment и shipmentGroups.
+  if (isLoader(user, dbData)) return true;
   const p = dbData.params || {};
   if (p.showShipment !== true) return false;
   const ids = Array.isArray(p.shipmentGroups) ? p.shipmentGroups : [];
@@ -1093,6 +1615,22 @@ function canSeeShipment(user, dbData) {
     const g = (dbData.groups || []).find((x) => String(x.id) === String(gid));
     return g && (g.memberIds || []).includes(uid);
   });
+}
+
+// «Распорядитель склада»: админ портала ИЛИ модератор группы, входящей в
+// shipmentGroups. Такой пользователь может завершить отгрузку без полного
+// сканирования и вернуть маршрут обратно к отгрузке. Обычные сотрудники склада
+// (только члены группы) обязаны сначала отсканировать все этикетки.
+function canManageShipment(user, dbData) {
+  if (!user) return false;
+  if (isAdmin(user, dbData)) return true;
+  const p = dbData.params || {};
+  const ids = Array.isArray(p.shipmentGroups) ? p.shipmentGroups : [];
+  if (ids.length === 0) return false;
+  const uid = String(user.id);
+  return (dbData.groups || []).some(
+    (g) => ids.includes(String(g.id)) && String(g.moderatorId) === uid
+  );
 }
 
 // Remove a removed/blocked employee from every group: drop from memberIds and
@@ -1127,21 +1665,52 @@ function visibleStaff(user, dbData) {
   // портала он приходит как ADMIN (или добавлен в список администраторов
   // приложения). Назначение модератором группы имеет приоритет: в «В эфире»,
   // отчёте и календаре он видит только своих.
+  // Погрузчиков (роль «Погрузка») исключаем из любых списков видимости —
+  // чистый погрузочный терминал не фигурирует в Табеле, расчёте ЗП и «Эфире».
+  const notLoader = (s) => !isLoaderById(s && s.id, dbData);
   if (isModerator(user, dbData)) {
     const ids = moderatorVisibleIds(user, dbData);
-    return dbData.staff.filter((s) => ids.has(s.id));
+    return dbData.staff.filter((s) => ids.has(s.id) && notLoader(s));
   }
-  if (isAdmin(user, dbData)) return dbData.staff;
+  if (isAdmin(user, dbData)) return dbData.staff.filter(notLoader);
   const ids = moderatorVisibleIds(user, dbData);
-  if (ids.size > 0) return dbData.staff.filter((s) => ids.has(s.id));
-  return dbData.staff.filter((s) => s.id === user.id);
+  if (ids.size > 0) return dbData.staff.filter((s) => ids.has(s.id) && notLoader(s));
+  return dbData.staff.filter((s) => s.id === user.id && notLoader(s));
+}
+
+// Клонирует день (db.days[key]), убирая сегменты и статусы погрузчиков (роль
+// «Погрузка»). Возвращает null, если после очистки в дне ничего не осталось.
+function dayWithoutLoaders(rec, dbData) {
+  const byEmp = rec && rec.byEmployee && typeof rec.byEmployee === "object" ? rec.byEmployee : {};
+  const statuses = rec && rec.statuses && typeof rec.statuses === "object" ? rec.statuses : {};
+  const cleanByEmp = {};
+  for (const sid in byEmp) {
+    if (!isLoaderById(sid, dbData)) cleanByEmp[sid] = byEmp[sid];
+  }
+  const cleanStatuses = {};
+  let anyStatus = false;
+  for (const sid in statuses) {
+    if (!isLoaderById(sid, dbData)) { cleanStatuses[sid] = statuses[sid]; anyStatus = true; }
+  }
+  const clean = {};
+  if (Object.keys(cleanByEmp).length > 0) clean.byEmployee = cleanByEmp;
+  if (anyStatus) clean.statuses = cleanStatuses;
+  return Object.keys(clean).length > 0 ? clean : null;
 }
 
 function visibleDays(user, dbData) {
   const ids = moderatorVisibleIds(user, dbData);
   // Модератор всегда видит только дни членов своих групп — даже если по роли
   // он ADMIN (приоритет модераторства), см. visibleStaff.
-  if (ids.size === 0 && isAdmin(user, dbData)) return dbData.days;
+  if (ids.size === 0 && isAdmin(user, dbData)) {
+    // Админ видит все дни, кроме дней погрузчиков (их в табеле нет).
+    const out = {};
+    for (const key in dbData.days) {
+      const clean = dayWithoutLoaders(dbData.days[key], dbData);
+      if (clean) out[key] = clean;
+    }
+    return out;
+  }
   const canSeeOthers = ids.size > 0;
   const out = {};
   for (const key in dbData.days) {
@@ -1164,10 +1733,10 @@ function visibleDays(user, dbData) {
     const byEmp = rec.byEmployee && typeof rec.byEmployee === "object" ? rec.byEmployee : {};
     const visibleEmp = {};
     for (const sid in byEmp) {
-      if (ids.has(sid)) visibleEmp[sid] = byEmp[sid];
+      if (ids.has(sid) && !isLoaderById(sid, dbData)) visibleEmp[sid] = byEmp[sid];
     }
     const statusKeys = rec.statuses && typeof rec.statuses === "object"
-      ? Object.keys(rec.statuses).filter((id) => ids.has(id))
+      ? Object.keys(rec.statuses).filter((id) => ids.has(id) && !isLoaderById(id, dbData))
       : [];
     if (Object.keys(visibleEmp).length === 0 && statusKeys.length === 0) continue;
     const copy = {};
@@ -1183,13 +1752,16 @@ function visibleDays(user, dbData) {
 }
 
 function visibleLog(user, dbData) {
-  if (isAdmin(user, dbData)) return dbData.log;
+  if (isAdmin(user, dbData)) {
+    // Журнал погрузчиков не показываем (их нет в учёте).
+    return dbData.log.filter((e) => !isLoaderById(e && e.ownerId, dbData));
+  }
   // A moderator sees the journal entries of their group members (+ their own), so
   // they can audit timer presses, statuses and manual time edits of their people.
   if (isModerator(user, dbData)) {
     const ids = moderatorVisibleIds(user, dbData);
     ids.add(user.id);
-    return dbData.log.filter((e) => e.ownerId && ids.has(e.ownerId));
+    return dbData.log.filter((e) => e.ownerId && ids.has(e.ownerId) && !isLoaderById(e.ownerId, dbData));
   }
   return dbData.log.filter((e) => !e.ownerId || e.ownerId === user.id);
 }
@@ -1649,6 +2221,287 @@ function timesheetRowsForMonth(year, m0, staffList) {
 // "live" for a human but survives that throttling.
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;
 
+// Множитель подработки для сотрудника на конкретную дату. Повышенный тариф
+// ищется по индивидуальным правилам multRules (приоритет: конкретный сотрудник →
+// группа → «для всех»), и только если правил нет — по легаси-полям params
+// (multiplier/multFrom/multTo/multGroups). Согласовано с клиентским
+// multiplierForDate() в app.js. Правило multRules привязано к КОНКРЕТНОЙ дате
+// (date YYYY-MM-DD) и интервалу [from, to] (HH:MM): повышенный тариф для живого
+// расчёта активен, если date совпадает с датой аргумента И момент времени `date`
+// лежит внутри интервала. Без даты правило не применяется.
+function serverDayMult(staffId, date) {
+  const dbData = db || { params: {} };
+  const p = dbData.params || {};
+  const rules = Array.isArray(p.multRules) ? p.multRules : [];
+  const dayKeyY = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const nowKey = dayKeyY(date);
+  const nowMs = date.getTime();
+  const timeToday = (t) => {
+    const [h, m] = String(t).split(":").map(Number);
+    const base = new Date(nowKey + "T00:00:00").getTime();
+    return base + ((Number.isFinite(h) ? h : 0) * 3600000 + (Number.isFinite(m) ? m : 0) * 60000);
+  };
+  const dayMatches = (r) => {
+    if (!r || r.mult < 1) return false;
+    if (String(r.date || "") !== nowKey) return false; // день обязателен и должен совпадать
+    const fromMs = timeToday(r.from);
+    const toMs = timeToday(r.to);
+    return fromMs <= nowMs && nowMs <= toMs; // сейчас внутри [from, to]
+  };
+  if (rules.length > 0) {
+    const matchFor = (target, test) => {
+      const r = rules.find((x) => x.target === target && dayMatches(x) && test(x));
+      return r ? r.mult : null;
+    };
+    // 1) конкретный сотрудник
+    const staffRule = matchFor("staff", (x) => String(x.targetId) === String(staffId));
+    if (staffRule) return staffRule;
+    // 2) группа (первая подходящая группа, где состоит сотрудник)
+    const groups = dbData.groups || [];
+    const groupRule = matchFor("group", (x) => {
+      const g = groups.find((gg) => String(gg.id) === String(x.targetId));
+      return g && Array.isArray(g.memberIds) && g.memberIds.includes(String(staffId));
+    });
+    if (groupRule) return groupRule;
+    // 3) «для всех»
+    const allRule = rules.find((x) => x.target === "all" && dayMatches(x));
+    if (allRule) return allRule.mult;
+    return 1;
+  }
+  // Легаси-fallback на старые params.
+  const mg = p.multGroups || [];
+  const inMultGroup = mg.length === 0 || mg.some((gid) => {
+    const g = (dbData.groups || []).find((x) => String(x.id) === String(gid));
+    return g && Array.isArray(g.memberIds) && g.memberIds.includes(String(staffId));
+  });
+  let mult = Number.isFinite(p.multiplier) && p.multiplier >= 1 ? p.multiplier : 1;
+  if (mult <= 1 || !inMultGroup) return 1;
+  if (p.multFrom && p.multTo) {
+    const d0 = new Date(date); d0.setHours(0, 0, 0, 0);
+    const from = new Date(p.multFrom + "T00:00:00");
+    const to = new Date(p.multTo + "T23:59:59");
+    if (!(from <= d0 && d0 <= to)) return 1;
+  }
+  return mult;
+}
+
+// Логирует событие сборки накладной в Журнал (action = "waybill"): клиент точки,
+// время, артикул, наименование и кол-во позиции. Пометка «не найдено» тоже пишется
+// (scanned сохраняет текущее значение для первичного скана).
+function logWaybillScan(route, clientIndex, item, missing, body, user) {
+  const scanLogLimit = Number(db.params && db.params.scanLogLimit) || 30000;
+  db.scanLog = db.scanLog || [];
+  const cl = route.clients && route.clients[clientIndex];
+  const clientName = (cl && (cl.client || cl.bundleName || cl.address)) || "";
+  db.scanLog.push({
+    ts: Date.now(),
+    action: "waybill",
+    userId: user.id != null ? String(user.id) : null,
+    userName: (user.name != null ? String(user.name) : ""),
+    client: String(clientName || "").slice(0, 120),
+    code: String(item.art || ""),
+    name: String(item.name || "").slice(0, 200),
+    qty: Number(item.qty) || 0,
+    missing: !!missing,
+    box: String(item.box || "").slice(0, 60),
+  });
+  if (db.scanLog.length > scanLogLimit) db.scanLog = db.scanLog.slice(-scanLogLimit);
+}
+
+function listWaybillBoxes(route, clientIndex) {
+  const wb = route && route.waybills && route.waybills[clientIndex];
+  const items = wb && Array.isArray(wb.items) ? wb.items : [];
+  const boxes = [];
+  const seen = new Set();
+  const detailByBox = {};
+  items.forEach((it) => {
+    if (!it.box) return;
+    if (!detailByBox[String(it.box)]) detailByBox[String(it.box)] = 0;
+    if ((Number(it.scanned) || 0) > 0) detailByBox[String(it.box)] += 1;
+  });
+  items.forEach((it) => {
+    if (!it.box || seen.has(String(it.box))) return;
+    seen.add(String(it.box));
+    boxes.push({ box: String(it.box), details: detailByBox[String(it.box)] || 0 });
+  });
+  // Пустые созданные боксы (печатные места без привязанных деталей) тоже попадают
+  // в список — чтобы их можно было выбрать и удалить.
+  if (route && db && Array.isArray(db.labels)) {
+    db.labels.forEach((l) => {
+      if (String(l.routeId) !== String(route.id) || Number(l.clientIndex) !== Number(clientIndex)) return;
+      if (!l.code || seen.has(String(l.code))) return;
+      seen.add(String(l.code));
+      boxes.push({ box: String(l.code), details: detailByBox[String(l.code)] || 0 });
+    });
+  }
+  return boxes;
+}
+
+// ---- Расходная накладная (xlsx) — разбор без внешних пакетов ----
+// xlsx = zip-архив с XML (sharedStrings.xml + worksheets/sheet1.xml). Парсим
+// вручную: распаковываем только нужные записи (zlib.inflateRawSync), извлекаем
+// строки из листа, подставляя общие строки. Ожидаемые колонки: артикул,
+// наименование, кол-во (первая строка — заголовок).
+
+function zipRead(buf, targetPath) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return null;
+  const count = buf.readUInt16LE(eocd + 10);
+  const cdStart = buf.readUInt32LE(eocd + 16);
+  let pos = cdStart;
+  for (let n = 0; n < count; n++) {
+    if (pos + 46 > buf.length) break;
+    if (buf.readUInt32LE(pos) !== 0x02014b50) break;
+    const method = buf.readUInt16LE(pos + 10);
+    const compSize = buf.readUInt32LE(pos + 20);
+    const nameLen = buf.readUInt16LE(pos + 28);
+    const extraLen = buf.readUInt16LE(pos + 30);
+    const commentLen = buf.readUInt16LE(pos + 32);
+    const localOff = buf.readUInt32LE(pos + 42);
+    const name = buf.toString("utf8", pos + 46, pos + 46 + nameLen);
+    if (name === targetPath) {
+      const lNameLen = buf.readUInt16LE(localOff + 26);
+      const lExtraLen = buf.readUInt16LE(localOff + 28);
+      const dataStart = localOff + 30 + lNameLen + lExtraLen;
+      const comp = buf.slice(dataStart, dataStart + compSize);
+      try {
+        return method === 0 ? comp : require("zlib").inflateRawSync(comp);
+      } catch { return null; }
+    }
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  return null;
+}
+
+function xlsxText(s) {
+  const out = [];
+  let m;
+  const re = /<t[^>]*>([^<]*)<\/t>|<v[^>]*>([^<]*)<\/v>/g;
+  while ((m = re.exec(s)) !== null) out.push(m[1] || m[2] || "");
+  return out.join("");
+}
+
+function xlsxColIndex(letter) {
+  let n = 0;
+  const s = String(letter || "").toUpperCase();
+  for (let i = 0; i < s.length; i++) n = n * 26 + (s.charCodeAt(i) - 64);
+  return n;
+}
+
+// Извлекает поле вида «Покупатель: …» из строк xlsx (контрагент в расходной
+// накладной). Значение может стоять в той же ячейке после «:» либо правее
+// (в объединённой ячейке). Возвращает строку или "".
+function extractXlsxField(rows, labelRe, cellVal) {
+  for (const row of rows) {
+    const cells = row.cells;
+    for (const col in cells) {
+      const t = String(cellVal(cells[col])).trim();
+      const m = labelRe.exec(t);
+      if (!m) continue;
+      const rest = t.slice(m[0].length).replace(/^[\s:]+/, "").trim();
+      if (rest) return rest;
+      let best = "", bestIdx = -1;
+      const baseIdx = xlsxColIndex(col);
+      for (const c2 in cells) {
+        const ic = xlsxColIndex(c2);
+        if (ic > baseIdx) {
+          const v = String(cellVal(cells[c2])).trim();
+          if (v && ic > bestIdx) { best = v; bestIdx = ic; }
+        }
+      }
+      return best;
+    }
+  }
+  return "";
+}
+
+function parseXlsxItems(buf) {
+  const shared = zipRead(buf, "xl/sharedStrings.xml");
+  const sheet = zipRead(buf, "xl/worksheets/sheet1.xml") || zipRead(buf, "xl/worksheets/sheet.xml");
+  if (!sheet) return { items: [], error: "Внутри xlsx не найден лист" };
+  const sharedStrings = [];
+  if (shared) {
+    const re = /<si>(.*?)<\/si>/gs;
+    let m;
+    while ((m = re.exec(String(shared))) !== null) sharedStrings.push(xlsxText(m[1]));
+  }
+
+  // Разбираем лист в список строк { cells: {col: {t, v}} } — с типом ячейки
+  // (s=общая строка, n=число, inlineStr и т.п.) и сырым значением.
+  const rowRe = /<row[^>]*>(.*?)<\/row>/gs;
+  const stringsByRow = [];
+  let rowMatch;
+  const cellVal = (c) => {
+    if (!c) return "";
+    if (c.t === "s") return sharedStrings[Number(c.v)] != null ? sharedStrings[Number(c.v)] : "";
+    return String(c.v != null ? c.v : "");
+  };
+  while ((rowMatch = rowRe.exec(String(sheet))) !== null) {
+    const rowXml = rowMatch[1];
+    const cells = {};
+    const cellParts = rowXml.split("<c ");
+    for (let ci = 1; ci < cellParts.length; ci++) {
+      const part = cellParts[ci];
+      const rM = /r="([A-Z]+)[0-9]+"/.exec(part);
+      if (!rM) continue;
+      const col = rM[1];
+      const tM = /t="([^"]*)"/.exec(part);
+      const type = tM ? tM[1] : "";
+      let val = "";
+      const vM = /<v>([^<]*)<\/v>/.exec(part);
+      const isM = /<is>([\s\S]*?)<\/is>/.exec(part);
+      if (vM) val = vM[1];
+      else if (isM) {
+        const t = /<t[^>]*>([^<]*)<\/t>/.exec(isM[1]);
+        val = t ? t[1] : "";
+      }
+      cells[col] = { t: type, v: val };
+    }
+    stringsByRow.push({ cells });
+  }
+
+  // Определяем колонки по заголовкам: ищем строку, где в разных ячейках стоят
+  // «Артикул», «Товар», «Количество». Это устойчиво к разнесённой вёрстке 1С.
+  const headerRow = stringsByRow.find(({ cells }) =>
+    Object.values(cells).some((c) => String(cellVal(c)).trim() === "Артикул")
+  );
+  let colArt = "B", colName = "C", colQty = "D";
+  if (headerRow) {
+    for (const col in headerRow.cells) {
+      const txt = String(cellVal(headerRow.cells[col])).trim();
+      if (txt === "Артикул") colArt = col;
+      else if (txt === "Товар" || txt === "Наименование") colName = col;
+      else if (/Кол-во|Количество/i.test(txt)) colQty = col;
+    }
+  }
+
+  const items = [];
+  const afterHeader = headerRow
+    ? stringsByRow.slice(stringsByRow.indexOf(headerRow) + 1)
+    : stringsByRow;
+  const buyer = extractXlsxField(stringsByRow, /^Покупатель\s*:/i, cellVal);
+  for (const { cells } of afterHeader) {
+    const art = String(cellVal(cells[colArt])).trim();
+    const name = String(cellVal(cells[colName])).trim();
+    const qtyRaw = String(cellVal(cells[colQty])).trim().replace(",", ".");
+    if (!art || !Number.isFinite(parseFloat(qtyRaw)) || parseFloat(qtyRaw) <= 0) continue;
+    if (/Всего наименований/i.test(name) || /^Отпустил/i.test(name) || /^Получил/i.test(name)) continue;
+    let cleanName = name;
+    if (cleanName.startsWith(art + " ") || cleanName.startsWith(art + "•") || cleanName.startsWith(art + "\t")) {
+      cleanName = cleanName.slice(art.length).replace(/^[\s\p{P}\p{S}]+/u, "").trim();
+    }
+    items.push({ art, name: (cleanName || name), qty: parseFloat(qtyRaw), scanned: 0 });
+  }
+  if (!items.length) {
+    return { items, error: "Не удалось найти строки с артикулом. Проверьте, что в накладной есть колонки «Артикул», «Товар», «Количество»." };
+  }
+  return { items, buyer };
+}
+
 function liveRows(actor, dbData) {
   const staff = visibleStaff(actor, dbData);
   const now = Date.now();
@@ -1660,17 +2513,17 @@ function liveRows(actor, dbData) {
   return staff.map((st) => {
     // Today's work time for this employee.
     let workedMs = 0;
-    let closedMs = 0;
     let openStart = null;
     for (const s of segmentsFor(st.id, rec)) {
       if (s.kind === "break") continue;
       workedMs += Math.max(0, (s.end == null ? now : s.end) - s.start);
-      if (s.end != null) closedMs += Math.max(0, s.end - s.start);
       if (s.end == null) openStart = s.start;
     }
-    // Overtime only for a closed day (segment with an explicit end), see
-    // dayClosedWorkMs — matching the calendar/report behaviour.
-    const overMs = closedMs > 0 ? Math.max(0, closedMs - normDayMs) : 0;
+    // Живая переработка для «В эфире»: считается на текущий момент, включая
+    // открытый (не завершённый) сегмент — диспетчер видит и часы, и сумму уже
+    // сейчас, пока таймер идёт. Осознанное отличие от табеля/отчёта, где
+    // переработка считается только по закрытому дню.
+    const overMs = workedMs > 0 ? Math.max(0, workedMs - normDayMs) : 0;
     const status = (rec && rec.statuses && rec.statuses[st.id])
       || (workedMs >= normDayMs ? "Я" : (workedMs > 0 ? "НД" : null));
     const online = !!lastSeen[st.id] && (now - lastSeen[st.id]) < ONLINE_WINDOW_MS;
@@ -1680,7 +2533,10 @@ function liveRows(actor, dbData) {
     const bizDays = businessDays(year, m0);
     const rateBaseH = bizDays * 8; // hourly rate always uses the 8-hour day base (оклад / 8)
     const rate = st.salary != null && st.salary > 0 && rateBaseH > 0 ? st.salary / rateBaseH : 0;
-    const mult = dbData.params && Number.isFinite(dbData.params.multiplier) ? dbData.params.multiplier : 1;
+    // Множитель подработки для «сегодня» — согласован с клиентским
+    // multiplierForDate(): ищет сначала индивидуальные правила multRules
+    // (сотрудник → группа → для всех), а при их отсутствии — легаси-params.
+    const mult = serverDayMult(st.id, new Date());
     const canShow = dbData.params ? dbData.params.showOverSum !== false : true;
     const overEarn = canShow ? (overMs / 3600000) * rate * mult : 0;
     return {
@@ -1784,8 +2640,11 @@ async function handleApi(req, res, urlPath) {
     const moderator = isModerator(user, db);
     if (admin) {
       // An admin sees the whole "Все сотрудники" list — refresh it from the portal
-      // directory (rate-limited to once per minute) before returning.
-      await syncDirectory(false);
+      // directory (rate-limited to once per minute). IMPORTANT: the portal answers in
+      // tens of seconds, so this MUST NOT block the visitor's /api/state response —
+      // run it in the background and serve the current staff list right away. The
+      // refreshed list reaches the client on the next poll (once a minute).
+      void syncDirectory(false);
     }
     // Groups: an admin sees every group; a moderator sees only the groups they
     // moderate. A plain member sees none.
@@ -1796,7 +2655,7 @@ async function handleApi(req, res, urlPath) {
     // The group scope governs EVERYONE — including admins and moderators — so the
     // "Переработка" / "За подработку" timer blocks match the group that is allowed
     // to see them.
-    const me = { id: user.id, name: user.name, role: user.role, isAdmin: admin, isDriver: isDriver(user, db) };
+    const me = { id: user.id, name: user.name, role: user.role, isAdmin: admin, isDriver: isDriver(user, db), isLoader: isLoader(user, db) };
     me.diag = adminDiag(user, db);
     me.seeOverHours = staffSeesOver(db, user.id, "hours");
     me.seeOverSum = staffSeesOver(db, user.id, "sum");
@@ -1813,6 +2672,12 @@ async function handleApi(req, res, urlPath) {
       me,
       isModerator: moderator,
       canEditStatus: admin || moderator,
+      canManageShipment: canManageShipment(user, db),
+      // Точный флаг: имеет ли текущий пользователь доступ к разделу «Отгрузка».
+      // Сервер считает его по полному db.groups (а клиенту groups для
+      // не-админа/не-модератора не отдаются), поэтому это единственный надёжный
+      // источник видимости вкладки «Отгрузка» для клиента.
+      canSeeShipment: canSeeShipment(user, db),
       staff: staffView,
       days: visibleDays(user, db),
       log: visibleLog(user, db),
@@ -1848,10 +2713,44 @@ async function handleApi(req, res, urlPath) {
     // background tab / an out-of-order save. An explicit "Завершить" always arrives
     // with that segment already closed (its `end` set), so it still works.
     const prevOwn = segmentsFor(user.id, prev);
+    const prevEntry = prev && prev.byEmployee && prev.byEmployee[user.id] ? prev.byEmployee[user.id] : null;
+    const prevFinished = !!(prevEntry && prevEntry.finished);
+    // Ручная правка админа по времени на этот день (см. PUT /api/admin/day):
+    // пока стоит флаг, живые тики сотрудника не должны возвращать реальное
+    // время поверх вручную заданного.
+    const adminLock = !!(prevEntry && prevEntry.adminLock);
     const prevOpen = prevOwn.find((s) => s.kind === "work" && s.end == null) || null;
     const incomingHasOpen = Array.isArray(segments) && segments.some((s) => s.kind === "work" && s.end == null);
+    // П.1 — защита от дубля «закрытый + открытый»: явное «Завершить работу».
+    // Клиент передаёт finish:true (и реальное время нажатия finishTime). Тогда
+    // сервер закрывает любые открытые сегменты и НИКОГДА не воскрешает висящий
+    // prevOpen (раньше при несовпадении id закрытый + prevOpen добавлялся обратно,
+    // и день оставался открытым на сервере — «конец» в админке был пуст).
+    const finish = body.finish === true;
+    const finishTime = Number.isFinite(body.finishTime) ? body.finishTime : Date.now();
     let merged = Array.isArray(segments) ? segments.slice() : [];
-    if (prevOpen && !incomingHasOpen) {
+    if (finish) {
+      // Явное завершение: закрываем все открытые сегменты временем нажатия и
+      // не тащим prevOpen обратно. День помечается закрытым (finished), чтобы
+      // фоновые вкладки не могли его снова открыть.
+      for (const s of merged) {
+        if (s && typeof s === "object" && s.end == null) s.end = finishTime;
+      }
+    } else if (adminLock) {
+      // Живое сохранение идущего таймера не имеет права трогать день, который
+      // админ отредактировал вручную: оставляем серверные (админские) сегменты,
+      // чтобы «07:00» не «съехал» на реальное «08:00». Явное «Завершить работу»
+      // (finish) выше по-прежнему применяется и закрывает день.
+      merged = prevOwn.slice();
+    } else if (prevFinished) {
+      // П.2 — защита от гонки: день уже закрыт («Завершить работу» было).
+      // Фоновая вкладка с ещё идущим таймером каждые ~8 c шлёт сюда открытый
+      // сегмент и перезаписывала бы закрытое состояние (а открытый сегмент мог бы
+      // затереть уже сохранённый «конец»). Запрос без явного finish — не
+      // авторитетная перезапись, поэтому НЕ трогаем уже сохранённую запись:
+      // оставляем серверные сегменты (и флаг finished), возвращаем ok.
+      merged = prevOwn.slice();
+    } else if (prevOpen && !incomingHasOpen) {
       // The incoming day closes the SAME open timer (same id, or same start when
       // id is absent) — that is an explicit "Завершить работу", not a stale
       // background save. Keep the closed segment and do NOT resurrect the open
@@ -1867,7 +2766,13 @@ async function handleApi(req, res, urlPath) {
     // Server always writes as the owner: a member can only touch their own days.
     const day = prev && typeof prev === "object" ? prev : {};
     if (!(day.byEmployee && typeof day.byEmployee === "object")) day.byEmployee = {};
-    day.byEmployee[user.id] = { segments: merged };
+    // Помечаем запись сотрудника закрытой при явном завершении (или если она
+    // уже была закрыта) — так фоновые вкладки не смогут вернуть открытый таймер.
+    day.byEmployee[user.id] = {
+      segments: merged,
+      finished: finish || prevFinished,
+      adminLock: adminLock,
+    };
     if (prevStatuses) day.statuses = prevStatuses;
     db.days[key] = day;
     await persistDb();
@@ -2009,6 +2914,182 @@ async function handleApi(req, res, urlPath) {
     return sendJson(res, 200, { ok: true, blocked: db.blocked });
   }
 
+  // ---- POST /api/admin/restore-client-close
+  // Восстановление «потерянных» офлайн-действий водителя по конкретной точке.
+  // Используется, когда действия водителя (прибыл на адрес, сдача местами,
+  // завершение сдачи) были удалены из офлайн-очереди без отправки — например,
+  // при истёкшей сессии шлюза, и точка осталась на сервере не закрытой, хотя
+  // водитель физически её выполнил. Эндпоинт одним вызовом:
+  //   - создаёт недостающие этикетки мест клиента (по labelQty точки или ?places);
+  //   - помечает ВСЕ места точки как выгруженные (loaded → delivered) с временем t;
+  //   - пишет записи в scanLog (action = "unload"), чтобы раздел «Журнал» показал скан;
+  //   - ставит точке (и участникам связки) state = "delivered", unloadFinished = true,
+  //     заполняет transitStart/transitEnd/siteStart/siteEnd консистентным временем;
+  //   - НЕ трогает остальные точки маршрута (например, «СмартПартс» в работе
+  //     остаётся в своём состоянии).
+  // Тело: { routeId, clientIndex?, search?, places?, closedAt? }
+  //   routeId — обязателен, если не задан search по имени/адресу клиента.
+  //   clientIndex — индекс точки; если не задан, точка ищется по search
+  //     (подстрока в имени или адресе клиента) в указанном маршруте.
+  //   search — подстрока имени/адреса клиента (если clientIndex не задан).
+  //   closedAt — реальное время проставления (timestamp); по умолчанию Date.now().
+  // Только администратор. Повторный вызов идемпотентен: места и точка уже
+  // закрыты — повтор повторный скан/закрытие не создаёт дублей в scanLog.
+  if (urlPath === "/api/admin/restore-client-close" && method === "POST") {
+    if (!admin) return sendJson(res, 403, { error: "forbidden" });
+    const body = await readBody(req);
+    const routeId = String(body.routeId || "");
+    const search = String(body.search || "").trim().toLowerCase();
+    let route;
+    if (routeId) {
+      route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
+      if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
+    } else {
+      // Поиск маршрута по имени/адресу клиента (удобно для восстановления без id).
+      if (!search) return sendJson(res, 422, { error: "Укажите routeId или search" });
+      route = (db.driverRoutes || []).find((r) => (r.clients || []).some(
+        (c) => !!c && typeof c === "object" &&
+          (String(c.client || "").toLowerCase().includes(search) ||
+           String(c.address || "").toLowerCase().includes(search))
+      ));
+      if (!route) return sendJson(res, 404, { error: "Клиент по поиску не найден ни в одном маршруте" });
+    }
+    const hasIndex = body.clientIndex !== undefined && body.clientIndex !== null && body.clientIndex !== "";
+    let clientIndex;
+    if (hasIndex) {
+      clientIndex = Number(body.clientIndex);
+    } else {
+      if (!search) return sendJson(res, 422, { error: "Укажите clientIndex или search" });
+      const hit = (route.clients || []).findIndex(
+        (c) => !!c && typeof c === "object" &&
+          (String(c.client || "").toLowerCase().includes(search) ||
+           String(c.address || "").toLowerCase().includes(search))
+      );
+      if (hit < 0) return sendJson(res, 404, { error: "Клиент не найден в маршруте" });
+      clientIndex = hit;
+    }
+    if (!Number.isInteger(clientIndex) || clientIndex < 0 || clientIndex >= (route.clients || []).length) {
+      return sendJson(res, 422, { error: "Некорректный clientIndex" });
+    }
+    const t = (Number.isFinite(Number(body.closedAt)) && Number(body.closedAt) > 0)
+      ? Number(body.closedAt) : Date.now();
+    // Время на точке в секундах (восстановление: водитель простоял на точке
+    // siteSeconds). «На точке» считается как siteEnd - siteStart; чтобы
+    // восстановить точное значение, ставим siteStart = закрытие − siteSeconds.
+    // По умолчанию 0. «Путь» (transitStart/transitEnd) для точки НЕ трогаем:
+    // если у точки их не было (как у «Тодокар» на эталоне — «Путь: —»), они
+    // остаются null, и фронтенд показывает прочерк, а не 0:00.
+    const siteSeconds = (Number.isFinite(Number(body.siteSeconds)) && Number(body.siteSeconds) > 0)
+      ? Number(body.siteSeconds) : 0;
+
+    // Точка-цель (клиент). Если она входит в связку (один адрес с соседями),
+    // закрываем всю группу единым временем — как делает «Завершить сдачу».
+    const cl = route.clients[clientIndex];
+    if (!cl || typeof cl !== "object") {
+      return sendJson(res, 422, { error: "Точка маршрута повреждена" });
+    }
+    const bundleKeyOf2 = (c) => {
+      if (c && c.bundleId) return "b:" + String(c.bundleId);
+      const a = String((c && c.address) || "").trim().toLowerCase();
+      return a ? "a:" + a : "";
+    };
+    const targetKey = bundleKeyOf2(cl);
+    const groupIdx = (route.clients || [])
+      .map((c, i) => ({ c, i }))
+      .filter((o) => !!o.c && typeof o.c === "object" && bundleKeyOf2(o.c) === targetKey && targetKey)
+      .map((o) => o.i);
+    const affected = groupIdx.length ? groupIdx : [clientIndex];
+
+    // --- Создать недостающие этикетки точки и пометить их выгруженными ---
+    const qty = Math.max(0, Math.min(500, Number.isInteger(Number(body.places))
+      ? Number(body.places)
+      : (Number(cl.labelQty) || 0)));
+    db.labels = db.labels || [];
+    const now36 = Date.now().toString(36);
+    const existingPlaces = new Set(
+      db.labels
+        .filter((l) => String(l.routeId) === String(route.id) && Number(l.clientIndex) === clientIndex)
+        .map((l) => Number(l.place))
+    );
+    let scanAdded = 0;
+    const deliverPlace = (code, place) => {
+      let lab = db.labels.find((l) => String(l.code) === String(code));
+      if (!lab) {
+        lab = {
+          id: `${now36}-${Math.random().toString(36).slice(2, 7)}`,
+          code,
+          routeId: String(route.id),
+          clientIndex,
+          client: String(cl.client || ""),
+          address: String(cl.address || ""),
+          place,
+          status: "created",
+          at: t,
+          createdBy: user.id != null ? String(user.id) : null,
+        };
+        db.labels.push(lab);
+      }
+      // Любой статус приводим к delivered (создаём loaded-историю, если нужно).
+      if (lab.status !== "delivered") {
+        if (!lab.loadedAt) { lab.loadedAt = t; lab.loadedBy = user.id != null ? String(user.id) : null; }
+        lab.status = "delivered";
+        lab.deliveredAt = t;
+        lab.deliveredBy = user.id != null ? String(user.id) : null;
+        scanAdded++;
+      }
+    };
+    if (qty > 0) {
+      for (let n = 1; n <= qty; n++) {
+        const code = `BG${route.id}-${clientIndex + 1}-${n}`;
+        deliverPlace(code, n);
+      }
+      // Те места, что существуют в labels, но чей номер > созданного qty — тоже
+      // закрываем (не оставляем выгруженные места «на полпути»).
+      db.labels
+        .filter((l) => String(l.routeId) === String(route.id) && Number(l.clientIndex) === clientIndex)
+        .forEach((l) => { if (l.status !== "delivered") { deliverPlace(String(l.code), Number(l.place)); } });
+    }
+    // scanLog-записи за каждое закрытое место (по одной первой выдаче).
+    if (scanAdded > 0) {
+      const scanLogLimit = Number(db.params && db.params.scanLogLimit) || 30000;
+      db.scanLog = db.scanLog || [];
+      for (const l of db.labels.filter(
+        (x) => String(x.routeId) === String(route.id) && Number(x.clientIndex) === clientIndex
+      )) {
+        db.scanLog.push({
+          ts: t,
+          userId: user.id != null ? String(user.id) : null,
+          userName: String(user.name || ""),
+          action: "unload",
+          code: String(l.code || ""),
+          client: String(l.client || ""),
+          address: String(l.address || ""),
+          routeId: String(route.id),
+          status: "delivered",
+          warning: null,
+        });
+      }
+      if (db.scanLog.length > scanLogLimit) db.scanLog = db.scanLog.slice(-scanLogLimit);
+    }
+
+    // --- Закрыть саму точку (и участников связки), как «Завершить сдачу» ---
+    affected.forEach((i) => {
+      const c = route.clients[i];
+      if (!c || typeof c !== "object") return;
+      if (!c.id) c.id = `${route.id}-st${i + 1}`;
+      // transitStart/transitEnd НЕ заполняем принудительно — сохраняем исходное
+      // состояние (null останется null, чтобы «Путь» показал «—»).
+      c.siteStart = t - siteSeconds * 1000;
+      c.siteEnd = t;
+      c.unloadFinished = true;
+      if (c.state !== "delivered" && c.state !== "postponed") {
+        c.state = "delivered";
+      }
+    });
+    await persistDb();
+    return sendJson(res, 200, { ok: true, clientIndex, closed: affected, closedAt: t, siteSeconds });
+  }
+
   // ---- POST /api/admin/staff/block  { id, on, name? } ----
   if (urlPath === "/api/admin/staff/block" && method === "POST") {
     if (!admin) return sendJson(res, 403, { error: "forbidden" });
@@ -2058,7 +3139,21 @@ async function handleApi(req, res, urlPath) {
     if (!(day.byEmployee && typeof day.byEmployee === "object")) day.byEmployee = {};
     // Save ONLY this employee's segments so the others' data for the same day
     // (also edited from the "Время работы" tab) are never overwritten.
-    day.byEmployee[ownerId] = { segments };
+    // Админская правка «Время работы» тоже помечает день закрытым, если в
+    // сохранённых сегментах нет открытых (у всех задан «конец»). Так исправление
+    // времени не снимает защиту от гонки: фоновая вкладка сотрудника с открытым
+    // таймером не сможет потом оживить закрытый день. Если админ намеренно
+    // оставил «конец» пустым (открытый сегмент) — день считается открытым.
+    day.byEmployee[ownerId] = {
+      segments,
+      finished: !segments.some((s) => s && typeof s === "object" && s.end == null),
+      // Ручная правка админа приоритетнее живого таймера: пока запись помечена,
+      // фоновые сохранения сотрудника (POST /api/day без явного finish) НЕ
+      // перезаписывают вручную заданное время (иначе «поставил 07:00, а через
+      // время стало 08:00» из-за реального таймера сотрудника). Снимается, когда
+      // сотрудник явно завершит день или админ отредактирует заново.
+      adminLock: true,
+    };
     if (prev && prev.statuses && typeof prev.statuses === "object") day.statuses = prev.statuses;
     db.days[key] = day;
     await persistDb();
@@ -2137,9 +3232,56 @@ async function handleApi(req, res, urlPath) {
     if (typeof body.allowFinishUnloadIncomplete === "boolean") {
       p.allowFinishUnloadIncomplete = body.allowFinishUnloadIncomplete;
     }
+    if (typeof body.allowDriverReorderPoints === "boolean") {
+      p.allowDriverReorderPoints = body.allowDriverReorderPoints;
+    }
+    if (typeof body.allowWaybill === "boolean") {
+      p.allowWaybill = body.allowWaybill;
+    }
+    // Код удаления завершённого маршрута (админ задаёт в «Параметры»). Пустая
+    // строка = удаление завершённого маршрута запрещено вообще.
+    if (typeof body.routeDeleteCode === "string") {
+      p.routeDeleteCode = String(body.routeDeleteCode).trim().slice(0, 50);
+    }
+    // Лимит хранения записей журнала сканирования мест. Разрешаем разумный
+    // диапазон (100 … 200000), чтобы нельзя было случайно задать абсурдное число.
+    if (Number.isFinite(Number(body.scanLogLimit)) && Number(body.scanLogLimit) >= 100) {
+      p.scanLogLimit = Math.min(200000, Math.round(Number(body.scanLogLimit)));
+    }
     if (typeof body.multiplier === "number" && body.multiplier >= 1) p.multiplier = body.multiplier;
     if (typeof body.multFrom === "string") p.multFrom = body.multFrom || null;
     if (typeof body.multTo === "string") p.multTo = body.multTo || null;
+    if (Array.isArray(body.multGroups)) {
+      p.multGroups = [...new Set(body.multGroups.map(String).filter((id) => db.groups.some((g) => g.id === id)))];
+    }
+    // Индивидуальные правила множителя (вкладка «Множитель»): атомарная замена
+    // всего набора. Каждое правило проходит валидацию: target ∈ all|staff|group,
+    // targetId ссылается на существующего сотрудника/группу, mult ≥ 1,
+    // days — подмножество 0..6.
+    if (Array.isArray(body.multRules)) {
+      const staffIds = new Set((db.staff || []).map((s) => String(s.id)));
+      const groupIds = new Set((db.groups || []).map((g) => String(g.id)));
+      const validDate = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
+      const validTime = (t) => typeof t === "string" && /^\d{2}:\d{2}$/.test(t);
+      p.multRules = body.multRules
+        .filter((r) => r && typeof r === "object")
+        .map((r) => ({
+          id: String(r.id || r.target + ":" + r.targetId + ":" + r.mult),
+          target: r.target === "staff" || r.target === "group" || r.target === "all" ? r.target : "all",
+          targetId: r.target === "all" ? null : String(r.targetId || ""),
+          mult: Number.isFinite(Number(r.mult)) && Number(r.mult) >= 1 ? Number(r.mult) : 1,
+          date: validDate(r.date) ? r.date : "",
+          from: validTime(r.from) ? r.from : "",
+          to: validTime(r.to) ? r.to : "",
+        }))
+        .filter((r) => {
+          if (!r.date || !r.from || !r.to) return false; // день обязателен
+          if (r.mult <= 1) return false;
+          if (r.target === "all") return true;
+          if (r.target === "staff") return staffIds.has(r.targetId);
+          return groupIds.has(r.targetId);
+        });
+    }
     if (typeof body.norm === "number" && body.norm >= 1 && body.norm <= 24) db.norm = body.norm;
     // Версия обновления Android-APK. Пустая строка/null = вернуться к дефолтам
     // (окружение APP_UPDATE_* или жёсткие значения ниже).
@@ -2177,15 +3319,26 @@ async function handleApi(req, res, urlPath) {
     if (body.action === "bundle") {
       const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean) : [];
       const bundleAddress = String(body.address || "").slice(0, 500).trim();
+      const bundleName = String(body.name || "").slice(0, 200).trim();
       if (ids.length < 2) return sendJson(res, 422, { error: "Выберите хотя бы двух клиентов для связки" });
       if (!bundleAddress) return sendJson(res, 422, { error: "Укажите общий адрес связки" });
       const have = ids.filter((id) => db.driverClients.some((c) => c.id === id));
       if (have.length === 0) return sendJson(res, 404, { error: "Клиенты не найдены" });
       const bundleId = `b-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      // Единый «логин» (бренд-аббревиатура logoText/логотип) связки: если хотя
+      // бы у одного связанного клиента задан logoText (например «STP»), назначаем
+      // его ВСЕМ участникам связки — чтобы в маршруте у связанных клиентов был
+      // прописан один общий код, а не пустые значения у остальных.
+      const bundleMembers = db.driverClients.filter((c) => have.includes(c.id));
+      const commonLogoText = (bundleMembers.find((c) => c && c.logoText) || {}).logoText || "";
+      const commonLogo = (bundleMembers.find((c) => c && c.logo) || {}).logo || null;
       for (const c of db.driverClients) {
         if (have.includes(c.id)) {
           c.bundleId = bundleId;
           c.bundleAddress = bundleAddress;
+          if (bundleName) c.bundleName = bundleName;
+          if (commonLogoText) c.logoText = String(commonLogoText).toUpperCase().slice(0, 5);
+          if (commonLogo) c.logo = commonLogo;
         }
       }
       await persistDb();
@@ -2200,6 +3353,21 @@ async function handleApi(req, res, urlPath) {
         delete found.bundleAddress;
         await persistDb();
       }
+      return sendJson(res, 200, { ok: true, clients: db.driverClients });
+    }
+    // Единое название связки: задать/изменить bundleName у ВСЕХ участников
+    // указанной связки (bundleId). Пустое имя убирает название.
+    if (body.action === "bundle-name") {
+      const bundleId = String(body.bundleId || "");
+      const name = String(body.name || "").slice(0, 200).trim();
+      if (!bundleId) return sendJson(res, 400, { error: "Связка не указана" });
+      const members = db.driverClients.filter((c) => c.bundleId === bundleId);
+      if (members.length === 0) return sendJson(res, 404, { error: "Связка не найдена" });
+      for (const c of members) {
+        if (name) c.bundleName = name;
+        else delete c.bundleName;
+      }
+      await persistDb();
       return sendJson(res, 200, { ok: true, clients: db.driverClients });
     }
     // Удаление клиента. Проверка имени/адреса здесь не нужна — ветка идёт
@@ -2318,17 +3486,26 @@ async function handleApi(req, res, urlPath) {
   // Доступ: админ или сотрудник группы склада (см. canSeeShipment).
   if (urlPath === "/api/shipments" && method === "GET") {
     if (!canSeeShipment(user, db)) return sendJson(res, 403, { error: "forbidden" });
-    // В отгрузку попадают маршруты, ещё не запущенные (status === "idle"):
-    // склад отгружает клиентов до того, как водитель начнёт объезд.
-    // У созданного маршрута progress ещё нет (он появляется при старте или в
-    // ответе normalizeRouteProgress), поэтому принимаем маршруты без progress,
-    // а также те, что ещё не стали активными/завершёнными.
+    // Склад должен видеть ЛЮБОЙ маршрут для сборки (отгрузки) в любое время —
+    // независимо от стадии: ещё не начат (idle), уже активен у водителя (active)
+    // или даже завершён (done). Фильтр по статусу убран, чтобы маршрут не
+    // «выпадал» из очереди отгрузки, если водитель что-то начал раньше.
     const routes = (db.driverRoutes || [])
-      .filter((r) => r && (
-        !r.progress ||
-        (r.progress.status && r.progress.status !== "active" && r.progress.status !== "done")
-      ))
-      .map(normalizeRouteProgress)
+      .filter((r) => !!r)
+      .map((r) => {
+        const route = withResolvedBundleNames(normalizeRouteProgress(r), db);
+        // Количество отгруженных мест по каждому клиенту маршрута: этикетки
+        // (db.labels) привязаны к паре routeId + clientIdx, статус "loaded" —
+        // место погружено складом. Счётчики уезжают во фронт, чтобы в карточке
+        // отгрузки (в т.ч. завершённой) показать «Мест: N».
+        const labels = (db.labels || []).filter((l) => String(l.routeId) === String(route.id));
+        route.clients = (route.clients || []).map((c, i) => ({
+          ...c,
+          loadedCount: labels.filter((l) => Number(l.clientIndex) === i && l.status === "loaded").length,
+          totalCount: labels.filter((l) => Number(l.clientIndex) === i).length,
+        }));
+        return route;
+      })
       .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")) || 0);
     return sendJson(res, 200, { ok: true, routes });
   }
@@ -2341,11 +3518,46 @@ async function handleApi(req, res, urlPath) {
     const routeId = String(body.routeId || "");
     const route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
     if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
+    // Завершить отгрузку БЕЗ полного сканирования могут только распорядители
+    // склада (админ или модератор группы склада). Обычный сотрудник склада
+    // обязан сначала отсканировать все этикетки мест.
+    if (!canManageShipment(user, db)) {
+      const routeLabels = (db.labels || []).filter((l) => String(l.routeId) === String(route.id));
+      const unscanned = routeLabels.filter((l) => l.status !== "loaded");
+      if (unscanned.length > 0) {
+        return sendJson(res, 409, {
+          error: `Отсканируйте все этикетки (осталось ${unscanned.length}), чтобы завершить отгрузку`,
+        });
+      }
+    }
     if (!route.progress) route.progress = { status: "idle", baseLat: null, baseLon: null, baseAddress: "" };
     route.progress.shippedAt = Date.now();
     route.progress.shippedBy = user.id != null ? String(user.id) : null;
     await persistDb();
-    return sendJson(res, 200, { ok: true, route: normalizeRouteProgress(route) });
+    return sendJson(res, 200, { ok: true, route: withResolvedBundleNames(normalizeRouteProgress(route), db) });
+  }
+
+  // Вернуть маршрут обратно к отгрузке (отменить завершение): снимает отметку
+  // shippedAt/shppedBy, и маршрут снова появляется в очереди отгрузки. Доступно
+  // только распорядителям склада (админ или модератор группы склада).
+  if (urlPath === "/api/shipments/reopen" && method === "POST") {
+    if (!canManageShipment(user, db)) return sendJson(res, 403, { error: "forbidden" });
+    const body = await readBody(req);
+    const routeId = String(body.routeId || "");
+    const route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
+    if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
+    if (route.progress) {
+      // Маршрут, который водитель уже завершил (status "done"), вернуть на
+      // отгрузку нельзя — это финал цепочки «склад → водитель», и повторная
+      // сборка уже отработанного маршрута привела бы к задвоению отгрузок.
+      if (route.progress.status === "done") {
+        return sendJson(res, 409, { error: "Маршрут уже завершён водителем — вернуть на отгрузку нельзя" });
+      }
+      delete route.progress.shippedAt;
+      delete route.progress.shippedBy;
+    }
+    await persistDb();
+    return sendJson(res, 200, { ok: true, route: withResolvedBundleNames(normalizeRouteProgress(route), db) });
   }
 
   // Начать отгрузку маршрута: склад помечает, что приступил к отгрузке клиентов.
@@ -2358,12 +3570,39 @@ async function handleApi(req, res, urlPath) {
     const route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
     if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
     if (!route.progress) route.progress = { status: "idle", baseLat: null, baseLon: null, baseAddress: "" };
+    // Если включены расходные накладные — не начинаем отгрузку, пока нет накладной
+    // на каждый клиент маршрута (склад при сборке должен видеть, что собирать).
+    if (db.params && db.params.allowWaybill === true) {
+      const clients = Array.isArray(route.clients) ? route.clients : [];
+      const missing = clients.findIndex((_, i) => {
+        const wb = route.waybills && route.waybills[i];
+        return !wb || !Array.isArray(wb.items) || wb.items.length === 0;
+      });
+      if (missing >= 0) {
+        return sendJson(res, 409, {
+          error: `Загрузите расходную накладную на клиента «${(route.clients[missing].client || route.clients[missing].bundleName || route.clients[missing].address || (missing + 1)).slice(0, 60)}», чтобы начать отгрузку`,
+        });
+      }
+      // Сборка считается готовой, если каждая позиция либо собрана (scanned>=qty),
+      // либо помечена как «не найдено» (missing). Только тогда можно завершить
+      // сборку и начать отгрузку.
+      const notReady = clients.findIndex((_, i) => {
+        const wb = route.waybills && route.waybills[i];
+        const items = (wb && wb.items) || [];
+        return items.some((it) => (Number(it.scanned) || 0) < (Number(it.qty) || 0) && !it.missing);
+      });
+      if (notReady >= 0) {
+        return sendJson(res, 409, {
+          error: `Сборка для клиента «${(route.clients[notReady].client || route.clients[notReady].bundleName || route.clients[notReady].address || (notReady + 1)).slice(0, 60)}» не завершена: остались несобранные позиции`,
+        });
+      }
+    }
     if (!route.progress.shipmentStartedAt) {
       route.progress.shipmentStartedAt = Date.now();
       route.progress.shipmentStartedBy = user.id != null ? String(user.id) : null;
     }
     await persistDb();
-    return sendJson(res, 200, { ok: true, route: normalizeRouteProgress(route) });
+    return sendJson(res, 200, { ok: true, route: withResolvedBundleNames(normalizeRouteProgress(route), db) });
   }
 
   // ---- Этикетки отгрузки (трекинг мест по QR) ----
@@ -2381,6 +3620,12 @@ async function handleApi(req, res, urlPath) {
     const routeId = String(body.routeId || "");
     const clientIndex = Number(body.clientIndex);
     const qty = Math.max(1, Math.min(200, Number(body.qty) || 1));
+    // mode: "replace" (умолч.) — перепечатать: сбросить прежние этикетки пары и
+    // создать заново с 1-го места; "append" — допечатать: добавить qty НОВЫХ мест
+    // СВЕРХ уже созданных (нумерация продолжается), не трогая существующие. Если в
+    // процессе отгрузки нашли ещё места или собрали новые — допечатывают этикетки
+    // без потери уже напечатанных/отсканированных.
+    const mode = body.mode === "append" ? "append" : "replace";
     const route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
     if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
     const clients = Array.isArray(route.clients) ? route.clients : [];
@@ -2391,26 +3636,51 @@ async function handleApi(req, res, urlPath) {
     // Запоминаем число мест в точке маршрута — чтобы при сканировании можно было
     // воссоздать недостающие этикетки, если по какой-то причине их не было создано
     // при печати (например, старые наклейки) или они потерялись.
-    cl.labelQty = qty;
-    // Сброс прежних этикеток этой пары (маршрут+клиент) перед новой печатью.
-    db.labels = (db.labels || []).filter(
-      (l) => !(String(l.routeId) === String(routeId) && Number(l.clientIndex) === clientIndex)
-    );
-    const now = Date.now();
-    for (let i = 1; i <= qty; i++) {
-      const code = `BG${routeId}-${clientIndex + 1}-${i}`;
-      db.labels.push({
-        id: `${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-        code,
-        routeId: String(routeId),
-        clientIndex,
-        client: String(cl.client || ""),
-        address: String(cl.address || ""),
-        place: i,
-        status: "created",
-        at: now,
-        createdBy: user.id != null ? String(user.id) : null,
-      });
+    if (mode === "append") {
+      // Число уже созданных мест этой пары — с него продолжим нумерацию.
+      const existingCount = (db.labels || []).filter(
+        (l) => String(l.routeId) === String(routeId) && Number(l.clientIndex) === clientIndex
+      ).length;
+      cl.labelQty = existingCount + qty;
+      const now = Date.now();
+      for (let i = 1; i <= qty; i++) {
+        const place = existingCount + i;
+        const code = `BG${routeId}-${clientIndex + 1}-${place}`;
+        db.labels.push({
+          id: `${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          code,
+          routeId: String(routeId),
+          clientIndex,
+          client: String(cl.client || ""),
+          address: String(cl.address || ""),
+          place,
+          status: "created",
+          at: now,
+          createdBy: user.id != null ? String(user.id) : null,
+        });
+      }
+    } else {
+      // replace (перепечатка): сброс прежних этикеток этой пары и создание заново.
+      cl.labelQty = qty;
+      db.labels = (db.labels || []).filter(
+        (l) => !(String(l.routeId) === String(routeId) && Number(l.clientIndex) === clientIndex)
+      );
+      const now = Date.now();
+      for (let i = 1; i <= qty; i++) {
+        const code = `BG${routeId}-${clientIndex + 1}-${i}`;
+        db.labels.push({
+          id: `${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          code,
+          routeId: String(routeId),
+          clientIndex,
+          client: String(cl.client || ""),
+          address: String(cl.address || ""),
+          place: i,
+          status: "created",
+          at: now,
+          createdBy: user.id != null ? String(user.id) : null,
+        });
+      }
     }
     // Кап по размеру хранилища этикеток — держим свежие, срезаем старые.
     if (db.labels.length > 8000) db.labels = db.labels.slice(-8000);
@@ -2419,6 +3689,188 @@ async function handleApi(req, res, urlPath) {
       (l) => String(l.routeId) === String(routeId) && Number(l.clientIndex) === clientIndex
     );
     return sendJson(res, 200, { ok: true, labels: created });
+  }
+
+  // Удалить ошибочно созданную этикетку: DELETE /api/labels/:id
+  // Разрешается только для этикетки в статусе «создана» (ещё не отсканирована при
+  // погрузке). Отсканированную (loaded/delivered) удалять нельзя — это сломало бы
+  // цепочку склад → водитель. Доступ: склад (как к отгрузке) или админ.
+  let lm = urlPath.match(/^\/api\/labels\/([A-Za-z0-9_-]+)$/) || null;
+  if (lm && method === "DELETE") {
+    if (!canSeeShipment(user, db) && !admin) return sendJson(res, 403, { error: "forbidden" });
+    const id = lm[1];
+    const idx = (db.labels || []).findIndex((l) => String(l.id) === String(id));
+    if (idx < 0) return sendJson(res, 404, { error: "Этикетка не найдена" });
+    const label = db.labels[idx];
+    if (label.status !== "created") {
+      return sendJson(res, 409, {
+        error: "Удалить можно только этикетку в статусе «создана» (не отсканированную)",
+      });
+    }
+    db.labels.splice(idx, 1);
+    await persistDb();
+    return sendJson(res, 200, { ok: true, id, code: String(label.code || "") });
+  }
+
+  // ---- Расходная накладная по маршруту/клиенту (склад при сборке) ----
+  // Включить: «Параметры» → allowWaybill. Хранится в маршруте:
+  //   route.waybills[clientIndex] = { items: [{art,name,qty,scanned,missing}] }
+  // Загрузка: POST /api/routes/:id/waybill { clientIndex, fileB64 }.
+  // Сканирование: POST /api/routes/:id/waybill/scan { clientIndex, art }.
+  let wm = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill(\/(scan|missing))?$/) || null;
+  // Разбор xlsx для формы создания маршрута (диспетчер): возвращает позиции без
+  // сохранения — их отдаст сам POST создания маршрута.
+  if (urlPath === "/api/waybill/parse" && method === "POST") {
+    if (!admin) return sendJson(res, 403, { ok: false, error: "forbidden" });
+    const body = await readBody(req);
+    const b64 = String(body.fileB64 || "");
+    if (!b64) return sendJson(res, 422, { ok: false, error: "Файл не передан" });
+    let buf;
+    try { buf = Buffer.from(b64, "base64"); } catch { return sendJson(res, 400, { ok: false, error: "Неверные данные файла" }); }
+    if (!buf || buf.length < 100) return sendJson(res, 400, { ok: false, error: "Файл пуст или повреждён" });
+    const parsed = parseXlsxItems(buf);
+    if (parsed.error) return sendJson(res, 400, { ok: false, error: parsed.error });
+    return sendJson(res, 200, { ok: true, items: parsed.items, buyer: parsed.buyer || "" });
+  }
+  // Боксы клиента накладной.
+  if (method === "GET" && urlPath.match(/^\/api\/routes\/([^/]+)\/waybill\/boxes$/)) {
+    const q = req.url.split("?")[1] || "";
+    const qr = new URLSearchParams(q);
+    const routeId = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill\/boxes$/)[1];
+    const clientIndex = Number(qr.get("clientIndex"));
+    const route = (db.driverRoutes || []).find((rr) => String(rr.id) === String(routeId));
+    return sendJson(res, 200, { ok: true, boxes: listWaybillBoxes(route, clientIndex) });
+  }
+  // Удаление бокса: нельзя, если в нём есть привязанные детали. Клиент сначала
+  // показывает предупреждение «в боксе деталь — переразместите в другой бокс».
+  if (method === "POST" && urlPath.match(/^\/api\/routes\/([^/]+)\/waybill\/box\/delete$/)) {
+    const routeId = urlPath.match(/^\/api\/routes\/([^/]+)\/waybill\/box\/delete$/)[1];
+    const body = await readBody(req);
+    const clientIndex = Number(body.clientIndex);
+    const box = String(body.box || "").trim();
+    const route = (db.driverRoutes || []).find((rr) => String(rr.id) === String(routeId));
+    const wb = route && route.waybills && route.waybills[clientIndex];
+    const items = wb && Array.isArray(wb.items) ? wb.items : [];
+    const inBox = items.filter((it) => String(it.box) === box && (Number(it.scanned) || 0) > 0);
+    if (inBox.length > 0) {
+      return sendJson(res, 409, {
+        ok: false,
+        error: `В боксе ${box} — деталей: ${inBox.length}. Переразместите их в другой бокс перед удалением`,
+      });
+    }
+    // Удаляем связанную этикетку места (бокс) и снимаем пустые привязки.
+    db.labels = (db.labels || []).filter((l) =>
+      (String(l.code) !== box) && !(String(l.routeId) === String(routeId) && Number(l.clientIndex) === clientIndex && String(l.code) === box)
+    );
+    items.forEach((it) => { if (String(it.box) === box) it.box = ""; });
+    await persistDb();
+    return sendJson(res, 200, { ok: true, boxes: listWaybillBoxes(route, clientIndex) });
+  }
+  if (wm && method === "POST") {
+    const routeId = wm[1];
+    const action = wm[2] ? wm[2].slice(1) : (wm[0].endsWith("/waybill") ? "upload" : "");
+    if (!db.params || db.params.allowWaybill !== true) {
+      return sendJson(res, 403, { ok: false, error: "Расходные накладные отключены администратором" });
+    }
+    const route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
+    if (!route) return sendJson(res, 404, { ok: false, error: "Маршрут не найден" });
+    const body = await readBody(req);
+    const clientIndex = Number(body.clientIndex);
+    if (!Number.isInteger(clientIndex) || clientIndex < 0) {
+      return sendJson(res, 422, { ok: false, error: "bad clientIndex" });
+    }
+    if (!route.waybills) route.waybills = {};
+    route.waybills[clientIndex] = route.waybills[clientIndex] || { items: [] };
+    const wb = route.waybills[clientIndex];
+    if (action === "scan") {
+      const art = String(body.art || "").trim();
+      if (!art) return sendJson(res, 422, { ok: false, error: "Пустой артикул" });
+      // Деталь привязывается к боксу (коду этикетки места). Бокс обязателен:
+      // если его не отсканировали/не создали — сборщику нельзя принять деталь.
+      const box = String(body.box || "").trim();
+      if (!box) return sendJson(res, 400, { ok: false, error: "Создайте бокс / отсканируйте его перед приёмкой детали" });
+      // Поштучный приём по ЗАПИСЯМ: один и тот же артикул может встречаться в
+      // накладной несколько раз (разными строками). Находим первую ещё не
+      // собранную строку с этим артикулом — сканирование не «съедает» разом все
+      // строки одинакового артикула, а каждую собирает по отдельности.
+      const item = wb.items.find((it) =>
+        String(it.art) === art && (Number(it.scanned) || 0) < (Number(it.qty) || 0) && !it.missing
+      );
+      if (!item) {
+        // Перепривязка: деталь уже собран (строки с артикулом полны). При
+        // повторном скане той же детали меняем её бокс (переносим в другой бокс).
+        const existing = wb.items.find((it) => String(it.art) === art);
+        if (existing) {
+          existing.box = box;
+          route.at = Date.now();
+          await persistDb();
+          return sendJson(res, 200, {
+            ok: true,
+            rebound: true,
+            item: { art: existing.art, name: existing.name, qty: existing.qty, scanned: existing.scanned, missing: !!existing.missing, box: existing.box },
+            left: 0,
+          });
+        }
+        return sendJson(res, 404, { ok: false, error: "Артикул не найден в накладной" });
+      }
+      const left = item.qty - item.scanned;
+      if (left <= 0) return sendJson(res, 409, { ok: false, error: "Этот артикул уже собран полностью" });
+      // Кол-во на отсканированном стикере (обычно 1; если на стикере указано больше
+      // — например «4» — сборщик сканирует один раз и засчитывается сразу 4).
+      let qty = Math.max(1, Number(body.qty) || 1);
+      if (qty > left) qty = left; // не больше остатка строки
+      item.scanned += qty;
+      item.box = box; // привязка детали к боксу (повторный скан детали с др. боксом = перепривязка)
+      if (item.missing) item.missing = false; // нашли — снимаем пометку «не найдено»
+      logWaybillScan(route, clientIndex, item, false, body, user);
+      route.at = Date.now();
+      await persistDb();
+      return sendJson(res, 200, {
+        ok: true,
+        item: { art: item.art, name: item.name, qty: item.qty, scanned: item.scanned, missing: !!item.missing, box: item.box },
+        missing: !!item.missing,
+        left: Math.max(0, item.qty - item.scanned),
+      });
+    }
+    if (action === "missing") {
+      const art = String(body.art || "").trim();
+      if (!art) return sendJson(res, 422, { ok: false, error: "Пустой артикул" });
+      // Пометка «не найдено» привязана к КОНКРЕТНОЙ строке накладной (индекс),
+      // а не к артикулу: одинаковый артикул может повторяться разными строками,
+      // и каждая помечается отдельно (иначе пометка «прыгала» на первую строку).
+      const idx = Number(body.index);
+      const item = (Number.isInteger(idx) && idx >= 0 && idx < wb.items.length && String(wb.items[idx].art) === art)
+        ? wb.items[idx]
+        : wb.items.find((it) => String(it.art) === art);
+      if (!item) return sendJson(res, 404, { ok: false, error: "Артикул не найден в накладной" });
+      const on = body.on === true;
+      item.missing = on;
+      route.at = Date.now();
+      await persistDb();
+      return sendJson(res, 200, {
+        ok: true,
+        item: { art: item.art, name: item.name, qty: item.qty, scanned: item.scanned, missing: !!item.missing },
+      });
+    }
+    // Загрузка накладной: разбираем xlsx из base64. Повторно на ту же точку —
+    // нельзя: накладная уже привязана в рамках этой отгрузки.
+    if (wb.items && wb.items.length > 0) {
+      return sendJson(res, 409, { ok: false, error: "Накладная для этой точки уже загружена и привязана к отгрузке" });
+    }
+    const b64 = String(body.fileB64 || "");
+    if (!b64) return sendJson(res, 422, { ok: false, error: "Файл не передан" });
+    let buf;
+    try { buf = Buffer.from(b64, "base64"); } catch { return sendJson(res, 400, { ok: false, error: "Неверные данные файла" }); }
+    if (!buf || buf.length < 100) return sendJson(res, 400, { ok: false, error: "Файл пуст или повреждён" });
+    const parsed = parseXlsxItems(buf);
+    if (parsed.error) return sendJson(res, 400, { ok: false, error: parsed.error });
+    if (!parsed.items.length) return sendJson(res, 400, { ok: false, error: "В накладной нет позиций" });
+    wb.items = parsed.items.map((x) => Object.assign({}, x, { missing: false }));
+    wb.buyer = parsed.buyer || "";
+    wb.loadedAt = Date.now();
+    route.at = Date.now();
+    await persistDb();
+    return sendJson(res, 200, { ok: true, items: wb.items });
   }
 
   // Сканирование места: POST /api/labels/scan { code, action: "load"|"unload" }
@@ -2482,14 +3934,37 @@ async function handleApi(req, res, urlPath) {
     }
     if (!found) return sendJson(res, 404, { error: "Этикетка не найдена" });
     const now = Date.now();
+    // Реальное время сканирования (клиентский таймстемп). Приходит от клиента, в
+    // т.ч. из офлайн-очереди: когда водитель отсканировал место без сети и скан
+    // ушёл позже. Используем его для deliveredAt/loadedAt и журнала, чтобы время
+    // соответствовало моменту скана, а не доставки.
+    const t = (Number.isFinite(Number(body.clientTime)) && Number(body.clientTime) > 0)
+      ? Number(body.clientTime) : now;
     let warning = null;
+    // Признак «удачного» сканирования: фактически изменился статус места. Повторный
+    // «пик» сканера уже обработанного места статус не меняет — такой дубль в журнал
+    // не пишем, чтобы в журнал попадало ровно одно первое сканирование на место.
+    let changed = false;
     if (action === "load") {
+      // Бокс (= место) можно погрузить, только если в нём собраны детали накладной
+      // (собирали ли мы этот маршрут вообще — проверяем наличие waybills на клиенте).
+      const wbRoute = db.driverRoutes.find((rd) => String(rd.id) === String(found.routeId));
+      const wbForClient = wbRoute && wbRoute.waybills && wbRoute.waybills[found.clientIndex];
+      if (wbForClient && Array.isArray(wbForClient.items) && wbForClient.items.length > 0) {
+        const hasInBox = wbForClient.items.some(
+          (it) => String(it.box) === String(found.code) && (Number(it.scanned) || 0) > 0
+        );
+        if (!hasInBox) {
+          return sendJson(res, 409, { error: "В этом боксе нет собранных деталей — завершите сборку" });
+        }
+      }
       if (found.status === "loaded" || found.status === "delivered") {
         warning = found.status === "delivered" ? "Место уже отгружено и выгружено" : "Место уже погружено";
       } else {
         found.status = "loaded";
-        found.loadedAt = now;
+        found.loadedAt = t;
         found.loadedBy = user.id != null ? String(user.id) : null;
+        changed = true;
       }
     } else { // unload
       if (found.status === "created") {
@@ -2498,11 +3973,36 @@ async function handleApi(req, res, urlPath) {
         warning = "Место уже выгружено";
       } else {
         found.status = "delivered";
-        found.deliveredAt = now;
+        found.deliveredAt = t;
         found.deliveredBy = user.id != null ? String(user.id) : null;
+        changed = true;
       }
     }
-    await persistDb();
+    // Журнал сканирования мест (раздел «Журнал», видят все): фиксируем каждый
+    // ЛИШЬ удачное сканирование (статус реально изменился) — первый скан на погрузке
+    // (load) и выгрузке (unload) с именем пользователя и временем до секунды. Каждую
+    // последующую дублирующую сработку («пик») того же места в журнал не вносим.
+    if (changed) {
+      const scanLogLimit = Number(db.params && db.params.scanLogLimit) || 30000;
+      db.scanLog = db.scanLog || [];
+      db.scanLog.push({
+        ts: t,
+        userId: user.id != null ? String(user.id) : null,
+        userName: String(user.name || ""),
+        action, // "load" (погрузка) | "unload" (выгрузка)
+        code: String(found.code || ""),
+        client: String(found.client || ""),
+        address: String(found.address || ""),
+        routeId: found.routeId != null ? String(found.routeId) : null,
+        status: String(found.status || ""),
+        warning: null,
+      });
+      if (db.scanLog.length > scanLogLimit) db.scanLog = db.scanLog.slice(-scanLogLimit);
+    }
+    // Запись БД на диск выполняем асинхронно (не ждём завершения перед ответом):
+    // сам скан уже обработан в памяти — так отклик ТСД не ждёт медленную запись
+    // большого JSON, а «Хорошо/Плохо» приходит без задержки после сканирования.
+    persistDb().catch(() => {});
     return sendJson(res, 200, { ok: true, label: found, warning });
   }
 
@@ -2530,6 +4030,44 @@ async function handleApi(req, res, urlPath) {
     return sendJson(res, 200, { ok: true, labels: list });
   }
 
+  // Журнал сканирования мест — раздел «Журнал», видят все пользователи.
+  // Записи идут свежими вперёд. Опциональные фильтры: ?action=load|unload,
+  // ?limit=N (сколько последних вернуть; по умолчанию 300, максимум 2000).
+  if (urlPath === "/api/scanlog" && method === "GET") {
+    const q = req.url.split("?")[1] || "";
+    const params = new URLSearchParams(q);
+    const action = String(params.get("action") || "");
+    let limit = Number(params.get("limit") || 300);
+    if (!Number.isInteger(limit) || limit < 1) limit = 300;
+    if (limit > 2000) limit = 2000;
+    let list = (db.scanLog || []).slice().reverse(); // свежие вперёд
+    if (action === "load" || action === "unload") {
+      list = list.filter((e) => e.action === action);
+    }
+    list = list.slice(0, limit);
+    // Обогащаем каждую запись номером места и общим числом мест (для колонки
+    // «Номер места» в журнале: «1 из 2»). Номер места — последний сегмент кода
+    // этикетки «BG<routeId>-<clientIdx+1>-<place>» (парсим с конца, т.к. routeId
+    // сам может содержать дефис); общее число мест — сколько этикеток хранится
+    // у этого клиента (routeId + clientIndex).
+    list = list.map((e) => {
+      const out = Object.assign({}, e);
+      const parts = String(e.code || "").split("-");
+      const placeNum = parts.length >= 3 ? Number(parts[parts.length - 1]) : NaN;
+      const clientNum = parts.length >= 3 ? Number(parts[parts.length - 2]) : NaN;
+      let total = 0;
+      if (e.routeId != null && Number.isInteger(clientNum) && clientNum > 0) {
+        total = (db.labels || []).filter(
+          (l) => String(l.routeId) === String(e.routeId) && Number(l.clientIndex) === clientNum - 1
+        ).length;
+      }
+      out.place = Number.isInteger(placeNum) && placeNum > 0 ? placeNum : null;
+      out.totalPlaces = total > 0 ? total : null;
+      return out;
+    });
+    return sendJson(res, 200, { ok: true, entries: list });
+  }
+
   if (urlPath === "/api/drivers/routes" && method === "GET") {
     // Опциональный фильтр по дате (?date=YYYY-MM-DD): маршруты конкретного дня.
     const q = req.url.split("?")[1] || "";
@@ -2537,17 +4075,61 @@ async function handleApi(req, res, urlPath) {
     const date = String(params.get("date") || "").slice(0, 10);
     const filterDate = (arr) => (date ? arr.filter((r) => r.date === date) : arr);
     // Админ видит все маршруты; водитель — только свои; остальным — доступ запрещён.
+    const withKm = (r) => {
+      const rr = enrichUnloadProgress(withResolvedBundleNames(normalizeRouteProgress(r), db), db.labels);
+      const id = String(rr.id || "");
+      // Приоритет километража для карточки списка:
+      //   1) дорожный км из кэша 2ГИС (routeKmRoad: база → точки → возврат) —
+      //      он совпадает с дорожными мостами схемы маршрута, чтобы число в
+      //      списке и на схеме показывалось одинаково (Вариант 2);
+      //   2) km, сохранённый при построении/сохранении маршрута (route.km);
+      //   3) км по прямой (гаверсинус) как мгновенный фолбэк + запуск фонового
+      //      дорожного расчёта, чтобы следующий просмотр показал дорожный км.
+      const cached = routeKmCache[id];
+      if (Number.isFinite(Number(cached))) {
+        rr.km = Number(cached);
+      } else {
+        const saved = Number(rr && rr.km);
+        if (Number.isFinite(saved) && saved >= 0 && typeof rr.km === "number") {
+          rr.km = saved;
+        } else {
+        rr.km = routeKm(rr); // быстрый фолбэк по прямой
+        // Сразу фиксируем прямой км в кэше: пока дорожный расчёт (2ГИС) не
+        // вернулся, карточка показывает стабильное число без «прыжков», а после
+        // рестарта сервера (кэш в памяти пуст) не выполняется повторная лавина
+        // внешних запросов ради уже известного значения. Дорожный км, когда
+        // придёт, перезапишет это значение в routeKmCache.
+        routeKmCache[id] = rr.km;
+        if (!routeKmPending[id]) {
+          routeKmPending[id] = true;
+          routeKmRoad(rr).then((km) => {
+            if (Number.isFinite(Number(km))) routeKmCache[id] = Number(km);
+          }).catch(() => {}).finally(() => { delete routeKmPending[id]; });
+        }
+        }
+      }
+      return rr;
+    };
     if (isDriver(user, db) && !admin) {
-      const routes = filterDate((db.driverRoutes || []).filter((r) => r.driverId === user.id));
+      // Водитель видит свои маршруты. Строгое совпадение — по driverId, но если
+      // маршрут был назначен под ДРУГИМ id того же человека (id водителя меняется
+      // между сессиями: портальный id vs net_/vibe:/share- id WebView), он не
+      // попадал бы в список. Поэтому добавляем фолбэк по имени (tolerant name
+      // match — тот же механизм, что уже используется для админов), чтобы маршрут,
+      // созданный в другое время под другим id, всё равно был виден водителю.
+      const routes = filterDate((db.driverRoutes || []).filter((r) =>
+        r.driverId === user.id
+        || (r.driverName && user.name && namesMatch(user.name, r.driverName))
+      ));
       return sendJson(res, 200, {
         ok: true,
-        routes: routes.map((r) => enrichUnloadProgress(normalizeRouteProgress(r), db.labels)),
+        routes: routes.map(withKm),
       });
     }
     if (!admin) return sendJson(res, 403, { error: "forbidden" });
     return sendJson(res, 200, {
       ok: true,
-      routes: filterDate(db.driverRoutes || []).map((r) => enrichUnloadProgress(normalizeRouteProgress(r), db.labels)),
+      routes: filterDate(db.driverRoutes || []).map(withKm),
     });
   }
 
@@ -2561,32 +4143,60 @@ async function handleApi(req, res, urlPath) {
     const params = new URLSearchParams(q);
     const date = String(params.get("date") || "").slice(0, 10);
     const list = (date ? (db.driverRoutes || []).filter((r) => r.date === date) : db.driverRoutes || [])
-      .map(normalizeRouteProgress)
-      .map((r) => ({
-        routeId: r.id,
-        driverId: String(r.driverId || ""),
-        driverName: r.driverName || "",
-        routeName: r.routeName || "",
-        date: r.date || "",
-        status: (r.progress && r.progress.status) || "idle",
-        lunchActive: !!(r.progress && r.progress.lunchActive),
-        lunchStart: (r.progress && Number.isFinite(r.progress.lunchStart)) ? r.progress.lunchStart : null,
-        base: (r.progress && Number.isFinite(r.progress.baseLat) && Number.isFinite(r.progress.baseLon))
-          ? { lat: r.progress.baseLat, lon: r.progress.baseLon }
-          : null,
-        clients: (Array.isArray(r.clients) ? r.clients : []).map((c) => ({
-          client: c.client || "",
-          address: c.address || "",
-          state: c.state || "pending",
-          lat: Number.isFinite(c.lat) ? c.lat : null,
-          lon: Number.isFinite(c.lon) ? c.lon : null,
-          transitStart: Number.isFinite(c.transitStart) ? c.transitStart : null,
-          transitEnd: Number.isFinite(c.transitEnd) ? c.transitEnd : null,
-          transitPaused: Number.isFinite(c.transitPaused) ? c.transitPaused : 0,
-          siteStart: Number.isFinite(c.siteStart) ? c.siteStart : null,
-          siteEnd: Number.isFinite(c.siteEnd) ? c.siteEnd : null,
-        })),
-      }));
+      .map((r) => withResolvedBundleNames(normalizeRouteProgress(r), db))
+      .map((r) => {
+        // Счётчики мест по клиенту: всего этикеток и сколько выгружено (delivered).
+        // Код места — «BG<routeId>-<clientIndex+1>-<place>» (см. enrichUnloadProgress).
+        const labels = db.labels || [];
+        const clients = (Array.isArray(r.clients) ? r.clients : []).map((c, i) => {
+          const mine = labels.filter(
+            (l) => String(l.routeId) === String(r.id) && Number(l.clientIndex) === i
+          );
+          const total = mine.length;
+          const done = mine.filter((l) => l.status === "delivered").length;
+          return {
+            client: c.client || "",
+            address: c.address || "",
+            bundleName: c.bundleName || "",
+            members: Array.isArray(c.members) && c.members.length > 0
+              ? c.members.map((m) => ({ client: m.client || "" }))
+              : undefined,
+            state: c.state || "pending",
+            // Причина переноса точки (если есть): нужна разделу «Доставка», чтобы
+            // диспетчер видел, почему точка перенесена. Раньше сервер её не отдавал.
+            postponeReason: c.postponeReason || "",
+            lat: Number.isFinite(c.lat) ? c.lat : null,
+            lon: Number.isFinite(c.lon) ? c.lon : null,
+            transitStart: Number.isFinite(c.transitStart) ? c.transitStart : null,
+            transitEnd: Number.isFinite(c.transitEnd) ? c.transitEnd : null,
+            transitPaused: Number.isFinite(c.transitPaused) ? c.transitPaused : 0,
+            siteStart: Number.isFinite(c.siteStart) ? c.siteStart : null,
+            siteEnd: Number.isFinite(c.siteEnd) ? c.siteEnd : null,
+            // Места: сколько всего у клиента и сколько выгружено.
+            placesTotal: total,
+            placesDone: done,
+          };
+        });
+        // Общий счётчик мест по всему маршруту: всего и выгружено.
+        const routeTotal = clients.reduce((s, c) => s + (c.placesTotal || 0), 0);
+        const routeDone = clients.reduce((s, c) => s + (c.placesDone || 0), 0);
+        return {
+          routeId: r.id,
+          driverId: String(r.driverId || ""),
+          driverName: r.driverName || "",
+          routeName: r.routeName || "",
+          date: r.date || "",
+          status: (r.progress && r.progress.status) || "idle",
+          lunchActive: !!(r.progress && r.progress.lunchActive),
+          lunchStart: (r.progress && Number.isFinite(r.progress.lunchStart)) ? r.progress.lunchStart : null,
+          base: (r.progress && Number.isFinite(r.progress.baseLat) && Number.isFinite(r.progress.baseLon))
+            ? { lat: r.progress.baseLat, lon: r.progress.baseLon }
+            : null,
+          clients,
+          placesTotal: routeTotal,
+          placesDone: routeDone,
+        };
+      });
     return sendJson(res, 200, { ok: true, date, deliveries: list });
   }
 
@@ -2629,7 +4239,34 @@ async function handleApi(req, res, urlPath) {
     const body = await readBody(req);
     if (body.action === "delete") {
       const id = String(body.id || "");
-      db.driverRoutes = (db.driverRoutes || []).filter((r) => r.id !== id);
+      const idx = (db.driverRoutes || []).findIndex((r) => r.id === id);
+      if (idx < 0) return sendJson(res, 404, { error: "Маршрут не найден" });
+      const target = db.driverRoutes[idx];
+      const p = target.progress || {};
+      // Маршрут, который занят — водитель ведёт его прямо сейчас (active), склад
+      // взял в сборку/отгрузку (shipmentStartedAt) или он завершён (done), —
+      // удаляется ТОЛЬКО по коду доступа, заданному админом в «Параметры»
+      // (routeDeleteCode). Админ может удалить такой маршрут в любой момент, но
+      // обязательно подтвердив кодом — чтобы историю доставки не потерять
+      // случайно. Обычные (не занятые) маршруты удаляются без кода, как и раньше.
+      const occupied = p.status === "done" || p.status === "active" || !!p.shipmentStartedAt;
+      if (occupied) {
+        const expected = String((db.params && db.params.routeDeleteCode) || "").trim();
+        const given = String(body.code || "").trim();
+        if (!expected) {
+          return sendJson(res, 409, { error: "Код удаления занятого маршрута не задан в «Параметры»" });
+        }
+        if (!given || given !== expected) {
+          return sendJson(res, 403, { error: "Неверный код удаления" });
+        }
+      }
+      db.driverRoutes.splice(idx, 1);
+      // Заодно убираем этикетки мест этого маршрута — иначе в хранилище этикеток
+      // остаётся мусор от удалённого маршрута.
+      db.labels = (db.labels || []).filter((l) => String(l.routeId) !== String(id));
+      // Удаляем из кэша дорожного км (routeKmCache) след удалённого маршрута.
+      delete routeKmCache[id];
+      delete routeKmPending[id];
       await persistDb();
       return sendJson(res, 200, { ok: true, routes: db.driverRoutes });
     }
@@ -2639,51 +4276,133 @@ async function handleApi(req, res, urlPath) {
       const id = String(body.id || "");
       const found = (db.driverRoutes || []).find((r) => r.id === id);
       if (!found) return sendJson(res, 404, { error: "Маршрут не найден" });
+      // Маршрут запрещено редактировать, если он завершён или взят в работу
+      // водителем: состав и порядок остановок зафиксированы. Если же СКЛАД уже
+      // начал сборку/отгрузку (shipmentStartedAt), диспетчеру разрешено править
+      // маршрут — он, а не склад, отвечает за актуальный состав остановок.
+      // Причину блокировки показываем точечно (см. routeLockReason).
+      if (found.progress) {
+        const locked = found.progress.status === "done"
+          || found.progress.status === "active";
+        if (locked) {
+          return sendJson(res, 409, { error: routeLockReason(found.progress) });
+        }
+      }
       const clients = Array.isArray(body.clients)
-        ? body.clients.slice(0, 50).map((c) => ({
-            client: String(c.client || "").slice(0, 200),
-            address: String(c.address || "").slice(0, 500),
-            bundleId: c.bundleId ? String(c.bundleId).slice(0, 60) : null,
-            logo: c.logo ? String(c.logo).slice(0, 200000) : null,
-            logoText: String(c.logoText || "").toUpperCase().slice(0, 5),
-          })).filter((c) => c.client || c.address)
+        ? body.clients.slice(0, 50).map(normalizeRouteClient).filter((c) => c.client || c.address)
         : [];
       if (clients.length === 0) return sendJson(res, 400, { error: "Укажите хотя бы одного клиента" });
       if (body.date) found.date = String(body.date).slice(0, 10);
       if (body.driverId) found.driverId = String(body.driverId).slice(0, 60);
       if (body.driverName !== undefined) found.driverName = String(body.driverName || "").slice(0, 200);
+      if (body.routeName !== undefined) {
+        found.routeName = String(body.routeName || "").trim().slice(0, 60) || "Маршрут";
+      }
       found.clients = clients;
       found.at = Date.now();
+      // Километраж из построения маршрута: клиент передаёт сумму мостов, которую
+      // админ видел при построении. Сохраняем её, чтобы карточка списка всегда
+      // показывала то же число, что и построение.
+      if (Number.isFinite(Number(body.km)) && Number(body.km) >= 0) {
+        found.km = Math.round(Number(body.km) * 10) / 10;
+      } else {
+        // Состав/порядок точек изменились, а новый км построения не передан —
+        // сбрасываем сохранённый км, чтобы карточка не показывала устаревшее
+        // число; дорожное значение подтянет фоновый кэш (routeKmCache).
+        delete found.km;
+        delete routeKmCache[id];
+        delete routeKmPending[id];
+      }
       await persistDb();
       return sendJson(res, 200, { ok: true, routes: db.driverRoutes });
     }
     const date = String(body.date || "").slice(0, 10);
     const driverId = String(body.driverId || "").slice(0, 60);
     const driverName = String(body.driverName || "").slice(0, 200);
+    // Название маршрута задаёт САМ диспетчер произвольной строкой. Оно является
+    // обязательным: именно его видно в списке маршрутов и отчётах. Автоподстановки
+    // «"ОБЕД"» больше нет — маршрут не должен получать случайное название.
+    // Диспетчер может создать сколько угодно маршрутов на день — по одному на
+    // каждое введённое название.
+    const routeName = String(body.routeName || "").trim().slice(0, 60);
+    if (!routeName) {
+      return sendJson(res, 400, { error: "Укажите название маршрута" });
+    }
     const clients = Array.isArray(body.clients)
-      ? body.clients.slice(0, 50).map((c) => ({
-          client: String(c.client || "").slice(0, 200),
-          address: String(c.address || "").slice(0, 500),
-          bundleId: c.bundleId ? String(c.bundleId).slice(0, 60) : null,
-          logo: c.logo ? String(c.logo).slice(0, 200000) : null,
-          logoText: String(c.logoText || "").toUpperCase().slice(0, 5),
-        })).filter((c) => c.client || c.address)
+      ? body.clients.slice(0, 50).map(normalizeRouteClient).filter((c) => c.client || c.address)
       : [];
     if (!date || !driverId || clients.length === 0) {
       return sendJson(res, 400, { error: "Укажите дату, водителя и хотя бы одного клиента" });
     }
-    // Автоматическое имя маршрута по текущему времени: Утро (<12), Обед (12–17), Вечер (>17).
-    const hour = new Date().getHours();
-    const routeName = hour < 12 ? "Утро" : (hour < 17 ? "Обед" : "Вечер");
+    // Расходные накладные по клиентам маршрута: диспетчер загружает их при
+    // составлении маршрута (ДО создания). Каждая: { clientIndex, items }.
+    const wbOn = db.params && db.params.allowWaybill === true;
+    const waybillsArr = [];
+    if (Array.isArray(body.waybills)) {
+      for (const w of body.waybills) {
+        const idx = Number(w && w.clientIndex);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= clients.length) continue;
+        const items = Array.isArray(w.items)
+          ? w.items
+              .map((it) => ({
+                art: String((it && it.art) || "").trim(),
+                name: String((it && it.name) || "").trim(),
+                qty: Number(it && it.qty) > 0 ? Number(it.qty) : 1,
+                scanned: 0,
+                missing: false,
+              }))
+              .filter((it) => it.art)
+          : [];
+        if (items.length > 0) {
+          waybillsArr.push({ clientIndex: idx, items, buyer: String((w && w.buyer) || "").trim() });
+        }
+      }
+    }
+    if (wbOn) {
+      const missingIdx = clients.findIndex((_, i) =>
+        !waybillsArr.some((w) => w.clientIndex === i && w.items.length > 0)
+      );
+      if (missingIdx >= 0) {
+        return sendJson(res, 409, {
+          error: `Загрузите расходную накладную на клиента «${(clients[missingIdx].client || clients[missingIdx].bundleName || clients[missingIdx].address || (missingIdx + 1)).slice(0, 60)}» перед созданием маршрута`,
+        });
+      }
+    }
     db.driverRoutes = db.driverRoutes || [];
-    // На одну дату у водителя один маршрут на слот (Утро/Обед/Вечер): повторное
-    // создание того же слота заменяет существующий, а не плодит дубликаты.
+    // На одну дату и водителя маршруты различаются ИМЕНЕМ слота (которое задаёт
+    // диспетчер): одно и то же имя заменяет существующий маршрут, разные имена —
+    // создают отдельные маршруты (отдельные отгрузки).
     const existIdx = db.driverRoutes.findIndex(
       (r) => r.date === date && r.driverId === driverId && r.routeName === routeName
     );
     if (existIdx >= 0) {
+      // Маршрут занят (завершён / в работе / в сборке) нельзя перезаписывать даже
+      // через повторное «создание» того же слота: состав и порядок зафиксированы.
+      const existing = db.driverRoutes[existIdx];
+      if (existing && existing.progress) {
+        const locked = existing.progress.status === "done"
+          || existing.progress.status === "active"
+          || !!existing.progress.shipmentStartedAt;
+        if (locked) {
+          return sendJson(res, 409, { error: routeLockReason(existing.progress) });
+        }
+      }
       db.driverRoutes[existIdx].clients = clients;
+      // Состав маршрута изменился — перепривязываем этикетки под новые позиции
+      // клиентов, иначе после правки места «съезжают» на чужих клиентов
+      // (например, у Авилон ЗИЛ показывается 3 вместо ДЦ Алтуфьево). Маршрут
+      // здесь не занят (locked проверен выше), поэтому перепривязка безопасна.
+      relinkRouteLabels(db.driverRoutes[existIdx].id, clients, db.labels);
       db.driverRoutes[existIdx].at = Date.now();
+      if (waybillsArr.length) {
+        if (!db.driverRoutes[existIdx].waybills) db.driverRoutes[existIdx].waybills = {};
+        waybillsArr.forEach((w) => {
+          db.driverRoutes[existIdx].waybills[w.clientIndex] = { items: w.items, buyer: String(w.buyer || ""), loadedAt: Date.now() };
+        });
+      }
+      if (Number.isFinite(Number(body.km)) && Number(body.km) >= 0) {
+        db.driverRoutes[existIdx].km = Math.round(Number(body.km) * 10) / 10;
+      }
     } else {
       db.driverRoutes.push({
         id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
@@ -2692,13 +4411,91 @@ async function handleApi(req, res, urlPath) {
         driverName,
         routeName,
         clients,
+        km: (Number.isFinite(Number(body.km)) && Number(body.km) >= 0)
+          ? Math.round(Number(body.km) * 10) / 10
+          : undefined,
         addedBy: user.id,
         at: Date.now(),
+        waybills: waybillsArr.length
+          ? Object.fromEntries(waybillsArr.map((w) => [w.clientIndex, { items: w.items, buyer: String(w.buyer || ""), loadedAt: Date.now() }]))
+          : undefined,
       });
     }
     if (db.driverRoutes.length > 3000) db.driverRoutes = db.driverRoutes.slice(-3000);
     await persistDb();
     return sendJson(res, 200, { ok: true, routes: db.driverRoutes });
+  }
+
+  // ---- POST /api/routes/unlock   ({ routeId })
+  // «Расфиксирование» залипшего маршрута: снимает флаги блокировки, из-за которых
+  // маршрут нельзя редактировать, хотя реальной работы по нему уже нет.
+  // Два типичных «залипших» случая:
+  //   • водитель нажал «Начать маршрут» (status стал "active"), но не завершил его —
+  //     статус остался active навсегда, хотя водитель уже не ведёт маршрут;
+  //   • склад начал сборку (shipmentStartedAt), но не завершил отгрузку (shippedAt
+  //     не выставлен) — сборка снялась/прервалась, а флаг остался.
+  // Правило безопасности: НЕ расфиксируем завершённый маршрут (status "done") —
+  // это финальное состояние, оно снимается только кодом удаления и не «залипает»
+  // по ошибке. Также НЕ трогаем маршрут, отгрузка которого реально завершена
+  // (shippedAt выставлен): его занятость — легитимная, просто склад забыл «завершить».
+  // Доступ: администратор или распорядитель склада. Запуск этой операции требует
+  // явного подтверждения пользователя на фронте (кнопка «Разблокировать»).
+  if (urlPath === "/api/routes/unlock" && method === "POST") {
+    if (!admin && !canManageShipment(user, db)) {
+      return sendJson(res, 403, { error: "forbidden" });
+    }
+    const body = await readBody(req);
+    const routeId = String(body.routeId || "");
+    const route = (db.driverRoutes || []).find((r) => String(r.id) === String(routeId));
+    if (!route) return sendJson(res, 404, { error: "Маршрут не найден" });
+    const p = route.progress || {};
+    // Завершённый водителем маршрут расфиксации не подлежит.
+    if (p.status === "done") {
+      return sendJson(res, 409, { error: "Завершённый маршрут расфиксировать нельзя" });
+    }
+    // Отгрузка, реально завершённая складом (shippedAt), — не «залипший» случай:
+    // маршрут легитимно стоит в очереди водителя. Такой расфиксировать не даём.
+    if (p.shippedAt) {
+      return sendJson(res, 409, { error: "Отгрузка маршрута завершена — нечего расфиксировать" });
+    }
+    // Реальная блокировка могла быть от водителя (active) или от склада (shipmentStartedAt).
+    let releases = 0;
+    const before = routeLockReason(p);
+    if (p.status === "active") {
+      p.status = "idle";
+      releases++;
+    }
+    if (p.shipmentStartedAt) {
+      delete p.shipmentStartedAt;
+      delete p.shipmentStartedBy;
+      releases++;
+    }
+    // Если водитель был в пути (клиенты не все «pending»), возвращаем точки к
+    // исходному состоянию «ожидание» и чистим тайминги — маршрут снова настраиваем.
+    (Array.isArray(route.clients) ? route.clients : []).forEach((c) => {
+      if (c && typeof c === "object") {
+        c.state = "pending";
+        c.transitStart = null;
+        c.transitEnd = null;
+        c.siteStart = null;
+        c.siteEnd = null;
+      }
+    });
+    if (releases === 0) {
+      return sendJson(res, 200, {
+        ok: true,
+        note: "Маршрут и так не был заблокирован",
+        route: withResolvedBundleNames(normalizeRouteProgress(route), db),
+      });
+    }
+    route.at = Date.now();
+    await persistDb();
+    return sendJson(res, 200, {
+      ok: true,
+      released: releases,
+      before: before,
+      route: withResolvedBundleNames(normalizeRouteProgress(route), db),
+    });
   }
 
   // ---- POST /api/drivers/routes/optimize   ({ clientIds, baseAddress? })
@@ -2766,15 +4563,26 @@ async function handleApi(req, res, urlPath) {
       const osmPoints = withBase ? [base].concat(reps) : reps.slice();
 
       let nn = null;
-      // 1) TomTom (ключ) — реальное время с учётом пробок.
-      // 2) OSRM — реальные дороги без пробок.
-      // 3) Гаверсинус — «по прямой» (если оба не ответили / нет ключа).
+      // 1) 2ГИС (ключ) — российский сервис, реальное время с учётом пробок.
+      // 2) TomTom (ключ) — реальное время с учётом пробок.
+      // 3) OSRM — реальные дороги без пробок.
+      // 4) Гаверсинус — «по прямой» (если все недоступны / нет ключей).
       try {
-        const matrix = await tomtomDurationMatrix(osmPoints);
+        const matrix = await gisDurationMatrix(osmPoints);
         if (matrix && matrix.length >= osmPoints.length &&
             !matrix.some((row) => row.some((t) => !Number.isFinite(t)))) {
           nn = nearestByTime(reps, matrix, withBase, osmPoints);
-          method = "tomtom";
+          method = "gis";
+        }
+      } catch { /* запасной */ }
+      try {
+        if (!nn) {
+          const matrix = await tomtomDurationMatrix(osmPoints);
+          if (matrix && matrix.length >= osmPoints.length &&
+              !matrix.some((row) => row.some((t) => !Number.isFinite(t)))) {
+            nn = nearestByTime(reps, matrix, withBase, osmPoints);
+            method = "tomtom";
+          }
         }
       } catch { /* запасной */ }
       try {
@@ -2822,6 +4630,82 @@ async function handleApi(req, res, urlPath) {
     });
   }
 
+  // ---- POST /api/drivers/route-km   ({ points: [{lat, lon}, ...] })
+  // Километраж между соседними точками маршрута по реальным дорогам (2ГИС,
+  // с учётом пробок). Клиент присылает точки в ПОРЯДКЕ следования; сервер
+  // возвращает расстояние по дорогам между каждой парой соседних точек.
+  // Фолбэк — «по прямой» (гаверсинус) с method: "straight", если 2ГИС недоступен.
+  if (urlPath === "/api/drivers/route-km" && method === "POST") {
+    const body = await readBody(req);
+    const pts = Array.isArray(body.points) ? body.points : [];
+    const clean = pts
+      .map((p) => ({
+        lat: Number(p && p.lat),
+        lon: Number(p && p.lon),
+      }))
+      .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+    if (clean.length < 2) return sendJson(res, 200, { ok: true, method: "empty", segs: [] });
+
+    let matrix = null;
+    try { matrix = await gisDistanceMatrix(clean); } catch { matrix = null; }
+    const byMatrix = matrix && matrix.length >= clean.length &&
+      !matrix.some((row) => row.some((t) => !Number.isFinite(t)));
+
+    const segs = [];
+    for (let i = 0; i < clean.length - 1; i++) {
+      let km;
+      if (byMatrix) {
+        km = Number(matrix[i][i + 1]); // расстояние от i-й точки к (i+1)-й по дорогам
+      } else {
+        km = haversineKm(clean[i], clean[i + 1]);
+      }
+      segs.push({
+        from: i,
+        to: i + 1,
+        km: Math.round(km * 10) / 10,
+      });
+    }
+    return sendJson(res, 200, { ok: true, method: byMatrix ? "gis" : "straight", segs });
+  }
+
+  // ---- POST /api/drivers/base-km   ({ baseAddress, firstLat, firstLon })
+  // Километраж от БАЗЫ до первой точки маршрута — клиент показывает стрелку
+  // и км слева от первой плитки («от базы до …»). Геокодирует адрес базы
+  // (Яндекс) и считает км по дорогам (2ГИС; фолбэк — по прямой).
+  if (urlPath === "/api/drivers/base-km" && method === "POST") {
+    const body = await readBody(req);
+    const baseAddress = String(body.baseAddress || "").trim();
+    const firstLat = Number(body.firstLat);
+    const firstLon = Number(body.firstLon);
+    if (!baseAddress || !Number.isFinite(firstLat) || !Number.isFinite(firstLon)) {
+      return sendJson(res, 200, { ok: true, km: null, method: "empty" });
+    }
+    let base = null;
+    try { base = await geocodeAddress(baseAddress); } catch { base = null; }
+    if (!base || !Number.isFinite(base.lat) || !Number.isFinite(base.lon)) {
+      return sendJson(res, 200, { ok: true, km: null, method: "base_unresolved" });
+    }
+    let km = null;
+    let method = "straight";
+    try {
+      const matrix = await gisDistanceMatrix([base, { lat: firstLat, lon: firstLon }]);
+      if (matrix && matrix.length >= 2 && Number.isFinite(matrix[0][1])) {
+        km = Number(matrix[0][1]);
+        method = "gis";
+      }
+    } catch { /* запасной */ }
+    if (!Number.isFinite(km)) {
+      km = haversineKm(base, { lat: firstLat, lon: firstLon });
+      method = "straight";
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      km: Math.round(km * 10) / 10,
+      method,
+      base: { lat: base.lat, lon: base.lon },
+    });
+  }
+
   // ---- POST /api/drivers/routes/action   ({ routeId, action })
   // Действия водителя по маршруту. Автоматически переключает стадии точек и
   // считает время в пути к точке и время на точке.
@@ -2842,6 +4726,13 @@ async function handleApi(req, res, urlPath) {
 
     // Подготовить точки: каждая несёт id, стадию и таймстемпы.
     const now = Date.now();
+    // Реальное время нажатия кнопки водителем (клиентский таймстемп). Приходит
+    // всегда в payload, в т.ч. из офлайн-очереди (когда действие нажали без сети
+    // и отправили позже). Используем его для времени на точке/в пути, чтобы учёт
+    // соответствовал моменту действия, а не моменту доставки на сервер. Если
+    // клиент не прислал — откатываемся на now.
+    const t = (Number.isFinite(Number(body.clientTime)) && Number(body.clientTime) > 0)
+      ? Number(body.clientTime) : now;
     if (!route.progress) route.progress = { status: "idle", baseLat: null, baseLon: null, baseAddress: "" };
     // Поля обеда внутри маршрута (вариант 2: обед не исключается из рабочего
     // времени, а фиксируется как «остановка» внутри маршрута, чтобы потом по
@@ -2907,7 +4798,7 @@ async function handleApi(req, res, urlPath) {
     // счётчиком выгрузки мест клиентов. Клонируем (normalizeRouteProgress), чтобы
     // вычисляемые поля unloadTotal/unloadDone/unloadReady не попали в БД.
     const routeResp = () =>
-      ({ ok: true, route: enrichUnloadProgress(normalizeRouteProgress(route), db.labels) });
+      ({ ok: true, route: enrichUnloadProgress(withResolvedBundleNames(normalizeRouteProgress(route), db), db.labels) });
 
     // «Рабочий день завершён» определяется из основного таймера: у водителя в этот
     // день есть закрытый (с указанным концом) work-сегмент. Тогда взять новый
@@ -2940,7 +4831,7 @@ async function handleApi(req, res, urlPath) {
         // группа с единым временем старта — кнопки применяются ко всем.
         const firstGroup = groupOf(route.clients.indexOf(first))
           .filter((i) => route.clients[i].state === "pending");
-        setGroupInTransit(firstGroup, now);
+        setGroupInTransit(firstGroup, t);
       }
       await persistDb();
       return sendJson(res, 200, routeResp());
@@ -2964,9 +4855,9 @@ async function handleApi(req, res, urlPath) {
       groupOf(activeIdx)
         .filter((i) => route.clients[i].state === "in_transit")
         .forEach((i) => {
-          route.clients[i].transitEnd = now;
+          route.clients[i].transitEnd = t;
           route.clients[i].state = "on_site";
-          route.clients[i].siteStart = now;
+          route.clients[i].siteStart = t;
         });
       await persistDb();
       return sendJson(res, 200, routeResp());
@@ -2980,12 +4871,17 @@ async function handleApi(req, res, urlPath) {
       if (!cur || cur.state !== "on_site") {
         return sendJson(res, 409, { error: "Нет точки, на которой вы сейчас находитесь" });
       }
+      // Сдача допустима только после «Завершить выгрузку»: пока водитель не
+      // завершил выгрузку мест, точку закрыть (сдать) нельзя.
+      if (cur.unloadFinished !== true) {
+        return sendJson(res, 409, { error: "Сначала завершите выгрузку" });
+      }
       // Сдача в связке: вся группа (все «на точке») завершается с единым
       // временем, затем вся следующая группа уходит в путь.
       groupOf(activeIdx)
         .filter((i) => route.clients[i].state === "on_site")
         .forEach((i) => {
-          route.clients[i].siteEnd = now;
+          route.clients[i].siteEnd = t;
           route.clients[i].state = "delivered";
         });
       const nextIdx = nextPendingIdx;
@@ -2994,7 +4890,7 @@ async function handleApi(req, res, urlPath) {
         // точка в связке, в путь уходит вся её группа.
         const nextGroup = groupOf(nextIdx)
           .filter((i) => route.clients[i].state === "pending");
-        setGroupInTransit(nextGroup, now);
+        setGroupInTransit(nextGroup, t);
       }
       await persistDb();
       return sendJson(res, 200, routeResp());
@@ -3023,7 +4919,7 @@ async function handleApi(req, res, urlPath) {
       groupOf(activeIdx)
         .filter((i) => route.clients[i].state === "on_site")
         .forEach((i) => {
-          route.clients[i].siteEnd = now;
+          route.clients[i].siteEnd = t;
           route.clients[i].state = "postponed";
           route.clients[i].postponeReason = reason;
         });
@@ -3031,7 +4927,7 @@ async function handleApi(req, res, urlPath) {
       if (nextIdx >= 0) {
         const nextGroup = groupOf(nextIdx)
           .filter((i) => route.clients[i].state === "pending");
-        setGroupInTransit(nextGroup, now);
+        setGroupInTransit(nextGroup, t);
       }
       await persistDb();
       return sendJson(res, 200, routeResp());
@@ -3057,7 +4953,10 @@ async function handleApi(req, res, urlPath) {
       const mine = (db.labels || []).filter(
         (l) => String(l.routeId) === String(route.id) && Number(l.clientIndex) === ci
       );
-      const total = mine.length;
+      // Тот же контракт, что в enrichUnloadProgress: «всего мест» = только
+      // погруженные (loaded|delivered), иначе одно created-место заблокировало бы
+      // «Завершить выгрузку», хотя водитель выгрузил всё погруженное.
+      const total = mine.filter((l) => l.status === "loaded" || l.status === "delivered").length;
       const done = mine.filter((l) => l.status === "delivered").length;
       const allowIncomplete = db.params && db.params.allowFinishUnloadIncomplete === true;
       if (total > 0 && done < total && !allowIncomplete) {
@@ -3083,7 +4982,7 @@ async function handleApi(req, res, urlPath) {
         return sendJson(res, 409, { error: "Сначала завершите все точки маршрута" });
       }
       route.progress.status = "done";
-      route.progress.baseArrivedAt = now;
+      route.progress.baseArrivedAt = t;
       await persistDb();
       return sendJson(res, 200, routeResp());
     }
@@ -3118,6 +5017,58 @@ async function handleApi(req, res, urlPath) {
         route.progress.lunchStart = null;
         route.progress.lunchActive = false;
       }
+      await persistDb();
+      return sendJson(res, 200, routeResp());
+    }
+
+    // «reorder» — водитель меняет порядок ЕЩЁ НЕ ПРОЙДЕННЫХ точек внутри активного
+    // маршрута (можно только когда админ включил параметр allowDriverReorderPoints).
+    // Тело: { routeId, action: "reorder", order: [clientId, ...] } — целевой порядок
+    // id ВСЕХ точек. Сервер проверяет, что это перестановка тех же id и что
+    // замороженные точки (on_site / delivered / postponed) сохраняют свой
+    // относительный порядок; pending и in_transit можно перемещать.
+    if (action === "reorder") {
+      const allowReorder = db.params && db.params.allowDriverReorderPoints === true;
+      if (!allowReorder) {
+        return sendJson(res, 403, { error: "Изменение порядка точек отключено администратором" });
+      }
+      if (route.progress.status !== "active") {
+        return sendJson(res, 409, { error: "Менять порядок можно только в активном маршруте" });
+      }
+      const order = body.order;
+      if (!Array.isArray(order) || order.length !== route.clients.length) {
+        return sendJson(res, 400, { error: "Некорректный порядок точек" });
+      }
+      const byId = new Map(route.clients.map((c) => [String(c.id), c]));
+      // Все id обязаны присутствовать и не дублироваться (это перестановка).
+      const seen = new Set();
+      const newOrder = [];
+      for (const rawId of order) {
+        const id = String(rawId);
+        if (seen.has(id) || !byId.has(id)) {
+          return sendJson(res, 400, { error: "Некорректный порядок точек" });
+        }
+        seen.add(id);
+        newOrder.push(byId.get(id));
+      }
+      // Замороженные точки (on_site / delivered / postponed) не должны менять
+      // относительный порядок между собой. pending и in_transit — перемещаемые:
+      // водитель ещё может поменять порядок точки, к которой только едет.
+      const FROZEN = new Set(["on_site", "delivered", "postponed"]);
+      const frozenCurrent = route.clients.filter((c) => FROZEN.has(c.state)).map((c) => String(c.id));
+      const frozenNew = newOrder.filter((c) => FROZEN.has(c.state)).map((c) => String(c.id));
+      if (JSON.stringify(frozenCurrent) !== JSON.stringify(frozenNew)) {
+        return sendJson(res, 409, { error: "Нельзя менять уже пройденные точки или точку, где вы стоите" });
+      }
+      // Применяем новый порядок.
+      route.clients = newOrder;
+      // Водитель переставил точки в активном маршруте — этикетки/боксы привязаны
+      // к позиции (clientIndex: «BG<routeId>-<clientIndex+1>-<place>», счётчики
+      // мест идут по Number(l.clientIndex) === позиции). Без перепривязки после
+      // перестановки боксы остались бы на старых местах и «съехали» бы на чужие
+      // точки (тот же класс бага, что Авилон ЗИЛ ↔ ДЦ Алтуфьево). Пересчитываем
+      // clientIndex у этикеток маршрута под новый порядок клиентов.
+      relinkRouteLabels(route.id, newOrder, db.labels);
       await persistDb();
       return sendJson(res, 200, routeResp());
     }
@@ -3185,7 +5136,7 @@ async function handleApi(req, res, urlPath) {
       // из группы «Водители» уже после того, как слал геолокацию, его устаревшая
       // запись оставалась в памяти до 10 минут и продолжала рисоваться на карте.
       // Здесь мы проверяем текущую роль и попутно вычищаем осиротевшие данные.
-      if (!isDriver({ id }, db)) {
+      if (!isDriversGroupOnly({ id }, db)) {
         delete db.liveLocations[id];
         delete db.tracks[id];
         continue;
@@ -3253,13 +5204,18 @@ async function handleApi(req, res, urlPath) {
       const key = `${date}:${id}`;
       const cached = snappedTracks[key];
       if (Array.isArray(cached) && cached.length >= 2) {
+        // В кэш кладём ТОЛЬКО реально привязанный к дорогам путь, поэтому
+        // cached гарантированно дорожный — помечаем snapped:true без повторной
+        // проверки.
         tracks.push({ id, name: nameOf(id), track: cached, snapped: true });
       } else {
-        // Кэша нет — считаем в фоне, сейчас отдаём исходный след.
+        // Кэша нет — считаем в фоне, сейчас отдаём исходный след с snapped:false
+        // (фронт не рисует неснапнутые треки, чтобы не показывать «сырые» линии).
         tracks.push({ id, name: nameOf(id), track: coords, snapped: false });
-        snapTrackToRoads(coords).then((roadPath) => {
-          if (roadPath && roadPath.length >= 2) {
-            snappedTracks[key] = roadPath;
+        snapTrackToRoads(coords).then((r) => {
+          // Кэшируем и помечаем как snapped ТОЛЬКО реально дорожный путь.
+          if (r && r.snapped && Array.isArray(r.path) && r.path.length >= 2) {
+            snappedTracks[key] = r.path;
             scheduleSnappedSave();
           }
         }).catch(() => {});
@@ -3287,7 +5243,12 @@ async function handleApi(req, res, urlPath) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) date = motionDayKey(Date.now());
     const now = Date.now();
     const agg = {}; // driverId -> { name, km, moveSec, siteSec, lunchSec, points }
+    const routesPerDriver = {}; // driverId -> [{ id, name, routeName, moveSec, siteSec, lunchSec, points }]
     (db.driverRoutes || []).forEach((r) => {
+      // Подтягиваем «Единое название» связки (bundleName) в точки маршрута из
+      // актуальной базы контрагентов: чтобы у общей точки нескольких контрагентов
+      // на одном адресе в отчёте движения показывалось единое название вместо адреса.
+      r = withResolvedBundleNames(r, db);
       if (!r || r.date !== date) return;
       const prog = r.progress || {};
       const totalLunch = (Array.isArray(prog.lunchHistory) ? prog.lunchHistory : [])
@@ -3331,26 +5292,129 @@ async function handleApi(req, res, urlPath) {
       a.siteSec += siteSec;
       a.lunchSec += totalLunch;
       a.points += points;
+      // Детализация по маршрутам (для раскрытия строки водителя).
+      const cli = Array.isArray(r.clients) ? r.clients : [];
+      let cliTotal = 0, cliDelivered = 0, cliInTransit = 0, places = 0;
+      cli.forEach((c) => {
+        cliTotal += 1;
+        const st = c && c.state;
+        if (st === "delivered" || st === "postponed") cliDelivered += 1;
+        else if (st === "in_transit") cliInTransit += 1;
+        places += Number.isFinite(c && c.labelQty) ? (Number(c.labelQty) || 0) : 0;
+      });
+      // Детализация по клиентам маршрута (для раскрытия маршрута → список клиентов):
+      // время в пути до клиента, время на сдачу, километраж до клиента и места.
+      let prevLat = Number.isFinite(prog.baseLat) ? prog.baseLat : null;
+      let prevLon = Number.isFinite(prog.baseLon) ? prog.baseLon : null;
+      const cliDetail = cli.map((c) => {
+        const tp = Number.isFinite(c.transitPaused) ? c.transitPaused : 0;
+        let ts = Number.isFinite(c.transitStart) ? c.transitStart : 0;
+        let te = Number.isFinite(c.transitEnd) ? c.transitEnd : 0;
+        let ss = Number.isFinite(c.siteStart) ? c.siteStart : 0;
+        let se = Number.isFinite(c.siteEnd) ? c.siteEnd : 0;
+        if (c.state === "in_transit" && ts && !te) te = now;
+        if (c.state === "on_site" && ss && !se) se = now;
+        let km = 0;
+        if (Number.isFinite(c.lat) && Number.isFinite(c.lon)) {
+          if (prevLat != null && prevLon != null) {
+            km = haversineKm({ lat: prevLat, lon: prevLon }, { lat: c.lat, lon: c.lon });
+          }
+          prevLat = c.lat; prevLon = c.lon;
+        }
+        return {
+          client: String(c.client || ""),
+          address: String(c.address || ""),
+          bundleName: String(c.bundleName || ""),
+          state: String(c.state || ""),
+          moveSec: Math.round(((ts && te && te > ts) ? Math.max(0, te - ts - tp) : 0) / 1000),
+          siteSec: Math.round(((ss && se && se > ss) ? (se - ss) : 0) / 1000),
+          km: Math.round(km * 10) / 10,
+          placesDone: Number.isFinite(c.placesDone) ? c.placesDone : 0,
+          placesTotal: Number.isFinite(c.placesTotal) ? c.placesTotal : 0,
+        };
+      });
+      const rd = routesPerDriver[key] || (routesPerDriver[key] = []);
+      rd.push({
+        id: String(r.id != null ? r.id : ""),
+        name: r.routeName || r.driverName || "Маршрут",
+        moveSec: Math.round(moveSec / 1000),
+        siteSec: Math.round(siteSec / 1000),
+        lunchSec: Math.round(totalLunch / 1000),
+        points,
+        cliTotal,
+        cliDelivered,
+        cliInTransit,
+        places,
+        clients: cliDetail,
+      });
     });
-    // Пробег из ФАКТИЧЕСКОГО GPS-трека водителя за день (фиксируется водителем
-    // через /api/drivers/location). Он надёжнее геометрии маршрута «по прямой»:
-    // показывает реально проеханные километры по дорогам. Если трек есть —
-    // берём его, иначе оставляем геометрию маршрута (как раньше).
+    // Пробег из ФАКТИЧЕСКОГО GPS-трека водителя за день, но ТОЛЬКО по перегонам
+    // маршрута (интервалам движения между точками). Личные/утренние/вечерние
+    // поездки вне маршрута в пробег не попадают: для каждого водителя собираем
+    // интервалы движения [transitStart, transitEnd] по всем точкам всех его
+    // маршрутов за дату (плюс перегон возврата на базу, если он зафиксирован)
+    // и суммируем гаверсинус только между теми парами точек трека, которые обе
+    // лежат внутри одного интервала. Если трека по перегонам нет — откатываемся
+    // на геометрию маршрута (база → точки → база), как раньше.
     const dayTracks = tracksByDay[date] || {};
     for (const [id, e] of Object.entries(agg)) {
+      // Интервалы активного движения по маршрутам водителя за дату: для каждой
+      // точки — перегон [transitStart, transitEnd]; плюс перегон возврата на базу
+      // [последний transitEnd, baseArrivedAt], если он зафиксирован.
+      const intervals = [];
+      (db.driverRoutes || []).forEach((r) => {
+        if (!r || r.date !== date || String(r.driverId) !== String(id)) return;
+        let lastEnd = 0;
+        (Array.isArray(r.clients) ? r.clients : []).forEach((c) => {
+          if (!c) return;
+          const ts = Number.isFinite(c.transitStart) ? c.transitStart : 0;
+          const te = Number.isFinite(c.transitEnd) ? c.transitEnd : 0;
+          if (ts && te && te > ts) intervals.push([ts, te]);
+          if (te > lastEnd) lastEnd = te;
+        });
+        const back = Number.isFinite(r.progress && r.progress.baseArrivedAt)
+          ? r.progress.baseArrivedAt : 0;
+        if (lastEnd && back && back > lastEnd) intervals.push([lastEnd, back]);
+      });
+      // Сливаем пересекающиеся интервалы, чтобы одна точка не учитывалась дважды.
+      intervals.sort((x, y) => x[0] - y[0]);
+      const merged = [];
+      for (const iv of intervals) {
+        const lastIv = merged[merged.length - 1];
+        if (lastIv && iv[0] <= lastIv[1]) lastIv[1] = Math.max(lastIv[1], iv[1]);
+        else merged.push([iv[0], iv[1]]);
+      }
       const tr = dayTracks[id] || [];
       if (tr.length >= 2) {
         let tk = 0;
+        let usedAny = false;
         for (let i = 1; i < tr.length; i++) {
           const a = tr[i - 1], b = tr[i];
-          if (Array.isArray(a) && Array.isArray(b) &&
-              Number.isFinite(a[0]) && Number.isFinite(a[1]) &&
-              Number.isFinite(b[0]) && Number.isFinite(b[1])) {
-            tk += haversineKm({ lat: a[0], lon: a[1] }, { lat: b[0], lon: b[1] });
+          if (!Array.isArray(a) || !Array.isArray(b) ||
+              !Number.isFinite(a[0]) || !Number.isFinite(a[1]) ||
+              !Number.isFinite(b[0]) || !Number.isFinite(b[1])) continue;
+          const at = Number.isFinite(a[2]) ? a[2] : 0;
+          const bt = Number.isFinite(b[2]) ? b[2] : 0;
+          if (!(at && bt)) continue;
+          // Обе точки пары должны лежать внутри одного и того же интервала движения.
+          if (!merged.some((iv) => at >= iv[0] && at <= iv[1] && bt >= iv[0] && bt <= iv[1])) continue;
+          const d = haversineKm({ lat: a[0], lon: a[1] }, { lat: b[0], lon: b[1] });
+          const dtH = bt > at ? (bt - at) / 3600000 : 0;
+          if (dtH > 0) {
+            if (d / dtH > 150) continue; // нефизичный скачок — пропускаем
+          } else if (d > 0.05) {
+            continue; // без времени и с большим смещением — выброс
           }
+          tk += d;
+          usedAny = true;
         }
-        e.km = Math.round(tk * 10) / 10;
-        e.kmSource = "gps";
+        if (usedAny) {
+          e.km = Math.round(tk * 10) / 10;
+          e.kmSource = "gps";
+        } else {
+          e.km = Math.round(e.km * 10) / 10;
+          e.kmSource = "route";
+        }
       } else {
         e.km = Math.round(e.km * 10) / 10;
         e.kmSource = "route";
@@ -3365,6 +5429,7 @@ async function handleApi(req, res, urlPath) {
       siteSec: Math.round(e.siteSec / 1000),
       lunchSec: Math.round(e.lunchSec / 1000),
       points: e.points,
+      routes: (routesPerDriver[id] || []).sort((x, y) => (y.points - x.points) || (y.moveSec - x.moveSec)),
     })).sort((x, y) => (y.km - x.km) || (y.moveSec - x.moveSec));
     return sendJson(res, 200, { ok: true, date, rows });
   }
@@ -3376,28 +5441,76 @@ async function handleApi(req, res, urlPath) {
     return sendJson(res, 200, { ok: true, yandexKey: YANDEX_MAPS_KEY });
   }
 
-  // ---- GET /api/app/update-info  — информация об актуальной версии Android-APK.
-  //      Отдаётся любому вошедшему (водителю тоже), чтобы его обёртка могла
-  //      сверить версию и предложить обновление.
-  //      Приоритет значений: настройки приложения (db.params.update*) →
-  //      переменные окружения APP_UPDATE_* → жёсткие дефолты ниже.
+  // ---- /api/app/update-info  и  /api/app/update  — версия приложения ----
+  // GET  /api/app/update-info — информация об актуальной версии. Отдаётся любому
+  //      вошедшему (водителю тоже), чтобы обёртка сверила версию и предложила
+  //      обновление. Приоритет значений:
+  //        db.params.update*  →  version.json (единый источник)  →  env  →  дефолт.
+  // POST /api/app/update      — принимает уведомление от APK-воркфлоу (GitHub
+  //      Actions), которое сообщает собранную версию. Доступ по заголовку
+  //      X-Update-Token (секрет SERVER_UPDATE_TOKEN в секретах Actions).
+  //      Записывает версию в db.params и в version.json — после этого GET
+  //      начинает отдавать новую версию без ручного правки сервера.
+  if (urlPath === "/api/app/update" && method === "POST") {
+    const expected = String(process.env.SERVER_UPDATE_TOKEN || "");
+    const got = String((req.headers["x-update-token"] || "").toString());
+    if (!expected || got !== expected) {
+      return sendJson(res, 401, { ok: false, error: "invalid_token" });
+    }
+    try {
+      const body = await readBody(req);
+      const vc = Number(body.versionCode);
+      const vn = String(body.versionName || "").trim();
+      const url = String(body.apkUrl || "").trim();
+      const notes = String(body.notes || "").trim();
+      if (!Number.isFinite(vc) || vc <= 0 || !vn) {
+        return sendJson(res, 400, { ok: false, error: "bad_payload" });
+      }
+      // Пишем в db.params — GET /api/app/update-info его учитывает первым.
+      db.params = db.params || {};
+      db.params.updateVersionCode = vc;
+      db.params.updateVersionName = vn;
+      if (url) db.params.updateApkUrl = url;
+      if (notes) db.params.updateNotes = notes;
+      await persistDb();
+      // Пишем в единый источник version.json — версию видят и другие компоненты.
+      writeVersionSource(vc, vn, notes);
+      console.log(`[update] Версия обновлена: versionCode=${vc} versionName=${vn}`);
+      return sendJson(res, 200, { ok: true, versionCode: vc, versionName: vn, apkUrl: url });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, error: "bad_json" });
+    }
+  }
+
   if (urlPath === "/api/app/update-info" && method === "GET") {
     const p = db.params || {};
-    const vc = p.updateVersionCode != null
-      ? p.updateVersionCode
-      : Number(process.env.APP_UPDATE_VERSION_CODE || 4);
-    const vn = p.updateVersionName
-      ? String(p.updateVersionName)
-      : String(process.env.APP_UPDATE_VERSION_NAME || "1.0.3");
+    const src = readVersionSource();
+    // Приоритет 1 — актуальная версия, прочитанная напрямую из GitHub
+    // (raw version.json, обновляется CI автоинкрементом): обходит шлюз и не
+    // требует ни сессии, ни токена. Читается с кэшем (TTL), фолбэк ниже.
+    let remote = null;
+    try { remote = await fetchRemoteApkVersion(); } catch { remote = null; }
+    const vc = remote && remote.versionCode
+      ? remote.versionCode
+      : (p.updateVersionCode != null
+          ? p.updateVersionCode
+          : (src.versionCode || Number(process.env.APP_UPDATE_VERSION_CODE || 4)));
+    const vn = remote && remote.versionName
+      ? String(remote.versionName)
+      : (p.updateVersionName
+          ? String(p.updateVersionName)
+          : (src.versionName || String(process.env.APP_UPDATE_VERSION_NAME || "1.0.3")));
     const url = p.updateApkUrl
       ? String(p.updateApkUrl)
       : String(
           process.env.APP_UPDATE_APK_URL ||
             "https://github.com/andreyahmedov29-droid/biotime-android/releases/download/biotime-apk-latest/app-release.apk"
         );
-    const notes = p.updateNotes
-      ? String(p.updateNotes)
-      : String(process.env.APP_UPDATE_NOTES || "Обновление: исправления и улучшения");
+    const notes = remote && remote.notes
+      ? String(remote.notes)
+      : (p.updateNotes
+          ? String(p.updateNotes)
+          : (src.notes || String(process.env.APP_UPDATE_NOTES || "Обновление: исправления и улучшения")));
     return sendJson(res, 200, {
       ok: true,
       versionCode: vc,
@@ -3673,8 +5786,17 @@ async function handleApi(req, res, urlPath) {
 }
 
 function serveHtml(res, data) {
+  // Cache-buster для статики: заменяем плейсхолдер ?v=RELEASE в ссылках на
+  // app.js/styles.css актуальным versionCode из version.json. Это гарантирует,
+  // что после каждого релиза браузеры пользователей загружают свежие файлы,
+  // а не закешированную старую версию.
+  let out = data;
+  try {
+    const ver = Number(readVersionSource().versionCode) || 0;
+    if (ver > 0) out = Buffer.from(String(data).split("?v=RELEASE").join("?v=" + ver));
+  } catch { /* если не вышло — отдаём как есть */ }
   res.writeHead(200, { "Content-Type": MIME[".html"] });
-  res.end(data);
+  res.end(out);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -3712,7 +5834,28 @@ const server = http.createServer(async (req, res) => {
       }
       const ext = path.extname(filePath).toLowerCase();
       if (ext === ".html") return serveHtml(res, data);
-      res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
+      const type = MIME[ext] || "application/octet-stream";
+      // gzip-сжатие текстовой статики (js/css/json/svg/webmanifest): уменьшает
+      // объём app.js/styles.css в разы, заметно ускоряя первую загрузку WebView
+      // на мобильных и ТСД (пока Service Worker кэш ещё пуст). Изображения не
+      // трогаем — они уже сжаты и сжимать их бессмысленно.
+      // Манифест (.webmanifest) НЕ сжимаем: это маленький PWA-файл, который
+      // браузер требует строго как JSON без обёрток — gzip тут лишь риск
+      // «Manifest: Syntax error» при некоторых прокси/загрузчиках манифеста.
+      const GZIP_EXT = new Set([".js", ".css", ".json", ".svg", ".txt", ".md", ".xml"]);
+      if (GZIP_EXT.has(ext) && /\bgzip\b/.test(String(req.headers["accept-encoding"] || ""))) {
+        try {
+          const gz = zlib.gzipSync(data, { level: 9 });
+          res.writeHead(200, {
+            "Content-Type": type,
+            "Content-Encoding": "gzip",
+            "Vary": "Accept-Encoding",
+            "Content-Length": gz.length,
+          });
+          return res.end(gz);
+        } catch { /* сжатие не вышло — отдаём как есть */ }
+      }
+      res.writeHead(200, { "Content-Type": type });
       res.end(data);
     });
   } catch (e) {

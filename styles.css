@@ -150,21 +150,27 @@ body {
    Топбар и навигация
    ========================================================================== */
 .topbar {
-  position: sticky;
+  position: fixed;
   top: 0;
-  z-index: 50;
+  left: 0;
+  right: 0;
+  z-index: 999;
+  /* Фиксированная шапка: сплошная непрозрачная плашка на всю ширину, чтобы
+     навигация всегда оставалась наверху и была читаема над любым контентом. */
+  background: var(--panel-solid);
+  border-bottom: 1px solid var(--line-strong);
+  box-shadow: 0 6px 26px rgba(0, 0, 0, 0.35);
+}
+
+/* Центрированная широкая «дорога» внутри фиксированной шапки */
+.topbar-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px 28px;
   max-width: 1120px;
   margin: 0 auto;
-  background: linear-gradient(180deg, rgba(10, 11, 16, 0.72), rgba(10, 11, 16, 0.45));
-  backdrop-filter: blur(22px) saturate(150%);
-  -webkit-backdrop-filter: blur(22px) saturate(150%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 14px 40px -18px rgba(0, 0, 0, 0.7);
+  padding: 18px 28px;
 }
 
 .brand {
@@ -218,12 +224,15 @@ body {
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 4px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  /* Кнопки вверху БЕЗ подложки: рядом чистый текст на фоне страницы */
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
 }
 
 .tab {
@@ -235,22 +244,29 @@ body {
   font-weight: 600;
   font-size: 13px;
   letter-spacing: 0.03em;
-  padding: 9px 18px;
-  border-radius: 999px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border-bottom: 2px solid transparent;
   cursor: pointer;
-  position: relative;
-  transition: color var(--t-fast) var(--ease), background var(--t-med) var(--ease), transform var(--t-fast) var(--ease);
+  white-space: nowrap;
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
 
 .tab:hover {
   color: var(--ink);
-  transform: translateY(-1px);
+  /* Подсветка при наведении: тёплый полупрозрачный блик, без плашки */
+  background: rgba(255, 171, 56, 0.14);
+  box-shadow: 0 0 0 1px rgba(255, 171, 56, 0.28), 0 6px 16px -8px rgba(255, 171, 56, 0.55);
+  border-bottom-color: transparent;
 }
 
 .tab.active {
-  background: linear-gradient(180deg, rgba(255, 171, 56, 0.30), rgba(255, 171, 56, 0.12));
+  /* Активная вкладка — подчёркивание, без фоновой плашки */
+  background: transparent;
   color: var(--amber-soft);
-  box-shadow: inset 0 0 0 1px rgba(255, 171, 56, 0.4), 0 6px 22px rgba(255, 171, 56, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  font-weight: 700;
+  border-bottom-color: var(--amber-soft);
+  box-shadow: none;
 }
 
 /* Вкладка «Отчёт» — только для админа */
@@ -270,6 +286,97 @@ body {
   flex-direction: column;
   gap: 14px;
   padding: 4px 0;
+}
+/* Атрибут hidden на контейнере отгрузки НЕ должен перебиваться display:flex
+   выше (иначе на вкладке «В работе» продолжает показываться содержимое
+   «Завершённых отгрузок»). Гарантируем, что контейнер реально скрывается. */
+.shipment-list[hidden] { display: none; }
+.shipment-subtabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.shipment-subtab {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: 0.03em;
+  padding: 8px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease), background var(--t-med) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.shipment-subtab:hover {
+  color: var(--ink);
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.1));
+}
+.shipment-subtab.is-active {
+  background: linear-gradient(180deg, rgba(255, 171, 56, 0.30), rgba(255, 171, 56, 0.12));
+  color: var(--amber-soft);
+  border-color: rgba(255, 171, 56, 0.4);
+  box-shadow: inset 0 0 0 1px rgba(255, 171, 56, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.shipment-subtab-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.shipment-collapse {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-dim);
+  font-size: 13px;
+  line-height: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.shipment-collapse:hover {
+  color: var(--ink);
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.1));
+}
+.route-collapse {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-dim);
+  font-size: 13px;
+  line-height: 1;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  flex-shrink: 0;
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+.route-collapse:hover:not(.is-locked) {
+  color: var(--ink);
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.1));
+}
+.route-collapse.is-locked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.route-collapsible {
+  transition: opacity var(--t-med) var(--ease);
+}
+.route-collapsed .route-collapsible {
+  display: none;
 }
 .shipment-card {
   border: 1px solid var(--border, rgba(127, 127, 127, 0.18));
@@ -301,7 +408,11 @@ body {
 .shipment-client-name {
   font-weight: 600;
 }
-.shipment-client-addr {
+.shipment-client-center {
+  text-align: center;
+  align-items: center;
+}
+.shipment-client-count {
   font-size: 12px;
   opacity: 0.72;
 }
@@ -327,10 +438,10 @@ body {
   letter-spacing: 0.06em;
   text-transform: capitalize;
   color: var(--ink-dim);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 8px 15px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 8px 2px;
   white-space: nowrap;
 }
 
@@ -338,10 +449,10 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 5px 13px 5px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 5px 2px;
   color: var(--ink);
   max-width: 240px;
 }
@@ -400,7 +511,8 @@ body {
   position: relative;
   z-index: 2;
   max-width: 1120px;
-  margin: 14px auto 64px;
+  /* Верхний отступ даёт место фиксированной шапке (см. .topbar). */
+  margin: 88px auto 64px;
   padding: 0 20px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1458,7 +1570,11 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 .report-table .col-name { text-align: center; font-weight: 600; color: var(--ink); min-width: 90px; }
 .report-table .col-dow { font-size: 9px; color: var(--ink-faint); }
 .report-table tbody td.day-offempty { color: transparent; }
-.report-table th.dow-we, .report-table td.dow-we { background: rgba(255, 255, 255, 0.028); }
+/* Выходные дни (сб/вс) — заметно выделяем красным фоном, чтобы визуально
+   отделить нерабочие ячейки табеля от рабочих. Метки статусов (Б/ОТ/ДО и т.п.)
+   внутри ячейки имеют собственный фон и остаются читаемыми поверх. */
+.report-table th.dow-we, .report-table td.dow-we { background: rgba(255, 122, 107, 0.10); }
+.report-table th.dow-we { color: var(--red-soft); }
 
 .report-table td.mark {
   display: inline-grid;
@@ -1473,6 +1589,45 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 }
 
 .report-table td.mark-over { color: var(--amber-soft); }
+
+/* День, в который у сотрудника действовал повышенный тариф подработки (×N>1):
+   тёплый янтарный фон ячейки табеля, чтобы «повышенный» день был виден сходу. */
+.report-table td.day-mult { background: rgba(255, 171, 56, 0.16); }
+.report-table td.day-mult.dow-we { background: rgba(255, 171, 56, 0.14); }
+
+/* Компактный бейдж «×N» рядом с меткой дня / датой в детализации. */
+.mult-tag {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 0 4px;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  font-style: normal;
+  line-height: 1.5;
+  color: var(--amber-bright);
+  background: rgba(255, 171, 56, 0.18);
+  vertical-align: middle;
+}
+
+/* В ячейке табеля метка статуса дня и бейдж «×N» (множитель повышенного
+   тарифа) стоят столбиком: так оба помещаются внутри плашки и не вылезают
+   за границы узкой ячейки (раньше «×N» стоял в строку с меткой и уширял
+   плашку за края ячейки). */
+.report-table td[data-day] .mark {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.15;
+}
+.report-table td[data-day] .mark .mult-tag {
+  margin-left: 0;
+  margin-top: 1px;
+  padding: 0 3px;
+  font-size: 8.5px;
+  line-height: 1.35;
+}
 
 .report-table .mark.status-Б {
   color: var(--red-soft);
@@ -1839,6 +1994,17 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   background: rgba(255, 171, 56, 0.08);
   border-color: rgba(255, 171, 56, 0.24);
 }
+.drv-chip-diag { font-weight: 600; }
+.drv-chip-diag.is-warn {
+  color: var(--red-soft, #ff7a6b);
+  background: rgba(255, 111, 97, 0.1);
+  border-color: rgba(255, 122, 107, 0.4);
+}
+.drv-chip-diag.is-ok {
+  color: #7fd1a8;
+  background: rgba(103, 201, 153, 0.1);
+  border-color: rgba(103, 201, 153, 0.35);
+}
 
 /* Быстрое добавление клиента */
 .drv-quick-add {
@@ -1998,6 +2164,17 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 }
 .drv-ico-btn:hover { color: var(--amber-soft); border-color: rgba(255, 171, 56, 0.4); background: rgba(255, 171, 56, 0.08); }
 .drv-ico-danger:hover { color: var(--red); border-color: rgba(255, 111, 97, 0.45); background: rgba(255, 111, 97, 0.08); }
+.drv-route-locked {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+  color: var(--ink-faint);
+  cursor: not-allowed;
+  user-select: none;
+}
 
 /* Inline-редактирование клиента */
 .drv-client-edit-form { gap: 8px; }
@@ -2159,11 +2336,58 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   .rms-options { grid-template-columns: 1fr; }
 }
 .rms-selected {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 .rms-selected-empty { color: var(--ink-faint); font-size: 12px; }
+.rms-bridge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  align-self: center;
+  padding: 0 4px;
+}
+.rms-bridge-arrow {
+  color: var(--ink-faint);
+  font-size: 18px;
+  line-height: 1;
+  user-select: none;
+  flex: 0 0 auto;
+}
+.rms-bridge-km {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 108px;
+  padding: 6px 12px;
+  text-align: center;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  flex: 0 0 auto;
+}
+.rms-bridge-val {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--amber);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.rms-bridge-to {
+  font-size: 10.5px;
+  color: var(--ink-dim);
+  line-height: 1.25;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .rms-selected-block {
   display: flex;
   flex-direction: column;
@@ -2184,6 +2408,9 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   display: flex;
   flex-direction: column;
   gap: 5px;
+  flex: 0 1 20%;
+  min-width: 160px;
+  max-width: 230px;
   background:
     linear-gradient(180deg, rgba(255, 171, 56, 0.07), rgba(255, 171, 56, 0.02)),
     var(--panel-soft);
@@ -2326,6 +2553,56 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   opacity: 0.3;
   cursor: default;
 }
+/* Сгруппированная плитка «связанных» клиентов (несколько на одном адресе). */
+.rms-tile-clients {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.rms-tile-client {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.rms-tile-client .rms-tile-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rms-tile-client .rms-tile-del {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 7px;
+}
+.rms-tile-client.rms-tile-client-sub {
+  padding-top: 4px;
+  border-top: 1px dashed rgba(152, 164, 173, 0.22);
+}
+.rms-tile-client-n {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  background: rgba(152, 164, 173, 0.16);
+  border: 1px solid rgba(152, 164, 173, 0.3);
+  color: var(--ink-dim);
+  font-size: 9.5px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.rms-tile-badge {
+  align-self: flex-start;
+  font-size: 10px;
+  color: var(--teal-bright);
+  background: rgba(152, 164, 173, 0.14);
+  border: 1px solid rgba(152, 164, 173, 0.32);
+  border-radius: 999px;
+  padding: 1px 9px;
+}
 
 @media (max-width: 480px) {
   .rms-selected { grid-template-columns: 1fr; }
@@ -2410,6 +2687,26 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 2px 9px;
+  white-space: nowrap;
+}
+.drv-route-km {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--amber-soft);
+  background: rgba(255, 171, 56, 0.1);
+  border: 1px solid rgba(255, 171, 56, 0.28);
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+.drv-route-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-strong);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
   white-space: nowrap;
 }
 .drv-stops {
@@ -2548,40 +2845,269 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
 }
 .report-subpanel { animation: subtab-in var(--t-med) var(--ease); }
 
-/* Карточки расчёта ЗП по сотрудникам */
-.salary-calc-list { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+/* Карточки расчёта ЗП по сотрудникам: сетка плиток.
+   Минимальная ширина карточки увеличена до 400px, чтобы в ряд влезало 3–4
+   плитки (а не ~6 узких). Раскрытая детализация — сводка, таблица по дням и
+   сетка показателей — прокручивается ВНУТРИ карточки (внутренний скролл), чтобы
+   карточка целиком помещалась в интерфейс без прокрутки всей страницы.
+   max-width ограничивает сетку на сверхшироких экранах, не давая колонкам
+   бесконечно множиться. На узких экранах медиа-запросы ниже дают 1 колонку. */
+.salary-calc-list {
+  display: grid;
+  /* Карточки расширяем, используя свободное пространство слева и справа:
+     шире минимальная ширина плитки и снято узкое ограничение 1700px, поэтому
+     при том же числе колонок каждая карточка заметно шире и читаемее. */
+  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+  gap: 16px;
+  margin: 14px auto 0;
+  max-width: 2400px;
+  align-items: start;
+}
 .salary-calc-card {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  /* Карточка целиком (шапка + детализация) влезает в экран: раскрытое
+     содержимое прокручивается ВНУТРИ карточки, а не уезжает за экран и не
+     заставляет прокручивать страницу, чтобы увидеть низ одной карточки. */
+  max-height: calc(100dvh - 220px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 18px;
   padding: 16px 18px;
-  background: var(--panel-soft);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.018));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+  transition: border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+.salary-calc-card:hover {
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.14));
+  transform: none;
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.32);
+}
+.salary-calc-card.open {
+  border-color: rgba(255, 171, 56, 0.5);
+  box-shadow: 0 16px 40px rgba(255, 140, 30, 0.10), 0 10px 28px rgba(0, 0, 0, 0.28);
+}
+/* У сотрудника были дни с повышенным тарифом ×N: подсвечиваем рамку карточки. */
+.salary-calc-card.has-mult { border-color: rgba(255, 171, 56, 0.55); }
+.salary-calc-card.has-mult:hover { border-color: rgba(255, 171, 56, 0.8); }
+/* Бейдж «есть дни ×N» в подписи карточки. */
+.mult-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--amber-bright);
+  background: rgba(255, 171, 56, 0.16);
+}
+.salary-calc-name { font-size: 15.5px; font-weight: 700; }
+.salary-calc-chevron {
+  font-family: var(--font-mono);
+  color: var(--amber-bright);
+  font-size: 14px;
+  transition: transform var(--t-med) var(--ease);
+}
+.salary-calc-head { cursor: pointer; }
+.salary-calc-sub { cursor: pointer; }
+.salary-calc-card.open .salary-calc-chevron { transform: rotate(90deg); }
+.salary-calc-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+@keyframes salaryFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.salary-calc-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin: 14px 0 16px;
+}
+.salary-sum-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 13px 15px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.salary-sum-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+.salary-sum-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #c9c6bc;
+}
+.salary-sum-oklad .salary-sum-value,
+.salary-sum-earned .salary-sum-value {
+  color: var(--amber-bright);
+}
+.salary-sum-oklad,
+.salary-sum-earned {
+  background: linear-gradient(135deg, rgba(255, 171, 56, 0.18), rgba(255, 171, 56, 0.05));
+  border-color: rgba(255, 171, 56, 0.3);
+}
+.salary-sum-oklad .salary-sum-label,
+.salary-sum-earned .salary-sum-label {
+  color: var(--amber-soft);
 }
 .salary-calc-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 6px 12px;
   margin-bottom: 10px;
   flex-wrap: wrap;
 }
-.salary-calc-head strong { font-size: 15px; }
-.salary-calc-total { font-family: var(--font-mono); font-weight: 700; color: var(--amber-ink); }
+/* Имя всегда занимает отдельную верхнюю строку, а зарплата и стрелка — строку
+   ниже (зарплата слева, стрелка справа). Так карточка выглядит одинаково при
+   любой длине имени — в т.ч. у «Ракша», «Исаев», «Новиков», где раньше имя и
+   зарплата склеивались в одну строку из-за flex-wrap. */
+.salary-calc-head strong {
+  font-size: 15.5px;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.salary-calc-total {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--amber-bright);
+  font-size: 14px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.salary-calc-head .salary-calc-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
 .salary-calc-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px 14px;
   font-size: 13px;
-  color: var(--ink-dim);
+  color: #c9c6bc;
 }
 .salary-calc-grid b { color: var(--ink); font-family: var(--font-mono); }
 .salary-calc-expl {
   margin-top: 10px;
   font-size: 13px;
   line-height: 1.5;
-  color: #e8eaed;
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 10px;
-  padding: 10px 12px;
+  color: #eef0f3;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 11px 13px;
+}
+.salary-calc-card.is-pending { cursor: default; }
+.salary-calc-card.is-pending:hover {
+  border-color: var(--line);
+  background: var(--panel-soft);
+}
+.salary-calc-pending {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #d5d3c9;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 11px 13px;
+}
+.salary-calc-days-wrap {
+  overflow: hidden;
+  -webkit-overflow-scrolling: touch;
+  margin: 4px 0 14px;
+  max-width: 100%;
+  min-width: 0;
+}
+.salary-calc-days {
+  width: 100%;
+  min-width: 0;
+  /* Автоматическая раскладка по содержимому: колонки не фиксируются процентами,
+     поэтому числовые данные компактно встают у левого края своих колонок,
+     без пустоты справа и без наезда заголовков на соседние столбцы. */
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.salary-calc-days th {
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #b9b7ad;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 700;
+}
+.salary-calc-days th.num { text-align: right; }
+.salary-calc-days td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  color: #e7e5dc;
+  white-space: nowrap;
+}
+/* В первой колонке «День» дата и бейджи (×N, Б/ОТ) могут переноситься на
+   следующую строку — при фиксированной раскладке long-контент не вылезает
+   вправо и не сдвигает соседние столбцы. */
+.salary-calc-days td:first-child { white-space: normal; }
+.salary-calc-days td:nth-child(2),
+.salary-calc-days td:nth-child(3),
+.salary-calc-days td:nth-child(4) {
+  text-align: right;
+  /* Числовые данные прижимаем ближе к левому краю своих колонок, чтобы они
+     не уезжали вправо и не наезжали на соседние столбцы. */
+  padding-left: 6px;
+}
+.salary-calc-days td:last-child { color: var(--green); font-weight: 700; }
+.salary-calc-days .num { text-align: right; white-space: nowrap; }
+.salary-calc-days td.over-pos { color: var(--red); font-weight: 700; }
+.salary-calc-days td.earn { color: var(--green); font-weight: 700; }
+/* День в детализации ЗП, когда у сотрудника действовал повышенный тариф ×N. */
+.salary-calc-days tr.mult-day td { background: rgba(255, 171, 56, 0.10); }
+.salary-calc-days tr.mult-day td:first-child { color: var(--amber-bright); }
+/* День больничного «Б» / отпуска «ОТ» в детализации ЗП: засчитан как явка,
+   строка помечена статусом и мягко подсвечена. */
+.salary-calc-days tr.day-paid-idle td { background: rgba(120, 160, 255, 0.10); }
+.salary-calc-days tr.day-paid-idle td:first-child { color: var(--ink); }
+.salary-calc-days tr.day-paid-idle .num { color: var(--ink); }
+.day-status-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #cfe0ff;
+  background: rgba(120, 160, 255, 0.22);
+  border: 1px solid rgba(140, 175, 255, 0.35);
+  vertical-align: 1px;
+}
+.salary-calc-days tfoot td {
+  padding-top: 11px;
+  font-weight: 700;
+  color: var(--ink);
+  border-top: 1px solid var(--line-strong);
+  border-bottom: none;
+}
+.salary-calc-sub {
+  font-size: 12px;
+  color: #bdbbb1;
+  margin: -4px 0 2px;
 }
 
 /* ============================================================
@@ -2642,6 +3168,100 @@ body.state-finished .total-cell.accent .total-value { color: var(--red-soft); }
   .drv-route-card { padding: 12px; }
   .bundle-row-actions { flex-wrap: wrap; }
   .bundle-row-actions .drv-mini-btn { flex: 1 1 auto; justify-content: center; }
+  /* Плитки расчёта ЗП на узких экранах — в одну колонку */
+  .salary-calc-list { grid-template-columns: 1fr; }
+  /* На мобильном не растягиваем клетку на всю высоту и не вешаем скролл списка:
+     карточка ограничена по высоте, а детализация прокручивается внутри неё. */
+  .salary-calc-list {
+    align-items: start;
+    height: auto;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+  .salary-calc-card {
+    padding: 14px 14px;
+    min-height: 0;
+    max-height: calc(100dvh - 160px);
+  }
+  /* Сводка: две читаемые колонки; длинные числа переносятся, не вылезая */
+  .salary-calc-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+  }
+  .salary-sum-card {
+    min-width: 0;
+    padding: 11px 12px;
+  }
+  .salary-sum-value {
+    font-size: 15px;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    line-height: 1.2;
+  }
+  .salary-sum-label {
+    font-size: 10px;
+    overflow-wrap: anywhere;
+  }
+  /* Таблица на мобильном — блочная перестройка: без горизонтальной прокрутки,
+     каждая строка дня превращается в карточку 2×2 с подписями значений. */
+  .salary-calc-days { width: 100%; }
+  .salary-calc-days thead { display: none; }
+  .salary-calc-days tbody tr,
+  .salary-calc-days tfoot tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 14px;
+    padding: 10px 2px;
+    border-bottom: 1px solid var(--line);
+  }
+  .salary-calc-days tfoot tr {
+    padding-top: 12px;
+    border-top: 1px solid var(--line-strong);
+    border-bottom: none;
+    font-weight: 700;
+    color: var(--ink);
+  }
+  .salary-calc-days tbody td,
+  .salary-calc-days tfoot td {
+    display: flex;
+    flex-direction: column;
+    border-bottom: none;
+    padding: 3px 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: left;
+  }
+  .salary-calc-days tbody td::before,
+  .salary-calc-days tfoot td::before {
+    content: attr(data-label);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 9px;
+    font-weight: 600;
+    color: #b9b7ad;
+    margin-bottom: 2px;
+  }
+  .salary-calc-days tfoot td::before { color: #9c9a90; }
+  .salary-calc-days .num,
+  .salary-calc-days td.earn,
+  .salary-calc-days td.over-pos {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  /* Подписи и значения параметров — в одну колонку, без наездов */
+  .salary-calc-grid {
+    grid-template-columns: 1fr;
+    gap: 7px 0;
+    font-size: 13px;
+  }
+  .salary-calc-expl,
+  .salary-calc-pending {
+    font-size: 12.5px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .salary-calc-head strong { font-size: 15px; }
+  .salary-calc-total { font-size: 13px; }
 }
 
 /* Широкие десктопы / MacBook: больше колонок, просторнее списки */
@@ -2883,6 +3503,20 @@ dialog.admin-modal::backdrop {
 
 .select-input { padding: 10px 12px; }
 .select-input option { background: var(--panel-solid); color: var(--ink); }
+
+/* Читаемость нативных выпадающих списков в тёмной теме: принудительно светлый
+   фон и тёмный текст, чтобы названия компаний/клиентов были хорошо видны. */
+select.select-input,
+select.text-input {
+  color-scheme: light;
+  background: #ffffff;
+  color: #111111;
+}
+select.select-input option,
+select.text-input option {
+  background: #ffffff;
+  color: #111111;
+}
 
 .journal-tabs {
   display: flex;
@@ -3441,6 +4075,179 @@ body.hide-over-sum .earned-cell { display: none !important; }
 .multiplier-status { margin-top: 13px; font-size: 12px; color: var(--ink-faint); }
 .multiplier-status.active { color: var(--green-soft); }
 
+/* ---- Вкладка «Множитель»: правила по сотрудникам/группам и дням недели ---- */
+.multiplier-grid .select-input { max-width: none; width: 100%; }
+.mult-rule-days { margin-top: 16px; }
+.mult-rule-days-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 8px;
+}
+.mult-rule-days-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.mult-rule-days-row input[type=checkbox] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--green-soft, #4caf7d);
+}
+.mult-rule-actions { margin-top: 16px; display: flex; gap: 8px; }
+.mult-rule-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.mult-rule-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.015));
+}
+.mult-rule-info { min-width: 0; }
+.mult-rule-who { font-size: 13.5px; color: var(--ink); }
+.mult-rule-days-text { font-size: 12px; color: var(--ink-faint); margin-top: 3px; }
+.mult-rule-del { flex: 0 0 auto; }
+.mult-rule-actions-inline { display: flex; gap: 8px; flex: 0 0 auto; }
+.mult-rule-empty { font-size: 12.5px; color: var(--ink-faint); padding: 8px 2px; }
+
+/* ---- Расходная накладная (сборка) ---- */
+#waybillModal {
+  width: 100vw; height: 100dvh; max-width: 100vw; max-height: 100dvh;
+  margin: 0; padding: 0; border: none; border-radius: 0;
+}
+#waybillModal::backdrop { background: rgba(0, 0, 0, 0.66); }
+#waybillModal .postpone-card {
+  width: 100%; max-width: 100%;
+  height: 100dvh; max-height: 100dvh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  border-radius: 0;
+}
+#waybillModal .modal-head { flex: 0 0 auto; }
+.waybill-body {
+  display: flex; flex-direction: column; gap: 14px;
+  min-width: 0; width: 100%; min-height: 0;
+  flex: 1 1 auto;
+}
+.file-row { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink-faint); flex: 0 0 auto; }
+.file-row input[type=file] { font-size: 13px; color: var(--ink); }
+.waybill-status {
+  font-size: 13px; color: var(--green-soft); min-height: 18px; font-weight: 600;
+  flex: 0 0 auto;
+}
+.waybill-scan-row { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+.waybill-scan-row .text-input {
+  flex: 1 1 auto; font-size: 17px; font-weight: 600; letter-spacing: .5px;
+  font-variant-numeric: tabular-nums; padding: 10px 14px;
+}
+.waybill-scan-row .ctrl { font-size: 14px; padding: 10px 18px; flex: 0 0 auto; }
+.waybill-list {
+  flex: 1 1 auto; min-height: 0; max-height: none;
+  overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+}
+.waybill-finish-row { flex: 0 0 auto; margin-top: 4px; }
+.waybill-finish-row .ctrl { width: 100%; font-size: 15px; font-weight: 700; padding: 13px 16px; }
+.waybill-finish-row .ctrl:disabled { opacity: .5; cursor: not-allowed; }
+.waybill-box-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: 0 0 auto; }
+.waybill-box-cur { font-size: 13px; font-weight: 800; color: var(--green-soft); padding: 6px 10px; border: 1px solid rgba(76,175,125,.4); border-radius: 8px; }
+.waybill-box-row .ctrl.active { border-color: var(--green-soft); color: var(--green-soft); }
+.waybill-mark box { color: var(--green-soft); }
+.waybill-del-box-row { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+.waybill-del-box-row .select-input { flex: 1 1 auto; }
+/* Читаемость селектора бокса в сборке: всегда светлый фон и тёмный текст,
+   чтобы код бокса и счётчик деталей были чётко видны — в том числе при
+   фокусе, когда строка выделяется. */
+.waybill-del-box-row .select-input,
+#waybillDelBoxSel {
+  color-scheme: light;
+  background: #ffffff;
+  color: #111111;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  border-color: #9a9a9a;
+  box-shadow: none;
+}
+.waybill-del-box-row .select-input:focus,
+#waybillDelBoxSel:focus {
+  background: #ffffff;
+  color: #111111;
+  border-color: var(--accent, #ffab38);
+  box-shadow: 0 0 0 4px rgba(255, 171, 56, 0.18);
+}
+.waybill-del-box-row .select-input option,
+#waybillDelBoxSel option {
+  background: #ffffff;
+  color: #111111;
+}
+.ctrl-danger {
+  border-color: rgba(255, 90, 90, 0.45);
+  color: #ff9c9c;
+}
+.ctrl-danger:hover { border-color: rgba(255, 90, 90, 0.7); background: rgba(255, 90, 90, 0.08); }
+.shipment-client-boxes { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.shipment-client-box { display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.shipment-client-box-code { font-weight: 800; color: var(--green-soft); font-family: monospace; white-space: nowrap; }
+.shipment-client-box-items { color: var(--ink); font-size: 11.5px; min-width: 0; }
+.shipment-del-box {
+  flex: 0 0 auto; border: none; background: transparent; cursor: pointer;
+  color: rgba(255, 90, 90, 0.8); font-size: 14px; line-height: 1; padding: 2px 6px; border-radius: 6px;
+}
+.shipment-del-box:hover { background: rgba(255, 90, 90, 0.12); color: #ff6b6b; }
+
+/* ---- Накладные в форме создания маршрута (диспетчер) ---- */
+.drv-route-waybills { margin-top: 14px; }
+.route-waybills-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.route-waybill-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+}
+.route-waybill-label { flex: 1 1 140px; font-size: 13px; font-weight: 600; color: var(--ink); min-width: 0; }
+.route-waybill-state { font-size: 12px; color: var(--green-soft); white-space: nowrap; }
+.route-waybill-upload { flex: 0 0 auto; }
+.waybill-item {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) 58px auto;
+  gap: 10px; align-items: center;
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px;
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.waybill-item:hover { border-color: var(--line-strong, rgba(255,255,255,.22)); }
+.waybill-item.done {
+  opacity: 1;
+  background: rgba(76, 175, 125, 0.26);
+  border-color: rgba(76, 175, 125, 0.55);
+}
+.waybill-item.missing { border-color: rgba(255,90,90,.5); background: rgba(255,90,90,.10); }
+.waybill-item-art {
+  font-weight: 800; color: #fff; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12.5px; font-variant-numeric: tabular-nums; letter-spacing: .2px;
+}
+.waybill-item-name {
+  color: var(--ink); font-size: 12.5px; font-weight: 500; line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.waybill-item-qty {
+  color: var(--ink); font-size: 13px; font-weight: 800; text-align: right;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.waybill-mark {
+  font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--ink-faint); white-space: nowrap; letter-spacing: .3px;
+}
+.waybill-item.missing .waybill-mark { color: #ff6b6b; border-color: rgba(255, 90, 90, 0.5); }
+.waybill-item:not(.missing):not(.done) .waybill-mark { border-color: rgba(76,175,125,.4); color: var(--green-soft); }
+.waybill-item.done .waybill-item-art,
+.waybill-item.done .waybill-item-name,
+.waybill-item.done .waybill-item-qty { color: #eaffea; text-shadow: 0 0 6px rgba(76,175,125,.55); }
+
 /* Резервная копия данных (экспорт/импорт полной базы) */
 .backup-row {
   display: flex;
@@ -3660,6 +4467,124 @@ dialog.admin-modal[open] {
 #printModal.modal .route-confirm-actions {
   flex: 0 0 auto;
 }
+
+/* ===== Кнопки окна «Отгрузка» — единый стиль с остальными разделами (.ctrl) =====
+   В дизайн-системе кнопки-контролы (.ctrl) крупные, моноширинные, с янтарным
+   градиентным акцентом. Кнопки окна печати этикеток приводим к тому же виду,
+   не трогая остальные разделы (всё — строго внутри #printModal). */
+#printModal .route-confirm-actions .mini-btn,
+#printModal .print-scan-actions .mini-btn {
+  appearance: none;
+  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.17));
+  background: var(--panel-solid, #13141c);
+  color: var(--ink, #f6f3ea);
+  font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  padding: 16px 18px;
+  border-radius: var(--radius-sm, 13px);
+  cursor: pointer;
+  transition: transform var(--t-fast, 0.16s) var(--ease),
+    box-shadow var(--t-med, 0.28s), background var(--t-med, 0.28s),
+    border-color var(--t-med, 0.28s), color var(--t-med, 0.28s);
+  position: relative;
+  overflow: hidden;
+}
+
+#printModal .route-confirm-actions .mini-btn::after,
+#printModal .print-scan-actions .mini-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+  opacity: 0;
+  transition: opacity var(--t-fast, 0.16s);
+}
+
+#printModal .route-confirm-actions .mini-btn:hover::after,
+#printModal .print-scan-actions .mini-btn:hover::after { opacity: 1; }
+
+#printModal .route-confirm-actions .mini-btn:active,
+#printModal .print-scan-actions .mini-btn:active { transform: scale(0.97); }
+
+/* Акцентная (главная) кнопка «Завершить отгрузку» — янтарный градиент как .ctrl-primary */
+#printModal .route-confirm-actions .route-confirm-danger {
+  background:
+    radial-gradient(120% 120% at 30% 0%, rgba(255, 255, 255, 0.42), transparent 46%),
+    linear-gradient(180deg, #ffcb7a, var(--amber, #ffab38) 55%, #f5972e);
+  color: var(--amber-ink, #291904);
+  border-color: transparent;
+  box-shadow: 0 10px 28px rgba(255, 171, 56, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+#printModal .route-confirm-actions .route-confirm-danger:hover {
+  box-shadow: 0 16px 46px rgba(255, 171, 56, 0.5), 0 0 0 1px rgba(255, 171, 56, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  background:
+    radial-gradient(120% 120% at 30% 0%, rgba(255, 255, 255, 0.5), transparent 48%),
+    linear-gradient(180deg, #ffd695, var(--amber-bright, #ffc470) 55%, #ffab38);
+  transform: translateY(-1px);
+  color: var(--amber-ink, #291904);
+}
+
+/* Вторичная акцентная «Печать этикеток» — сдержанная тёплая, как .ctrl-warn */
+#printModal .route-confirm-actions .route-confirm-ok:not(.route-confirm-danger) {
+  color: var(--amber-soft, #ffdead);
+  border-color: rgba(255, 171, 56, 0.36);
+  background: rgba(255, 171, 56, 0.06);
+}
+#printModal .route-confirm-actions .route-confirm-ok:not(.route-confirm-danger):hover {
+  background: rgba(255, 171, 56, 0.12);
+}
+
+/* «Допечатать места» — акцентная сплошная: дольше печати, но выделяется как
+   действие допечатки дополнительных мест в процессе отгрузки. */
+#printModal .route-confirm-actions .route-confirm-append {
+  color: var(--amber-ink, #291904);
+  border-color: transparent;
+  background: var(--amber, #ffab38);
+}
+#printModal .route-confirm-actions .route-confirm-append:hover {
+  background: var(--amber, #ffab38);
+  filter: brightness(1.08);
+  box-shadow: 0 8px 22px rgba(255, 171, 56, 0.3);
+}
+/* «Допечатать места» недоступна, пока у выбранного клиента не погружены ВСЕ
+   боксы: приглушаем кнопку, чтобы печать шла кнопкой «Печать этикеток». */
+#printModal .route-confirm-actions .route-confirm-append:disabled {
+  color: var(--ink-dim, #8a8f98);
+  background: rgba(127, 127, 127, 0.14);
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.1));
+  cursor: not-allowed;
+  box-shadow: none;
+  filter: none;
+}
+
+/* Нейтральная «Отмена» — как .ctrl-soft */
+#printModal .route-confirm-actions .route-confirm-cancel {
+  color: var(--ink, #f6f3ea);
+  background: rgba(255, 255, 255, 0.05);
+}
+#printModal .route-confirm-actions .route-confirm-cancel:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* Кнопка сканирования — мягкая нейтральная, как .ctrl-soft */
+#printModal .print-scan-actions .mini-btn {
+  color: var(--ink, #f6f3ea);
+  background: rgba(255, 255, 255, 0.05);
+}
+#printModal .print-scan-actions .mini-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* На телефонах кнопки действий растягиваются на всю ширину и встают в колонку */
+@media (max-width: 520px) {
+  #printModal .route-confirm-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
 #printModal.modal .print-scan-block {
   flex: 1 1 auto;
   display: flex;
@@ -3705,6 +4630,91 @@ dialog.admin-modal[open] {
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--ink);
+}
+
+/* Кнопка «Выйти» в карточке «Учётная запись» */
+.account-logout-btn {
+  margin-top: 14px;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--danger, #dc2626) 45%, transparent);
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  color: var(--danger, #dc2626);
+  font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform var(--t-fast, 0.16s) var(--ease), filter var(--t-fast, 0.16s) var(--ease);
+}
+.account-logout-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+.account-logout-btn:active {
+  transform: translateY(0);
+}
+.account-logout-btn svg {
+  flex-shrink: 0;
+}
+
+/* Экран «Вход в приложение» — полноэкранный оверлей после выхода */
+.auth-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background:
+    radial-gradient(1200px 600px at 20% -10%, color-mix(in srgb, var(--amber, #ffab38) 16%, transparent), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, color-mix(in srgb, var(--ink-faint, #6f6e66) 10%, transparent), transparent 55%),
+    var(--bg, #0a0d14);
+}
+.auth-screen[hidden] {
+  display: none;
+}
+.auth-screen-card {
+  max-width: 420px;
+  width: 100%;
+  padding: 36px 30px 30px;
+  border-radius: var(--radius-lg, 20px);
+  background: var(--panel-solid, #13141c);
+  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.17));
+  box-shadow: var(--shadow-pop, 0 24px 60px rgba(0, 0, 0, 0.45));
+  text-align: center;
+}
+.auth-screen-card .logo-biotime-mark {
+  display: inline-flex;
+  margin-bottom: 18px;
+}
+.auth-screen-title {
+  font-size: 22px;
+  line-height: 1.25;
+  margin: 0 0 12px;
+  color: var(--ink, #f6f3ea);
+  font-weight: 700;
+}
+.auth-screen-sub {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink-dim, #9aa0ab);
+  margin: 0 0 22px;
+}
+.auth-screen-btn {
+  width: 100%;
+}
+.auth-screen-hint {
+  margin: 18px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-faint, #6b7280);
 }
 .user-chip { cursor: pointer; }
 
@@ -3901,9 +4911,12 @@ dialog.admin-modal[open] {
   .stage { grid-template-columns: 1fr; }
   .dial-time { font-size: 60px; }
 
-  .topbar { flex-wrap: wrap; }
+  /* Вкладки уходят на вторую строку фиксированной шапки — увеличиваем отступ
+     контента, чтобы страница целиком не пряталась под двухрядным тулбаром. */
+  .topbar-inner { flex-wrap: wrap; }
   .tabs { order: 3; width: 100%; justify-content: center; }
   .topbar-right { margin-left: auto; }
+  .stage { margin-top: 142px; }
 }
 
 @media (max-width: 640px) {
@@ -4008,8 +5021,9 @@ dialog.admin-modal[open] {
 }
 
 @media (max-width: 480px) {
-  .topbar { padding: 14px 14px; }
+  .topbar-inner { padding: 14px 14px; }
   .stage { padding: 0 12px; }
+  .stage { margin-top: 138px; }
   .clock-card { padding: 18px 15px 22px; }
   .totals { grid-template-columns: 1fr; }
   .controls { grid-template-columns: 1fr; }
@@ -4445,6 +5459,10 @@ body {
   padding-right: env(safe-area-inset-right);
 }
 .topbar {
+  /* Плашка поднимается под «чёлку» iPhone — фон тянется в safe-area */
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.topbar-inner {
   padding-top: calc(18px + env(safe-area-inset-top, 0px));
 }
 .modal[open] {
@@ -4738,6 +5756,19 @@ button.icon-btn svg,
   min-width: 0;
 }
 .bundle-card-addr svg { flex-shrink: 0; margin-top: 1px; }
+.bundle-card-name {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 4px;
+}
+.bundle-card-name .drv-field-label { margin: 0; }
+.bundle-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.bundle-name-row .bundle-name-input { flex: 1; min-width: 0; }
 .bundle-member {
   display: inline-flex;
   align-items: center;
@@ -4776,7 +5807,7 @@ button.icon-btn svg,
     flex-wrap: wrap;
     justify-content: center;
   }
-  .topbar { gap: 10px; }
+  .topbar-inner { gap: 10px; }
 }
 @media (max-width: 480px) {
   .tab { padding: 8px 14px; font-size: 12px; }
@@ -4920,16 +5951,17 @@ button.icon-btn svg,
    строку (центрированно), а на очень широких расширяем каркас до 1280px,
    чтобы всё влезало в одну строку. --- */
 @media (max-width: 1300px) {
-  .topbar { flex-wrap: wrap; }
+  .topbar-inner { flex-wrap: wrap; }
   .tabs {
     order: 3;
     width: 100%;
     justify-content: center;
   }
   .topbar-right { margin-left: auto; }
+  .stage { margin-top: 142px; }
 }
 @media (min-width: 1301px) {
-  .topbar { max-width: 1280px; }
+  .topbar-inner { max-width: 1280px; }
   #page-timer .stage,
   #page-calendar .stage,
   #page-live .stage,
@@ -5117,6 +6149,73 @@ button.icon-btn svg,
 .motion-table .idle-cell { color: var(--ink-dim); }
 .motion-sort { font-size: 10.5px; color: var(--ink-faint); letter-spacing: 0.02em; }
 
+/* Раскрывающиеся строки водителей с детальной статистикой по маршрутам */
+.motion-row { cursor: pointer; }
+.motion-row:hover { background: rgba(255, 255, 255, 0.04); }
+.motion-row.is-open { background: rgba(255, 171, 56, 0.06); }
+.motion-detail td {
+  background: rgba(255, 255, 255, 0.02);
+  border-top: 1px solid var(--line);
+  padding: 10px 16px;
+}
+.motion-route-detail { max-width: 640px; text-align: left; }
+.motion-route-detail.empty { color: var(--ink-faint); font-size: 12px; }
+.motion-route-title {
+  font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--ink-faint); margin: 0 0 8px;
+}
+.motion-route-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.motion-route-table th {
+  text-align: left; font-size: 11px; color: var(--ink-faint);
+  padding: 6px 10px; font-weight: 600;
+}
+.motion-route-table td {
+  text-align: left !important; padding: 6px 10px; font-size: 13px;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.motion-route-table td:first-child { color: var(--ink); font-weight: 600; }
+
+/* Третий уровень: список клиентов внутри маршрута (раскрывается кликом) */
+.motion-route-row { cursor: pointer; }
+.motion-route-row:hover { background: rgba(255, 171, 56, 0.08); }
+.motion-route-row.is-clients-open { background: rgba(255, 171, 56, 0.10); }
+.route-clients-row td {
+  padding: 6px 10px 10px 22px;
+  background: rgba(0, 0, 0, 0.12);
+}
+.motion-route-detail { overflow-x: auto; }
+.motion-route-table, .motion-clients-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.motion-route-table th, .motion-route-table td,
+.motion-clients-table th, .motion-clients-table td {
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+.motion-clients-table th {
+  text-align: left; font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--ink-faint); padding: 5px 10px; font-weight: 600;
+}
+.motion-clients-table td {
+  text-align: left !important; padding: 5px 10px; font-size: 12.5px;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.motion-clients-table td:nth-child(1) { color: var(--ink); font-weight: 600; }
+/* Колонка «Клиент»: название и адрес объединены в одной ячейке — название как
+   раньше, адрес под ним мельче и приглушённым (не отдельной строкой/клеткой). */
+.motion-clients-table .motion-client-name { display: block; color: var(--ink); font-weight: 600; }
+.motion-clients-table .motion-client-addr { display: block; font-weight: 400; font-size: 11px; color: var(--ink-faint); margin-top: 1px; }
+/* Устойчивые ширины колонок клиентов (без адреса): клиент, км, в пути, сдача, мест */
+.motion-clients-table th:nth-child(1), .motion-clients-table td:nth-child(1) { width: 26%; }
+.motion-clients-table th:nth-child(2), .motion-clients-table td:nth-child(2) { width: 18%; }
+.motion-clients-table th:nth-child(3), .motion-clients-table td:nth-child(3) { width: 20%; }
+.motion-clients-table th:nth-child(4), .motion-clients-table td:nth-child(4) { width: 20%; }
+.motion-clients-table th:nth-child(5), .motion-clients-table td:nth-child(5) { width: 16%; }
+
 .rms-stops {
   display: flex;
   flex-direction: column;
@@ -5169,6 +6268,46 @@ button.icon-btn svg,
   gap: 6px;
   flex-wrap: wrap;
 }
+.rms-stop-reorder {
+  flex-shrink: 0;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-left: auto;
+}
+.rms-reorder-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  width: 26px;
+  height: 20px;
+  line-height: 1;
+  font-size: 11px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+.rms-reorder-btn:hover:not(:disabled) {
+  background: rgba(255, 171, 56, 0.16);
+  border-color: rgba(255, 171, 56, 0.45);
+  color: var(--amber-soft);
+}
+.rms-reorder-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+/* Временный класс при мягкой перерисовке «Моих маршрутов» после смены порядка
+   точек: отключает CSS-переходы, чтобы пересозданный DOM не «мигал» (карточки
+   не подсвечивались) при обновлении. Снимается после отрисовки одного кадра. */
+.no-anim *,
+.no-anim {
+  transition: none !important;
+  animation: none !important;
+}
 .rms-stop-tag {
   font-size: 10px;
   font-weight: 600;
@@ -5179,6 +6318,25 @@ button.icon-btn svg,
   border: 1px solid rgba(255, 171, 56, 0.3);
   border-radius: 999px;
   padding: 2px 8px;
+}
+.rms-stop-flight {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--amber-soft);
+  background: rgba(255, 171, 56, 0.12);
+  border: 1px solid rgba(255, 171, 56, 0.28);
+  border-radius: var(--radius-xs);
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+.rms-stop-flight.ok {
+  color: var(--green-soft, #7dd87d);
+  background: rgba(125, 216, 125, 0.12);
+  border-color: rgba(125, 216, 125, 0.3);
 }
 .rms-bundle-badge {
   display: inline-block;
@@ -5312,6 +6470,17 @@ button.icon-btn svg,
   color: var(--green-soft, #7dd87d);
   background: rgba(125, 216, 125, 0.1);
   border-color: rgba(125, 216, 125, 0.3);
+}
+.rms-unload-note {
+  align-self: flex-start;
+  margin-left: 31px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--red-soft, #ff7a7a);
+  background: rgba(255, 122, 122, 0.08);
+  border: 1px solid rgba(255, 122, 122, 0.22);
+  border-radius: var(--radius-xs);
+  padding: 3px 10px;
 }
 .rms-stop-btn {
   cursor: pointer;
@@ -5478,6 +6647,24 @@ button.icon-btn svg,
   .net-banner-inner { flex-wrap: wrap; }
 }
 
+/* Полоса «доступно обновление»: нейтральный сине-зелёный фон, чтобы не путать
+   с красной полосой «нет связи». Прячется по кнопке «Позже». */
+.upd-banner {
+  background: linear-gradient(180deg, rgba(80, 180, 255, 0.16), rgba(80, 180, 255, 0.07));
+  border-bottom: 1px solid rgba(80, 180, 255, 0.4);
+}
+.upd-banner .net-banner-icon { color: var(--accent, #4fb3ff); }
+.upd-banner-btn {
+  background: rgba(80, 180, 255, 0.12);
+  border: 1px solid rgba(80, 180, 255, 0.45);
+  color: var(--ink);
+}
+.upd-banner-btn:hover {
+  background: rgba(80, 180, 255, 0.22);
+  border-color: rgba(80, 180, 255, 0.7);
+}
+.upd-banner-btn#updApply { font-weight: 600; }
+
 /* ===== Сканирование этикеток отгрузки (модалка печати) ===== */
 .print-scan-block {
   margin-top: 14px;
@@ -5486,9 +6673,51 @@ button.icon-btn svg,
 }
 .print-scan-actions {
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
+  margin-top: 8px;
+}
+.print-scan-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
   margin-top: 8px;
+}
+.print-scan-source-label {
+  font-size: 12px;
+  color: var(--muted, #9aa3b2);
+}
+.print-scan-src {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  cursor: pointer;
+  transition: 0.15s ease;
+}
+.print-scan-src:hover { border-color: var(--accent, #f59e0b); color: var(--accent, #f59e0b); }
+.print-scan-src.is-active {
+  border-color: var(--accent, #f59e0b);
+  background: rgba(245, 158, 11, 0.14);
+  color: #fff;
+  font-weight: 700;
+}
+.print-scan-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted, #9aa3b2);
+}
+.print-scan-input {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-family: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  font-size: 14px;
 }
 .print-scan-status {
   margin-top: 10px;
@@ -5563,6 +6792,147 @@ button.icon-btn svg,
 .pp-status.created { background: rgba(128, 128, 128, 0.2); color: #bbb; }
 .pp-status.loaded { background: rgba(125, 216, 125, 0.18); color: var(--green-soft, #7dd87d); }
 .pp-status.delivered { background: rgba(96, 165, 250, 0.18); color: #60a5fa; }
+/* Кнопка удаления созданной этикетки (кружок «✕» в строке места). */
+.print-place .pp-del {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: transparent;
+  color: var(--ink, #e6e6e6);
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.print-place .pp-del:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #f87171;
+}
+.print-place .pp-print {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: transparent;
+  color: var(--ink, #e6e6e6);
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.print-place .pp-print:hover {
+  background: rgba(125, 216, 125, 0.16);
+  border-color: rgba(125, 216, 125, 0.55);
+  color: #7dd87d;
+}
+
+/* Плитки клиентов окна «Отгрузка»: клиенты вместо выпадающего списка.
+   Активный клиент подсвечен, полностью отгруженный — серый и неактивен. */
+.print-clients-tiles {
+  display: grid;
+  /* Фиксируем число колонок «как влезет»: 4 в ряд на широком экране, 3 на
+     среднем, 2 на узком (мобилка). Колонки растягивают плитки на всю ширину
+     ряда, поэтому плитка получается шире и всё видно без прокрутки. */
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 8px;
+}
+@media (max-width: 1180px) {
+  .print-clients-tiles { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 720px) {
+  .print-clients-tiles { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 420px) {
+  .print-clients-tiles { grid-template-columns: 1fr; }
+}
+.print-client-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease), transform 0.12s var(--ease);
+}
+.print-client-tile:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.07);
+}
+.print-client-tile.is-active {
+  border-color: var(--green-soft, #7dd87d);
+  background: rgba(125, 216, 125, 0.12);
+  box-shadow: 0 0 0 1px rgba(125, 216, 125, 0.25);
+}
+.print-client-tile.is-done {
+  background: rgba(127, 127, 127, 0.16);
+  border-color: transparent;
+  color: var(--muted, #9ca3af);
+  cursor: pointer;
+}
+.print-client-tile.is-done:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(127, 127, 127, 0.24);
+}
+/* Отгруженного клиента выбрали для допечатки — подсвечиваем зелёным, как активный. */
+.print-client-tile.is-active.is-done {
+  border-color: var(--green-soft, #7dd87d);
+  background: rgba(125, 216, 125, 0.12);
+  box-shadow: 0 0 0 1px rgba(125, 216, 125, 0.25);
+  color: var(--ink);
+}
+.print-client-tile .tile-name {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.25;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.print-client-tile .tile-places {
+  font-size: 12px;
+  color: var(--muted, #9ca3af);
+  overflow-wrap: anywhere;
+}
+.print-client-tile.is-active .tile-places {
+  color: var(--green-soft, #9ef09e);
+}
+.print-client-tile.is-done .tile-places {
+  color: var(--muted, #9ca3af);
+}
+/* Недоступная плитка окна допечатки: клиент, у которого боксы ещё не созданы
+   или создана лишь часть. Допечатка таким недоступна — места добавляют обычной
+   печатью через выбор клиента. */
+.print-client-tile:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.print-client-tile:disabled:hover {
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.04);
+}
+.print-client-tile:disabled.is-done {
+  opacity: 1;
+  cursor: pointer;
+}
+.print-client-tile:disabled.is-done:hover {
+  background: rgba(127, 127, 127, 0.24);
+  border-color: var(--line-strong, rgba(255, 255, 255, 0.28));
+}
 
 /* ===== Печать этикеток отгрузки (термопринтер 58 мм) ===== */
 /* Скрытая на экране область — в печать попадает только она. */
@@ -5581,7 +6951,7 @@ button.icon-btn svg,
   @page { size: 58mm auto; margin: 0; }
 }
 /* Каждая этикетка — отдельный стикер. page-break позволяет напечатать их по
-   одному, когда драйвер термопринтера настроен на этикетку 58×40 мм. */
+   одному, когда драйвер термопринтера настроен на этикетку 58×58 мм. */
 .label-sheet {
   font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   color: #000;
@@ -5590,10 +6960,9 @@ button.icon-btn svg,
 .label-card {
   box-sizing: border-box;
   width: 58mm;
-  /* Верхнее поле увеличено, чтобы текстовый блок сместился ниже на этикетке. */
-  /* Внутренние отступы: сверху текст опущен ниже, по бокам и снизу —
-     запас, чтобы содержимое не прилипало к рамке. */
-  padding: 8mm 5mm 5mm;
+  /* Отступы: стикер 58×58 мм. Раньше драйвер резал этикетку по 40 мм,
+     поэтому контент (QR ~100px) переезжал на следующую этикетку ленты. */
+  padding: 5mm 4mm 3mm;
   /* Рамка по краям стикера */
   border: 1.5px solid #000;
   text-align: center;
@@ -5602,11 +6971,11 @@ button.icon-btn svg,
 .label-card:last-child { page-break-after: auto; }
 .label-logo img,
 .label-logo {
-  width: 58px;
-  height: 58px;
+  width: 40px;
+  height: 40px;
   object-fit: contain;
   display: block;
-  margin: 0 auto 1.5mm;
+  margin: 0 auto 1mm;
 }
 .label-logo-empty {
   display: grid;
@@ -5616,23 +6985,34 @@ button.icon-btn svg,
   border: 1px dashed #ccc;
 }
 .label-logo-text {
-  display: grid;
-  place-items: center;
+  /* Буквенный логотип (напр. «SIGN», «SIGM», «AVI»): автоширина по контенту,
+     чтобы текст влезал ЦЕЛИКОМ и не обрезался по краям (раньше 40×40px +
+     font 22px резал 4-5 букв). Высота остаётся фиксированной 40px. */
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 40px;
+  max-width: 100%;
+  height: 40px;
+  padding: 0 8px;
   overflow: hidden;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #1d2733, #2c3e50);
-  color: #fff;
-  font-weight: 800;
-  letter-spacing: 0.3px;
-  font-size: 24px;
-  border: none;
+  white-space: nowrap;
+  border-radius: 7px;
+  background: #fff;
+  color: #000;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  font-size: 15px;
+  border: 1px solid #000;
 }
-.label-name { font-size: 13px; font-weight: 800; color: #000; }
-.label-addr { font-size: 11px; font-weight: 700; color: #000; margin-top: 1.5mm; }
-.label-order { font-size: 10.5px; font-weight: 700; color: #000; margin-top: 1.5mm; }
-.label-qr { margin: 1.5mm auto 0; }
-.label-code { font-size: 10px; font-weight: 700; color: #000; margin-top: 1mm; letter-spacing: 0.4px; font-family: monospace; }
-.label-from { font-size: 9px; font-weight: 700; color: #444; margin-top: 0.5mm; }
+.label-name { font-size: 10px; font-weight: 800; color: #000; margin-top: 0.6mm; }
+.label-addr { font-size: 9px; font-weight: 700; color: #000; margin-top: 0.8mm; }
+.label-order { font-size: 8px; font-weight: 700; color: #000; margin-top: 0.8mm; }
+.label-qr { margin: 1mm auto 0; line-height: 0; }
+.label-code { font-size: 8px; font-weight: 700; color: #000; margin-top: 0.6mm; letter-spacing: 0.3px; font-family: monospace; }
+.label-from { font-size: 8px; font-weight: 700; color: #444; margin-top: 0.5mm; }
 
 /* ---- Оверлей живого прогресса сканирования (между сканами нативного ZXing) ----
    Крупный полноэкранный блок с клиентом и счётчиком «отсканировано / нужно».
@@ -5724,78 +7104,284 @@ button.icon-btn svg,
   line-height: 1;
 }
 
-/* Плитки клиентов окна «Отгрузка» (выбор клиента для печати этикеток).
-   Вместо выпадающего списка — карточки; активный клиент подсвечен, по клику
-   любой клиент выбирается (в т.ч. уже отгруженный — для допечатки). */
-.print-clients-tiles {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  margin-top: 8px;
-}
-@media (max-width: 1180px) {
-  .print-clients-tiles { grid-template-columns: repeat(3, 1fr); }
-}
-@media (max-width: 720px) {
-  .print-clients-tiles { grid-template-columns: repeat(2, 1fr); }
-}
-@media (max-width: 420px) {
-  .print-clients-tiles { grid-template-columns: 1fr; }
-}
-.print-client-tile {
+/* ===== Журнал сканирования мест (раздел «Журнал», видят все) =====
+   Фильтры-пилюли в духе report-subtab, таблица по образцу отчёта. */
+.scanlog-filters {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.12));
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--ink);
-  text-align: left;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 16px;
+}
+.scanlog-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--ink-dim);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   cursor: pointer;
-  transition: border-color 0.15s var(--ease), background 0.15s var(--ease), transform 0.12s var(--ease);
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
 }
-.print-client-tile:hover {
-  border-color: rgba(255, 255, 255, 0.28);
-  background: rgba(255, 255, 255, 0.07);
+.scanlog-filter:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.06);
 }
-.print-client-tile.is-active {
-  border-color: var(--green-soft, #7dd87d);
-  background: rgba(125, 216, 125, 0.12);
-  box-shadow: 0 0 0 1px rgba(125, 216, 125, 0.25);
-}
-.print-client-tile.is-done {
-  background: rgba(127, 127, 127, 0.16);
+.scanlog-filter.is-active {
+  color: var(--amber-ink);
+  background: var(--amber);
   border-color: transparent;
-  color: var(--muted, #9ca3af);
+  box-shadow: 0 8px 22px rgba(255, 171, 56, 0.28);
+}
+.scanlog-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: 2px 0 16px;
+}
+.scanlog-filter-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 180px;
+}
+.scanlog-filter-field[hidden],
+.scanlog-ranges[hidden] {
+  display: none !important;
+}
+.scanlog-filter-caption {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.scanlog-search,
+.scanlog-date {
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast), background var(--t-fast);
+}
+.scanlog-search {
+  width: 260px;
+  max-width: 100%;
+}
+.scanlog-search::placeholder {
+  color: var(--ink-faint);
+  font-weight: 500;
+}
+.scanlog-search:focus,
+.scanlog-date:focus {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 3px rgba(255, 171, 56, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+}
+.scanlog-date::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
   cursor: pointer;
 }
-.print-client-tile.is-done:hover {
-  border-color: rgba(255, 255, 255, 0.28);
-  background: rgba(127, 127, 127, 0.24);
+.scanlog-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015));
 }
-.print-client-tile.is-active.is-done {
-  border-color: var(--green-soft, #7dd87d);
-  background: rgba(125, 216, 125, 0.12);
-  box-shadow: 0 0 0 1px rgba(125, 216, 125, 0.25);
+.scanlog-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 720px;
+}
+.scanlog-table th {
+  text-align: left;
+  padding: 12px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.scanlog-table td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
   color: var(--ink);
+  vertical-align: top;
 }
-.print-client-tile .tile-name {
+.scanlog-table tbody tr:last-child td { border-bottom: none; }
+.scanlog-table tbody tr:hover td { background: rgba(255, 255, 255, 0.03); }
+.scanlog-time, .scanlog-code {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.scanlog-time { color: var(--amber-soft); }
+.scanlog-code { color: var(--ink-dim); word-break: break-all; }
+.scanlog-user { font-weight: 600; white-space: nowrap; }
+.scanlog-code { font-weight: 700; font-family: ui-monospace, Consolas, monospace; white-space: nowrap; }
+.scanlog-box { font-family: ui-monospace, Consolas, monospace; white-space: nowrap; color: var(--green-soft); }
+.scanlog-ok td { color: var(--ink); }
+.scanlog-missing td { color: #ff9c9c; }
+.scanlog-address { color: var(--ink-dim); }
+.scanlog-action {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.scanlog-action.load { background: rgba(125, 216, 125, 0.16); color: var(--green-soft); }
+.scanlog-action.unload { background: rgba(96, 165, 250, 0.16); color: #60a5fa; }
+.scanlog-empty {
+  margin-top: 14px;
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-faint);
+  border: 1px dashed var(--line-strong);
+  border-radius: 14px;
+}
+
+/* Журнал всегда отображается классической таблицей с колонками. На узких
+   экранах широкая таблица прокручивается по горизонтали внутри .scanlog-wrap
+   (overflow-x:auto), а не сворачивается в карточки. */
+
+/* Счётчики мест в разделе «Доставка»: напротив клиента и общий по маршруту */
+.rms-stop-places,
+.delivery-places-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.rms-stop-places {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+}
+.rms-stop-places.is-full {
+  color: var(--green-soft);
+  background: rgba(125, 216, 125, 0.12);
+  border-color: rgba(125, 216, 125, 0.3);
+}
+.delivery-places-count {
+  margin-left: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  color: var(--amber-ink);
+  background: var(--amber-bright);
+  font-size: 12px;
+}
+
+/* Общий счётчик мест в «Моих маршрутах» (в заголовке карточки маршрута) */
+.rms-route-places {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--amber-ink);
+  background: var(--amber-bright);
+  white-space: nowrap;
+}
+.rms-route-places.ok {
+  color: #062d2d;
+  background: var(--green-soft);
+}
+
+/* ===== Отдельное окно «Допечатать места» =====
+   Показывает ВСЕХ клиентов маршрута (включая отгруженных) для допечатки
+   дополнительных мест. Данные сохраняются на сервере автоматически. */
+#appendModal.modal {
+  max-width: 560px;
+  width: 100%;
+  margin: auto;
+}
+#appendModal.modal .account-card {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 20px;
+}
+#appendModal .append-hint {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-dim, #9ca3af);
+}
+#appendModal .print-client-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+  max-height: 40vh;
+  overflow: auto;
+}
+#appendModal .route-confirm-actions {
+  margin-top: 18px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+#appendModal .route-confirm-actions .mini-btn {
+  padding: 12px 16px;
+  border-radius: 11px;
+  font-family: var(--font-mono, "JetBrains Mono", ui-monospace, monospace);
   font-weight: 600;
   font-size: 13px;
-  line-height: 1.25;
-  max-width: 100%;
-  overflow-wrap: anywhere;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform var(--t-fast, 0.16s) var(--ease),
+    background var(--t-med, 0.28s), border-color var(--t-med, 0.28s),
+    opacity var(--t-med, 0.28s);
+  border: 1px solid var(--line-strong, rgba(255, 255, 255, 0.17));
+  background: var(--panel-solid, #13141c);
+  color: var(--ink, #f6f3ea);
 }
-.print-client-tile .tile-places {
-  font-size: 12px;
-  color: var(--muted, #9ca3af);
-  overflow-wrap: anywhere;
+#appendModal .route-confirm-actions .mini-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+#appendModal .route-confirm-actions .route-confirm-append {
+  color: var(--amber-ink, #291904);
+  border-color: transparent;
+  background: var(--amber, #ffab38);
 }
-.print-client-tile.is-active .tile-places {
-  color: var(--green-soft, #9ef09e);
+#appendModal .route-confirm-actions .route-confirm-append:hover:not(:disabled) {
+  filter: brightness(1.08);
+  box-shadow: 0 8px 22px rgba(255, 171, 56, 0.3);
 }
-.print-client-tile.is-done .tile-places {
-  color: var(--muted, #9ca3af);
+#appendModal .route-confirm-actions .route-confirm-cancel {
+  color: var(--ink, #f6f3ea);
+  background: rgba(255, 255, 255, 0.05);
+}
+#appendModal .route-confirm-actions .route-confirm-cancel:hover { background: rgba(255, 255, 255, 0.09); }
+@media (max-width: 520px) {
+  #appendModal.modal { max-width: 100vw; }
 }
