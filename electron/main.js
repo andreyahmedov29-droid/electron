@@ -243,7 +243,10 @@ async function createWindow() {
   mainWindow.webContents.on("print", (event, wc) => {
     event.preventDefault();
     const printOpts = {
-      silent: true,                     // без диалога предпросмотра
+      // Если указан printerName — печатаем молча на него (без окна). Если нет —
+      // показываем окно выбора принтера, чтобы пользователь сам выбрал
+      // термопринтер (иначе стикер уходит на системный принтер по умолчанию).
+      silent: !!PRINTER_NAME,
       printBackground: true,
       margins: { marginType: "none" },  // этикетка без полей
       pageSize: { width: 58000, height: 58000 }, // 58×58 мм (микроны)
