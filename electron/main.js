@@ -255,6 +255,19 @@ async function createWindow() {
     });
   });
 
+  // Диагностика принтеров: при старте выводим в консоль список доступных принтеров
+  // Windows и то, какой принтер выбран для тихой печати. Это помогает узнать точное
+  // имя термопринтера для поля "printerName" в biotime.config.json (без него стикер
+  // уходит на системный принтер по умолчанию, и термопринтер может не печатать).
+  if (PRINTER_NAME) console.log("[print] Указан принтер для этикеток:", PRINTER_NAME);
+  (async () => {
+    try {
+      const list = await mainWindow.webContents.getPrintersAsync();
+      const names = (list || []).map((p) => p.name).filter(Boolean);
+      console.log("[print] Доступные принтеры:", names.length ? names.join(" | ") : "—");
+    } catch (_) { /* диагностика не критична */ }
+  })();
+
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
