@@ -35,8 +35,10 @@ let _cfgPathUsed = "";
 // Актуальный адрес веб-версии. Он же используется в «автомиграции»: если в
 // biotime.config.json на компьютере лежит устаревший appUrl, его не нужно чистить
 // вручную — при первом запуске новой сборки Electron сам заменит его на этот.
-const CURRENT_APP_URL = "https://app-0191dabf28dc.vibecode.bitrix24.tech";
-const LEGACY_APP_URLS = ["app-2660de1a180b.vibecode.bitrix24.tech"];
+// Работаем на старом (рабочем) приложении. Адресов миграции нет — настольная
+// сборка не должна перезаписывать appUrl на другой адрес.
+const CURRENT_APP_URL = "https://app-2660de1a180b.vibecode.bitrix24.tech";
+const LEGACY_APP_URLS = [];
 try {
   // Толерантный поиск конфига: папки userData ("BIOTIME"/"biotime-desktop") и
   // имена файла (biotime.config.json / biotime.config), чтобы не зависеть от того,
