@@ -56,9 +56,11 @@ async function resolvePrinter() {
     ];
     const kw = arr.find((p) => thermo.some((k) => norm(p.name).includes(k)));
     if (kw) return kw.name;
-    // 3) системный по умолчанию
-    const def = arr.find((p) => p.isDefault) || arr[0];
-    return def ? def.name : "";
+    // 3) Принтер явно не задан и термопринтер не опознан — НЕ печатаем молча на
+    //    системный по умолчанию: это уводило этикетку на обычный/виртуальный
+    //    принтер БЕЗ окна печати (пользователь ничего не видел). Возвращаем ""
+    //    → показываем нативное окно выбора принтера.
+    return "";
   } catch (_) {
     return PRINTER_NAME || "";
   }
