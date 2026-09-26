@@ -191,7 +191,11 @@ async function createWindow() {
       // Локальный сервер доверяем; дополнительных node-привилегий странице не даём.
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      // sandbox НЕ включаем: при sandbox:true Chromium держит страницу в песочнице,
+      // из-за чего window.print() игнорируется («document is sandboxed, allow-modals
+      // not set») и окно выбора принтера не появляется. Безопасность держим через
+      // contextIsolation:true + nodeIntegration:false — к node рендерер доступа не имеет.
+      sandbox: false,
       // Постоянная partition: cookies и сессия шлюза (вход в личную учётку)
       // сохраняются в userData и держатся между перезапусками приложения.
       // Без неё окно использует непостоянную defaultSession, вход теряется на
