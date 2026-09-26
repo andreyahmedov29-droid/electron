@@ -241,18 +241,21 @@ async function createWindow() {
   // Благодаря правилу @media print из styles.css в печать попадает только
   // #printArea (макет этикетки), остальной интерфейс скрывается.
   mainWindow.webContents.on("print", (event, wc) => {
-    // Если printerName НЕ задан — НЕ перехватываем печать: штатное нативное окно
-    // печати Electron появляется само, и пользователь выбирает принтер (стикер —
-    // через #printArea / @media print). Раньше здесь делались preventDefault +
-    // wc.print(silent:false), но в ряде сборок окно так и не открывалось.
-    if (!PRINTER_NAME) return;
-    // Задан printerName — печатаем молча прямо на него, без окна.
+    console.log("[print] Событие печати получено. printerName =", JSON.stringify(PRINTER_NAME));
     event.preventDefault();
+    const base = { printBackground: true, margins: { marginType: "none" }, pageSize: { width: 58000, height: 58000 } };
+    // Если printerName НЕ задан — явно открываем окно печати (silent:false),
+    // чтобы пользователь выбрал принтер. Это стандартный надёжный способ в Electron.
+    if (!PRINTER_NAME) {
+      wc.print(Object.assign({}, base, { silent: false }), (ok, fr) => {
+        console.log("[print] Окно печати закрыто. ok =", ok, "| reason =", fr || "-");
+      });
+      return;
+    }
+    // Задан printerName — печатаем молча прямо на него, без окна.
     const printOpts = {
+      ...base,
       silent: true,
-      printBackground: true,
-      margins: { marginType: "none" },
-      pageSize: { width: 58000, height: 58000 },
     };
     printOpts.printerName = PRINTER_NAME;
     wc.print(printOpts, (ok, failureReason) => {
