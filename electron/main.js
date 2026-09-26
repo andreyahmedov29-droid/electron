@@ -183,15 +183,27 @@ const ACCESS_TOKEN = process.env.BIOTIME_ACCESS_TOKEN || (_cfg.accessToken || ""
 // печатаем на принтер по умолчанию Windows. Пропишите в biotime.config.json
 // поле "printerName": "HP...", чтобы печать шла всегда на нужный принтер.
 const PRINTER_NAME = process.env.BIOTIME_PRINTER_NAME || (_cfg.printerName || "");
+// B: Локальный рендер (без фрейма Вайбкода) + живые данные портала. Десктоп
+// открывает наше приложение напрямую (свой сервер + index.html) — это даёт печать,
+// а данные тянет из портала через API, т.е. остаются живыми. Адрес/ключ приходят
+// из конфига (portalBaseUrl / portalKey) или окружения (BITRIX_API_BASE_URL /
+// BITRIX_API_KEY) — те же, что использует развёрнутое приложение. Прокидываем их
+// в локальный сервер, т.к. он читает именно эти имена переменных.
+const PORTAL_BASE = process.env.BITRIX_API_BASE_URL || (_cfg.portalBaseUrl || "");
+const PORTAL_KEY = process.env.BITRIX_API_KEY || (_cfg.portalKey || "");
+if (PORTAL_BASE && !(process.env.BITRIX_API_BASE_URL)) process.env.BITRIX_API_BASE_URL = PORTAL_BASE;
+if (PORTAL_KEY && !(process.env.BITRIX_API_KEY)) process.env.BITRIX_API_KEY = PORTAL_KEY;
 // Локальный режим (Mode B) — принудительно работаем со своей копией приложения
 // (локальный сервер + наш index.html) БЕЗ фрейма Вайбкод. Включается полем
-// "localMode": true в biotime.config.json либо переменной BIOTIME_LOCAL_MODE=1.
+// "localMode": true в biotime.config.json, переменной BIOTIME_LOCAL_MODE=1, либо
+// автоматически при заданном "portalKey" (тогда ещё и данные берём через API).
 // Нужен там, где web-режим не может печатать из-за sandbox-фрейма платформы:
 // в локальном режиме окно грузит app.js напрямую (sandbox:false, без open_app_frame),
 // поэтому и window.print(), и печать через iframe работают.
 const LOCAL_MODE =
   String(process.env.BIOTIME_LOCAL_MODE || "").trim() === "1" ||
-  _cfg.localMode === true;
+  _cfg.localMode === true ||
+  Boolean(_cfg.portalKey && String(_cfg.portalKey).trim());
 // Включён ли режим A (веб-версия). Если адрес задан и локальный режим НЕ включён — да.
 const useWebMode = !LOCAL_MODE && !!WEB_APP_URL && String(WEB_APP_URL).length > 0;
 
