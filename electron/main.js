@@ -64,24 +64,17 @@ async function resolvePrinter() {
   }
 }
 
-function printStickerHtml(html) {
-  if (!html || !String(html).trim()) return;
+// Печать макета через скрытое окно (используется для тихой печати на принтер).
+function printHidden(html, opts) {
   if (printWin && !printWin.isDestroyed()) { try { printWin.close(); } catch (_) {} }
   printWin = new BrowserWindow({
     show: false,
     width: 200, height: 200,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false },
   });
-  // После загрузки макета печатаем: автоопределяем принтер (термо/этикеточный),
-  // если нашли — молча на него, иначе — нативное окно выбора принтера.
-  printWin.webContents.on("did-finish-load", async () => {
-    const base = { printBackground: true, margins: { marginType: "none" }, pageSize: { width: 58000, height: 58000 } };
-    const printerName = await resolvePrinter();
-    const opts = printerName
-      ? Object.assign({}, base, { silent: true, printerName })
-      : Object.assign({}, base, { silent: false });
+  printWin.webContents.on("did-finish-load", () => {
     printWin.webContents.print(opts, (ok, fr) => {
-      console.log("[print] Нативная печать стикера (printer=" + (printerName || "выбор") + "). ok =", ok, "| reason =", fr || "-");
+      console.log("[print] Печать со скрытого окна. ok =", ok, "| reason =", fr || "-");
       if (printWin && !printWin.isDestroyed()) { try { printWin.close(); } catch (_) {} }
       printWin = null;
     });
@@ -89,6 +82,30 @@ function printStickerHtml(html) {
   const css = "<style>@page{size:58mm auto;margin:0}html,body{margin:0;padding:0;background:#fff}</style>";
   const doc = "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + css + "</head><body>" + String(html) + "</body></html>";
   printWin.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(doc));
+}
+
+// Нативный мост печати: страница передаёт HTML стикера сюда. Печатаем в обход
+// веб-песочницы (главный процесс → webContents.print).
+async function printStickerHtml(html) {
+  if (!html || !String(html).trim()) return;
+  const base = { printBackground: true, margins: { marginType: "none" }, pageSize: { width: 58000, height: 58000 } };
+  const printerName = await resolvePrinter();
+  if (printerName) {
+    // Найден принтер (конфиг / термо / системный по умолчанию) — печатаем молча.
+    printHidden(html, Object.assign({}, base, { silent: true, printerName }));
+    return;
+  }
+  // Принтер не найден — показываем системный диалог печати на ГЛАВНОМ (видимом)
+  // окне: диалог со скрытого окна на Windows не отображается. Благодаря @media
+  // print из styles.css в печать главного окна попадает только #printArea (стикер).
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.print(Object.assign({}, base, { silent: false }), (ok, fr) => {
+      console.log("[print] Диалог печати (главное окно). ok =", ok, "| reason =", fr || "-");
+    });
+    return;
+  }
+  // Запасной путь — со скрытого окна с диалогом (если главного окна нет).
+  printHidden(html, Object.assign({}, base, { silent: false }));
 }
 ipcMain.on("print-sticker", (_event, html) => printStickerHtml(String(html == null ? "" : html)));
 
