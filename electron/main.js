@@ -13,13 +13,46 @@
 //
 // Веб-версия BIOTIME остаётся нетронутой — десктоп лишь подключается к ней.
 
-const { app, BrowserWindow, shell, dialog } = require("electron");
+const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
 const { session } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const path = require("path");
 const fs = require("fs");
 const { autoUpdater } = require("electron-updater");
+
+// ---- Печать стикера в обход веб-песочницы ----
+// Страница передаёт HTML-макет стикера (#printArea) через IPC (preload → ipcMain).
+// Здесь, в главном процессе, открываем скрытое окно с этим HTML и печатаем нативно
+// (webContents.print). window.print() из песочницы тут НЕ задействован, поэтому окно
+// печати появляется независимо от того, песочница ли веб-документ.
+let printWin = null;
+function printStickerHtml(html) {
+  if (!html || !String(html).trim()) return;
+  if (printWin && !printWin.isDestroyed()) { try { printWin.close(); } catch (_) {} }
+  printWin = new BrowserWindow({
+    show: false,
+    width: 200, height: 200,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false },
+  });
+  // После загрузки макета печатаем: если задан printerName — молча на него, иначе —
+  // показываем нативное окно выбора принтера.
+  printWin.webContents.on("did-finish-load", () => {
+    const base = { printBackground: true, margins: { marginType: "none" }, pageSize: { width: 58000, height: 58000 } };
+    const opts = PRINTER_NAME
+      ? Object.assign({}, base, { silent: true, printerName: PRINTER_NAME })
+      : Object.assign({}, base, { silent: false });
+    printWin.webContents.print(opts, (ok, fr) => {
+      console.log("[print] Нативная печать стикера. ok =", ok, "| reason =", fr || "-");
+      if (printWin && !printWin.isDestroyed()) { try { printWin.close(); } catch (_) {} }
+      printWin = null;
+    });
+  });
+  const css = "<style>@page{size:58mm auto;margin:0}html,body{margin:0;padding:0;background:#fff}</style>";
+  const doc = "<!DOCTYPE html><html><head><meta charset=\"utf-8\">" + css + "</head><body>" + String(html) + "</body></html>";
+  printWin.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(doc));
+}
+ipcMain.on("print-sticker", (_event, html) => printStickerHtml(String(html == null ? "" : html)));
 
 // ---- Режим A: веб-версия на платформе ----
 // Адрес веб-версии BIOTIME и access-токен для прохода через шлюз платформы.
@@ -196,6 +229,9 @@ async function createWindow() {
       // not set») и окно выбора принтера не появляется. Безопасность держим через
       // contextIsolation:true + nodeIntegration:false — к node рендерер доступа не имеет.
       sandbox: false,
+      // preload открывает странице нативный мост печати (printStickerBridge.print),
+      // который работает в обход веб-песочницы.
+      preload: path.join(__dirname, "preload.js"),
       // Постоянная partition: cookies и сессия шлюза (вход в личную учётку)
       // сохраняются в userData и держатся между перезапусками приложения.
       // Без неё окно использует непостоянную defaultSession, вход теряется на
