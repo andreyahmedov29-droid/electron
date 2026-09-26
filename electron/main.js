@@ -27,6 +27,43 @@ const { autoUpdater } = require("electron-updater");
 // (webContents.print). window.print() из песочницы тут НЕ задействован, поэтому окно
 // печати появляется независимо от того, песочница ли веб-документ.
 let printWin = null;
+
+// Автоопределение принтера для тихой печати этикеток. Возвращает имя принтера
+// (тогда печатаем молча, silent:true) или "" (тогда показываем нативное окно
+// выбора принтера). Приоритет:
+//   1) явно заданный BIOTIME_PRINTER_NAME / "printerName" из конфига;
+//   2) первое устройство с признаком термо/этикеточного принтера (label/терм/
+//      thermal/Zebra/Toshiba/…);
+//   3) системный принтер по умолчанию (isDefault).
+// Это снимает проблему «печать уходит на обычный А4»: даже без конфига shell
+// сам находит термопринтер и печатает этикетку молча.
+async function resolvePrinter() {
+  const norm = (s) => String(s == null ? "" : s).toLowerCase();
+  try {
+    const wc = mainWindow && mainWindow.webContents;
+    const list = wc ? await wc.getPrintersAsync() : [];
+    const arr = Array.isArray(list) ? list : [];
+    if (arr.length === 0) return PRINTER_NAME || "";
+    // 1) явно заданный принтер
+    if (PRINTER_NAME) {
+      const hit = arr.find((p) => norm(p.name) === norm(PRINTER_NAME));
+      if (hit) return hit.name;
+    }
+    // 2) автоопределение термопринтера для этикеток
+    const thermo = [
+      "label", "терм", "thermal", "toshiba", "zebra", "bixolon", "datamax",
+      "honeywell", "tsc", "godex", "citizen", "printronix", "lpt", "itw", "epson tm",
+    ];
+    const kw = arr.find((p) => thermo.some((k) => norm(p.name).includes(k)));
+    if (kw) return kw.name;
+    // 3) системный по умолчанию
+    const def = arr.find((p) => p.isDefault) || arr[0];
+    return def ? def.name : "";
+  } catch (_) {
+    return PRINTER_NAME || "";
+  }
+}
+
 function printStickerHtml(html) {
   if (!html || !String(html).trim()) return;
   if (printWin && !printWin.isDestroyed()) { try { printWin.close(); } catch (_) {} }
@@ -35,15 +72,16 @@ function printStickerHtml(html) {
     width: 200, height: 200,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false },
   });
-  // После загрузки макета печатаем: если задан printerName — молча на него, иначе —
-  // показываем нативное окно выбора принтера.
-  printWin.webContents.on("did-finish-load", () => {
+  // После загрузки макета печатаем: автоопределяем принтер (термо/этикеточный),
+  // если нашли — молча на него, иначе — нативное окно выбора принтера.
+  printWin.webContents.on("did-finish-load", async () => {
     const base = { printBackground: true, margins: { marginType: "none" }, pageSize: { width: 58000, height: 58000 } };
-    const opts = PRINTER_NAME
-      ? Object.assign({}, base, { silent: true, printerName: PRINTER_NAME })
+    const printerName = await resolvePrinter();
+    const opts = printerName
+      ? Object.assign({}, base, { silent: true, printerName })
       : Object.assign({}, base, { silent: false });
     printWin.webContents.print(opts, (ok, fr) => {
-      console.log("[print] Нативная печать стикера. ok =", ok, "| reason =", fr || "-");
+      console.log("[print] Нативная печать стикера (printer=" + (printerName || "выбор") + "). ok =", ok, "| reason =", fr || "-");
       if (printWin && !printWin.isDestroyed()) { try { printWin.close(); } catch (_) {} }
       printWin = null;
     });
@@ -284,23 +322,21 @@ async function createWindow() {
     console.log("[print] Событие печати получено. printerName =", JSON.stringify(PRINTER_NAME));
     event.preventDefault();
     const base = { printBackground: true, margins: { marginType: "none" }, pageSize: { width: 58000, height: 58000 } };
-    // Если printerName НЕ задан — явно открываем окно печати (silent:false),
-    // чтобы пользователь выбрал принтер. Это стандартный надёжный способ в Electron.
-    if (!PRINTER_NAME) {
-      wc.print(Object.assign({}, base, { silent: false }), (ok, fr) => {
-        console.log("[print] Окно печати закрыто. ok =", ok, "| reason =", fr || "-");
-      });
-      return;
-    }
-    // Задан printerName — печатаем молча прямо на него, без окна.
-    const printOpts = {
-      ...base,
-      silent: true,
-    };
-    printOpts.printerName = PRINTER_NAME;
-    wc.print(printOpts, (ok, failureReason) => {
-      if (!ok) console.error("[print] Печать не удалась:", failureReason || "unknown");
-      else console.log("[print] Этикетки отправлены на печать.");
+    // Автоопределяем принтер: конфиг → термопринтер → системный по умолчанию.
+    // Если не нашли ничего подходящего — открываем нативное окно выбора (silent:false).
+    resolvePrinter().then((printerName) => {
+      if (printerName) {
+        const printOpts = Object.assign({}, base, { silent: true });
+        printOpts.printerName = printerName;
+        wc.print(printOpts, (ok, failureReason) => {
+          if (!ok) console.error("[print] Печать не удалась (printer=" + printerName + "):", failureReason || "unknown");
+          else console.log("[print] Этикетки отправлены на печать (printer=" + printerName + ").");
+        });
+      } else {
+        wc.print(Object.assign({}, base, { silent: false }), (ok, fr) => {
+          console.log("[print] Окно печати закрыто. ok =", ok, "| reason =", fr || "-");
+        });
+      }
     });
   });
 
