@@ -181,8 +181,17 @@ const ACCESS_TOKEN = process.env.BIOTIME_ACCESS_TOKEN || (_cfg.accessToken || ""
 // печатаем на принтер по умолчанию Windows. Пропишите в biotime.config.json
 // поле "printerName": "HP...", чтобы печать шла всегда на нужный принтер.
 const PRINTER_NAME = process.env.BIOTIME_PRINTER_NAME || (_cfg.printerName || "");
-// Включён ли режим A (веб-версия). Если адрес задан — да.
-const useWebMode = !!WEB_APP_URL && String(WEB_APP_URL).length > 0;
+// Локальный режим (Mode B) — принудительно работаем со своей копией приложения
+// (локальный сервер + наш index.html) БЕЗ фрейма Вайбкод. Включается полем
+// "localMode": true в biotime.config.json либо переменной BIOTIME_LOCAL_MODE=1.
+// Нужен там, где web-режим не может печатать из-за sandbox-фрейма платформы:
+// в локальном режиме окно грузит app.js напрямую (sandbox:false, без open_app_frame),
+// поэтому и window.print(), и печать через iframe работают.
+const LOCAL_MODE =
+  String(process.env.BIOTIME_LOCAL_MODE || "").trim() === "1" ||
+  _cfg.localMode === true;
+// Включён ли режим A (веб-версия). Если адрес задан и локальный режим НЕ включён — да.
+const useWebMode = !LOCAL_MODE && !!WEB_APP_URL && String(WEB_APP_URL).length > 0;
 
 // Порт локального сервера. Можно переопределить через переменную окружения
 // BIOTIME_PORT (например при конфликте порта на машине пользователя).
