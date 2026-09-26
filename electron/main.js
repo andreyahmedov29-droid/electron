@@ -241,18 +241,20 @@ async function createWindow() {
   // Благодаря правилу @media print из styles.css в печать попадает только
   // #printArea (макет этикетки), остальной интерфейс скрывается.
   mainWindow.webContents.on("print", (event, wc) => {
+    // Если printerName НЕ задан — НЕ перехватываем печать: штатное нативное окно
+    // печати Electron появляется само, и пользователь выбирает принтер (стикер —
+    // через #printArea / @media print). Раньше здесь делались preventDefault +
+    // wc.print(silent:false), но в ряде сборок окно так и не открывалось.
+    if (!PRINTER_NAME) return;
+    // Задан printerName — печатаем молча прямо на него, без окна.
     event.preventDefault();
     const printOpts = {
-      // ВСЕГДА показываем окно выбора принтера (silent: false). Так при «Новый бокс»
-      // и печати стикеров диалог выбора принтера гарантированно появляется, и можно
-      // выбрать термопринтер (иначе стикер «молча» уходил на дефолтный/заданный
-      // принтер, и на термопринтере ничего не печаталось).
-      silent: false,
+      silent: true,
       printBackground: true,
-      margins: { marginType: "none" },  // этикетка без полей
-      pageSize: { width: 58000, height: 58000 }, // 58×58 мм (микроны)
+      margins: { marginType: "none" },
+      pageSize: { width: 58000, height: 58000 },
     };
-    if (PRINTER_NAME) printOpts.printerName = PRINTER_NAME;
+    printOpts.printerName = PRINTER_NAME;
     wc.print(printOpts, (ok, failureReason) => {
       if (!ok) console.error("[print] Печать не удалась:", failureReason || "unknown");
       else console.log("[print] Этикетки отправлены на печать.");
