@@ -71,7 +71,10 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
-    }
+    },
+    "extraResources": [
+      { "from": "config/biotime.config.json", "to": "biotime.config.json" }
+    ]
   },
   "allowScripts": {
     "electron@31.7.7": true

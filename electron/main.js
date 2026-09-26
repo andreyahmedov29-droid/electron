@@ -139,8 +139,21 @@ try {
     try { return app.getPath("userData"); } catch { return ""; }
   })();
   const parentDir = userDataBase ? userDataBase.replace(/[\\/][^\\/]*$/, "") : "";
-  const folders = [userDataBase, parentDir ? path.join(parentDir, "BIOTIME") : "", parentDir ? path.join(parentDir, "biotime-desktop") : ""]
-    .filter(Boolean);
+  // Конфиг, упакованный в установщик (extraResources → process.resourcesPath):
+  // чтобы при раздаче на N машин не прописывать portalKey вручную на каждой —
+  // поставил .exe, и десктоп уже настроен (локальный рендер + живые данные).
+  const resourcesConfig = (() => {
+    try {
+      const p = path.join(process.resourcesPath, "biotime.config.json");
+      return fs.existsSync(p) ? path.dirname(p) : "";
+    } catch { return ""; }
+  })();
+  const folders = [
+    userDataBase,
+    parentDir ? path.join(parentDir, "BIOTIME") : "",
+    parentDir ? path.join(parentDir, "biotime-desktop") : "",
+    resourcesConfig,
+  ].filter(Boolean);
   const fileNames = ["biotime.config.json", "biotime.config"];
   outer:
   for (const folder of folders) {
