@@ -19,7 +19,7 @@
   },
   "build": {
     "appId": "com.biotime.worklogger",
-    "productName": "BIOTIME",
+    "productName": "Личный кабинет",
     "asar": false,
     "publish": [
       {
