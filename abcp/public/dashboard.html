@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Дашборд · Сентябрь · реальные данные</title>
+<style>
+  :root{
+    --bg:#080b10; --panel:#111722;
+    --line:#1e2836; --text:#e9eef4; --muted:#8b99a8; --faint:#5c6a78;
+    --accent:#ffb020; --accent-2:#ff8a00;
+    --mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+    --sans:"Segoe UI Variable","Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 520px at 88% -12%,rgba(255,139,0,.10),transparent 58%),var(--bg);
+    color:var(--text);font:14px/1.5 var(--sans);min-height:100vh}
+  .wrap{width:100%;padding:18px 20px 40px}
+  .hdr{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:8px}
+  .hdr h1{font-size:19px;margin:0;font-weight:800;letter-spacing:-.2px}
+  .hdr h1 span{color:var(--accent)}
+  .tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .btn{border:1px solid var(--line);background:#0d131c;color:var(--text);border-radius:10px;
+    padding:8px 14px;font:600 12.5px var(--sans);cursor:pointer}
+  .btn.acc{background:linear-gradient(160deg,var(--accent),var(--accent-2));color:#181008;border:0;
+    box-shadow:0 6px 18px -8px rgba(255,150,10,.7)}
+  .meta{color:var(--muted);font-size:12px;margin:0 0 8px}
+  .meta b{color:var(--text)}
+  .spin{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;margin:0 0 8px}
+  .spin i{width:16px;height:16px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--accent);
+    animation:sp .8s linear infinite;display:inline-block;flex:0 0 auto}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .err{color:#ff7a7a;background:rgba(255,92,92,.1);border:1px solid rgba(255,92,92,.4);border-radius:10px;
+    padding:12px 14px;margin:10px 0;font-size:13px}
+  .section{margin-top:18px}
+  .sec{display:flex;align-items:center;gap:12px;margin:0 0 12px}
+  .sec .kick{color:var(--accent);font:700 12px var(--sans);letter-spacing:.9px;text-transform:uppercase}
+  .sec .line{flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
+  .grid{display:grid;grid-template-columns:1fr;gap:18px}
+  .chart{background:linear-gradient(170deg,var(--panel),#0e141e);border:1px solid var(--line);border-radius:16px;
+    padding:16px 16px 12px;position:relative;overflow:hidden}
+  .chart::before{content:'';position:absolute;inset:0 0 auto 0;height:2px;
+    background:linear-gradient(90deg,var(--dot),transparent)}
+  .chart-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+  .ct{display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dot);box-shadow:0 0 8px var(--dot)}
+  .seg{display:inline-flex;gap:2px;padding:3px;background:#0d131c;border:1px solid var(--line);border-radius:9px}
+  .seg button{border:0;background:transparent;color:var(--muted);cursor:pointer;font:700 10.5px var(--sans);
+    padding:3px 9px;border-radius:6px}
+  .seg button.is-active{background:linear-gradient(160deg,var(--accent),var(--accent-2));color:#181008}
+  .total{margin:4px 0 2px;font:700 26px var(--mono);letter-spacing:-.5px}
+  .total .u{color:var(--muted);font-size:12px;margin-left:3px}
+  .sub{color:var(--faint);font-size:11.5px;font-family:var(--mono)}
+  .plot{position:relative;height:280px;margin-top:14px;padding:26px 10px 4px;border-radius:10px;
+    background:repeating-linear-gradient(to top,rgba(255,255,255,.03) 0 1px,transparent 1px 25%);
+    display:flex;align-items:stretch;gap:3px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .b{flex:1 1 0;min-width:30px;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:3px}
+  .b .v{color:var(--muted);font:11px var(--mono);white-space:nowrap}
+  .b .fill{width:70%;border-radius:5px 5px 1px 1px;min-height:2px;
+    background:linear-gradient(180deg,var(--g1),var(--g2));box-shadow:0 8px 16px -8px var(--dot)}
+  .b .d{color:var(--faint);font:11px var(--mono);white-space:nowrap}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hdr">
+      <h1>Дашборд · реальные данные <span id="per-label"></span></h1>
+      <div class="tools">
+        <button class="btn" id="cur">Текущий период</button>
+        <button class="btn acc" id="refresh">Обновить данные</button>
+      </div>
+    </div>
+    <div class="spin" id="spin"><i></i><span id="spin-text">Загружаем данные из ABCP…</span></div>
+    <div class="meta hidden" id="meta">Обновлено: —</div>
+    <div class="err hidden" id="err"></div>
+
+    <div class="section">
+      <div class="sec"><span class="kick">По сумме</span><span class="line"></span></div>
+      <div class="grid" id="gsum"></div>
+    </div>
+    <div class="section">
+      <div class="sec"><span class="kick">По количеству</span><span class="line"></span></div>
+      <div class="grid" id="gcnt"></div>
+    </div>
+  </div>
+
+<script>
+  const $=s=>/^[#.[\[]/.test(s)?document.querySelector(s):document.getElementById(s);
+  const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const PAL={orders:['#4fd6e8','#7fe4f2','#1788b0'],issued:['#3dd68c','#6ce6a9','#168f5b'],refused:['#ff5c5c','#ff9494','#c13838']};
+  const label={orders:'Все заказы',issued:'Выдано (по дате выдачи)',refused:'Отказы (по дате статуса)'};
+  // период: полный сентябрь текущего года
+  function sepPeriod(){const y=new Date().getFullYear();return {from:y+'-09-01',to:y+'-09-30',label:y+' · Сентябрь'};}
+  function pad(n){return String(n).padStart(2,'0')}
+  function isoDays(from,to){
+    const out=[];const d=new Date(from+'T00:00:00');const end=new Date(to+'T00:00:00');
+    while(d<=end){const k=d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());out.push(k);d.setDate(d.getDate()+1);}return out;
+  }
+  // агрегация в корзину дня (сплошная сетка по календарю периода)
+  function gridFor(src,from,to){
+    const map=new Map();
+    for(const e of (src||[])) { const k=String(e.day).slice(0,10); if(k) map.set(k,{count:e.count||0,sum:e.sum||0}); }
+    return isoDays(from,to).map(d=>{const v=map.get(d);return {day:d,count:v?v.count:0,sum:v?v.sum:0};});
+  }
+  function aggWeeks(days){const m=new Map();days.forEach(e=>{const d=new Date(e.day+'T00:00:00');const g=d.getDay()||7;const ws=new Date(d);ws.setDate(d.getDate()-g+1);const k=ws.getFullYear()+'-'+pad(ws.getMonth()+1)+'-'+pad(ws.getDate());const c=m.get(k)||{day:k,count:0,sum:0};c.count+=e.count;c.sum+=e.sum;m.set(k,c);});
+    return Array.from(m.values()).sort((a,b)=>a.day<b.day?-1:1);}
+  function aggMonths(days){const m=new Map();days.forEach(e=>{const k=String(e.day).slice(0,7);const c=m.get(k)||{day:k,count:0,sum:0};c.count+=e.count;c.sum+=e.sum;m.set(k,c);});
+    return Array.from(m.values()).sort((a,b)=>a.day<b.day?-1:1);}
+  function aggYears(days){const m=new Map();days.forEach(e=>{const k=String(e.day).slice(0,4);const c=m.get(k)||{day:k,count:0,sum:0};c.count+=e.count;c.sum+=e.sum;m.set(k,c);});
+    return Array.from(m.values()).sort((a,b)=>a.day<b.day?-1:1);}
+  function buckets(mode,src,from,to){
+    const g=gridFor(src,from,to);
+    if(mode==='wk')return aggWeeks(g);
+    if(mode==='mth')return aggMonths(g);
+    if(mode==='yr')return aggYears(g);
+    return g;
+  }
+  function fmtDay(s){if(s.length>=10)return s.slice(8,10)+'.'+s.slice(5,7);if(s.length===7)return s.slice(5,7)+'.'+s.slice(0,4);return s;}
+  function short(n){const v=Math.round(n);if(v>=1e6)return (v/1e6).toFixed(1)+'м';if(v>=1e3)return (v/1e3).toFixed(1)+'к';return String(v);}
+  let CUR=sepPeriod(),RETRY=null,ATTEMPT=0,START=0;
+  function setLoad(on,txt){
+    const s=$('spin'),m=$('meta');
+    if(on){ s.classList.remove('hidden'); if(txt) $('spin-text').textContent=txt; m.classList.add('hidden'); }
+    else { s.classList.add('hidden'); m.classList.remove('hidden'); }
+  }
+  async function load(){
+    if(RETRY){clearTimeout(RETRY);RETRY=null;}
+    const err=$('err');err.classList.add('hidden');
+    if(!ATTEMPT){START=Date.now();}
+    ATTEMPT++;
+    setLoad(true, ATTEMPT===1 ? 'Загружаем данные из ABCP…' : 'Данные ещё загружаются из ABCP: идёт фоновая догрузка заказов за август–сентябрь…');
+    try{
+      const r=await fetch('/api/dashboard?from='+CUR.from+'&to='+CUR.to);
+      const data=await r.json().catch(()=>({}));
+      if(!r.ok)throw new Error(data.error||('HTTP '+r.status));
+      if(data.loading){
+        const wait=Math.round((Date.now()-START)/1000);
+        setLoad(true,'Данные ещё загружаются из ABCP: заказы за период докачиваются в фоне ('+wait+' с). Страница обновится сама — попытка '+ATTEMPT);
+        RETRY=setTimeout(load,10000);
+        return;
+      }
+      ATTEMPT=0;START=0;
+      setLoad(false);
+      $('per-label').textContent='· '+CUR.label;
+      $('meta').textContent='Обновлено: '+new Date(data.generatedAt).toLocaleString('ru-RU')+' · заказов в наборе: '+data.ordersCount;
+      const srcs={orders:data.ordersByDay||[],issued:data.issuedByDay||[],refused:data.refusedByDay||[]};
+      $('#gsum').innerHTML='';$('#gcnt').innerHTML='';
+      ['orders','issued','refused'].forEach(id=>{
+        ['sum','count'].forEach(metric=>{
+          const wrap=document.getElementById(metric==='sum'?'gsum':'gcnt');
+          const el=document.createElement('div');el.className='chart';
+          const cfg=PAL[id];
+          el.style.setProperty('--dot',cfg[0]);el.style.setProperty('--g1',cfg[1]);el.style.setProperty('--g2',cfg[2]);
+          el.innerHTML=cardHtml(id);
+          wrap.appendChild(el);
+          const st={mode:'day'};
+          el.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{
+            el.querySelectorAll('.seg button').forEach(x=>x.classList.remove('is-active'));b.classList.add('is-active');st.mode=b.getAttribute('data-m');
+            redrawCard(el,id,metric,srcs,st.mode);
+          }));
+          redrawCard(el,id,metric,srcs,st.mode);
+        });
+      });
+    }catch(e){setLoad(false);err.textContent=e.message;err.classList.remove('hidden');}
+  }
+  function cardHtml(id){
+    return '<div class="chart-head"><div class="ct"><span class="dot"></span>'+esc(label[id])+'</div>'+
+      '<div class="seg">'+['Дни','Нед','Мес','Год'].map((m,i)=>'<button'+((i===0)?' class="is-active"':'')+' data-m="'+['day','wk','mth','yr'][i]+'">'+m+'</button>').join('')+'</div></div>'+
+      '<div class="total" data-total></div><div class="sub" data-sub></div><div class="plot" data-plot></div>';
+  }
+  function redrawCard(el,id,metric,srcs,mode){
+    const b=buckets(mode,srcs[id]||[],CUR.from,CUR.to);
+    const isSum=metric==='sum';
+    const vof=e=>isSum?e.sum:e.count;
+    const tot=b.reduce((s,e)=>s+vof(e),0);
+    el.querySelector('[data-total]').innerHTML=Math.round(tot).toLocaleString('ru-RU')+(isSum?' ₽':'');
+    el.querySelector('[data-sub]').textContent='за период · '+({day:'по дням',wk:'по неделям',mth:'по месяцам',yr:'по годам'})[mode];
+    const mx=Math.max(1,...b.map(vof));
+    const plot=el.querySelector('[data-plot]');
+    plot.innerHTML=b.map(e=>{
+      const v=vof(e);
+      return '<div class="b"><div class="v">'+esc(isSum?short(v):Math.round(v))+'</div>'+
+        '<div class="fill" style="height:'+Math.max(1.5,(v/mx)*100)+'%"></div>'+
+        '<div class="d">'+esc(fmtDay(e.day))+'</div></div>';
+    }).join('');
+  }
+  $('#refresh').addEventListener('click',load);
+  $('#cur').addEventListener('click',()=>{CUR=sepPeriod();load();});
+  load();
+</script>
+</body>
+</html>

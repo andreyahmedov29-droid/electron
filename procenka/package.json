@@ -1,0 +1,12 @@
+{
+  "name": "price-compare",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Сравнение прайс-листов по артикулу и цене с учётом разных валют",
+  "scripts": {
+    "start": "node --expose-gc --max-old-space-size=448 server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

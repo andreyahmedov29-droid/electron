@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Парсер почты — статусы заказов из почты</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="grain"></div>
+
+  <main class="shell">
+    <!-- Status bar -->
+    <section class="statusbar" id="statusbar">
+      <div class="statusbar__cell">
+        <span class="statusbar__label">Режим</span>
+        <span class="statusbar__value" id="modeValue">—</span>
+      </div>
+      <div class="statusbar__cell">
+        <span class="statusbar__label">Последний цикл</span>
+        <span class="statusbar__value" id="lastRunValue">ещё не запускался</span>
+      </div>
+      <div class="statusbar__cell">
+        <span class="statusbar__label">Успешно обработано</span>
+        <span class="statusbar__value" id="checkedValue">—</span>
+      </div>
+      <button class="btn btn--sync" id="runBtn">
+        <span class="btn__icon">▶</span> Прогнать сейчас
+      </button>
+      <button class="btn btn--ghost" id="backupBtn" type="button" title="Скачать все настройки (ключи, почта, разделы) файлом settings.json">
+        <span class="btn__icon">⬇</span> Скачать бэкап
+      </button>
+    </section>
+
+    <!-- Readiness checklist (структура готовности) -->
+    <section class="readiness hidden" id="readiness">
+      <h3 class="readiness__title">Чтобы цикл заработал, настройте:</h3>
+      <ul class="readiness__list" id="readinessList"></ul>
+    </section>
+
+    <div class="grid">
+      <!-- Mail card -->
+      <section class="card" data-card="mail">
+        <div class="card__head">
+        <h2 data-label="mail"><span class="card__num">1</span>Яндекс Почта</h2>
+          <label class="switch">
+            <input type="checkbox" id="mailEnabled">
+            <span class="switch__track"></span>
+            <span class="switch__label">активна</span>
+          </label>
+        </div>
+        <div class="field">
+          <label for="mailUser">Логин (email)</label>
+          <input type="text" id="mailUser" placeholder="you@yandex.ru">
+        </div>
+        <div class="field">
+          <label for="mailPassword">App-пароль</label>
+          <input type="password" id="mailPassword" placeholder="••••••••">
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label for="mailHost">IMAP-хост</label>
+            <input type="text" id="mailHost" placeholder="imap.yandex.ru">
+          </div>
+          <div class="field">
+            <label for="mailPort">Порт</label>
+            <input type="number" id="mailPort" min="1" max="65535" placeholder="993">
+          </div>
+        </div>
+        <div class="field">
+          <label for="mailFolder">IMAP-папка</label>
+          <input type="text" id="mailFolder" placeholder="INBOX">
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label for="pollMinutes">Интервал, мин</label>
+            <input type="number" id="pollMinutes" min="1" value="5">
+          </div>
+          <div class="field">
+            <label for="markSeen">Отмечать прочитанным</label>
+            <select id="markSeen">
+              <option value="true">да</option>
+              <option value="false">нет</option>
+            </select>
+          </div>
+        </div>
+        <p class="hint">Для внешней почты нужен отдельный <em>app-пароль</em> Яндекса (не основной пароль).</p>
+      </section>
+
+      <!-- Table card -->
+      <section class="card" data-card="table">
+        <div class="card__head">
+        <h2 data-label="table"><span class="card__num">2</span>Google Таблица</h2>
+          <label class="switch">
+            <input type="checkbox" id="tableEnabled">
+            <span class="switch__track"></span>
+            <span class="switch__label">активна</span>
+          </label>
+        </div>
+      <div class="field">
+        <label for="spreadsheetId">ID таблицы</label>
+        <input type="text" id="spreadsheetId" placeholder="1BxiMVs0XRA5nFMdKvBdBZjSd...">
+        <a class="hint link" id="openSheetLink" href="#" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;">Открыть таблицу ↗</a>
+      </div>
+        <div class="field">
+          <label for="authMethod">Способ доступа</label>
+          <select id="authMethod">
+            <option value="serviceAccount">Service Account (JWT)</option>
+            <option value="apiKey">API-ключ (публичная таблица)</option>
+          </select>
+        </div>
+        <div class="field" id="saField">
+          <label for="serviceAccountJson">JSON Service Account</label>
+          <textarea id="serviceAccountJson" rows="5" placeholder='{ "type": "service_account", ... }'></textarea>
+          <label class="filebtn" for="saFileInput">
+            <span class="filebtn__icon">⬆</span> Загрузить JSON-файл
+            <input type="file" id="saFileInput" accept=".json,application/json">
+          </label>
+        </div>
+        <div class="field hidden" id="keyField">
+          <label for="apiKey">API-ключ Google</label>
+          <input type="password" id="apiKey" placeholder="AIza...">
+        </div>
+        <p class="hint">Дайте сервисному аккаунту доступ к таблице (Share → email сервисного аккаунта) с правами редактора.</p>
+      </section>
+    </div>
+
+    <!-- Rules card (03) -->
+    <section class="card card--rules">
+      <div class="card__head">
+        <h2 data-label="rules"><span class="card__num">3</span>Правила «текст → статус»</h2>
+        <label class="switch">
+          <input type="checkbox" id="rule03Enabled">
+          <span class="switch__track"></span>
+          <span class="switch__label">включено</span>
+        </label>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="rule03Sender">Отправитель (фильтр)</label>
+          <input type="text" id="rule03Sender" placeholder="orders@example.ru — пусто = все">
+        </div>
+        <div class="field">
+          <label for="rule03Sheet">Имя листа</label>
+          <input type="text" id="rule03Sheet" value="Sheet1" placeholder="Sheet1">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="rule03ArticleCol">Столбец артикула</label>
+          <input type="text" id="rule03ArticleCol" value="A" maxlength="3" placeholder="A">
+        </div>
+        <div class="field">
+          <label for="rule03StatusCol">Столбец статуса</label>
+          <input type="text" id="rule03StatusCol" value="B" maxlength="3" placeholder="B">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="rule03LogoCol">Столбец лого</label>
+          <input type="text" id="rule03LogoCol" maxlength="3" placeholder="пусто = не проверять">
+        </div>
+        <div class="field">
+          <label for="rule03ReasonCol">Столбец причины</label>
+          <input type="text" id="rule03ReasonCol" maxlength="3" placeholder="пусто = не проверять">
+        </div>
+      </div>
+      <p class="hint">Лого и причина берутся из темы письма «Согласование &lt;лого&gt; - артикул - причина» (например «Согласование RRE - 1068050730 - вмятина»). Если столбец задан — статус меняется, только когда в строке совпали все указанные поля (артикул, лого, причина) с письмом.</p>
+      <div class="field">
+        <label for="rule03Pattern">Шаблон артикула (regex)</label>
+        <input type="text" id="rule03Pattern" placeholder="A\d+ — пусто = авто">
+      </div>
+      <div class="field">
+        <label for="rule03Trigger">Менять статус только если текущий =</label>
+        <input type="text" id="rule03Trigger" placeholder="Запрос клиента">
+        <p class="hint">Обновит столбец, только если в нём сейчас это значение. Иначе письмо останется непрочитанным.</p>
+      </div>
+      <div id="rulesList" class="rules"></div>
+      <button class="btn btn--ghost" id="addRuleBtn">+ Добавить правило</button>
+    </section>
+
+    <!-- Second rule card (03b) -->
+    <section class="card card--rules2">
+      <div class="card__head">
+        <h2 data-label="rules2"><span class="card__num">4</span>Второе правило статуса</h2>
+        <label class="switch">
+          <input type="checkbox" id="rule03bEnabled">
+          <span class="switch__track"></span>
+          <span class="switch__label">включено</span>
+        </label>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="rule03bSender">Почта-исключение</label>
+          <input type="text" id="rule03bSender" placeholder="orders@example.ru — с этой почты НЕ обрабатываем">
+        </div>
+        <div class="field">
+          <label for="rule03bSheet">Имя листа</label>
+          <input type="text" id="rule03bSheet" value="Sheet1" placeholder="Sheet1">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="rule03bArticleCol">Столбец артикула</label>
+          <input type="text" id="rule03bArticleCol" value="A" maxlength="3" placeholder="A">
+        </div>
+        <div class="field">
+          <label for="rule03bStatusCol">Столбец статуса</label>
+          <input type="text" id="rule03bStatusCol" value="C" maxlength="3" placeholder="C">
+        </div>
+      </div>
+      <div class="field">
+        <label for="rule03bPattern">Шаблон артикула (regex)</label>
+        <input type="text" id="rule03bPattern" placeholder="B\d+ — пусто = авто">
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="rule03bInvoiceCol">Столбец «Номер инвойса»</label>
+          <input type="text" id="rule03bInvoiceCol" maxlength="3" placeholder="D — пусто = не проверять">
+        </div>
+        <div class="field">
+          <label for="rule03bInvoicePattern">Шаблон номера инвойса (regex)</label>
+          <input type="text" id="rule03bInvoicePattern" placeholder="INV-\d+ — пусто = авто">
+        </div>
+      </div>
+      <p class="hint">Если задан столбец инвойса — статус меняется только когда совпали и артикул, и номер инвойса в найденной строке.</p>
+      <div class="field">
+        <label for="rule03bTrigger">Менять статус №2 только если текущий =</label>
+        <input type="text" id="rule03bTrigger" placeholder="Запрос клиента">
+        <p class="hint">Правило №2 работает независимо от правила 03 (свой отправитель, лист и столбцы).</p>
+      </div>
+      <p class="hint">Если здесь указана почта — ответы с неё правило №2 не обрабатывает. Указанная почта обрабатывается отдельным правилом 03 (своё правило «текст → статус»).</p>
+      <div id="secondaryRulesList" class="rules"></div>
+      <button class="btn btn--ghost" id="addSecondaryRuleBtn">+ Добавить правило №2</button>
+    </section>
+
+    <!-- Table check card (04) -->
+    <section class="card card--check">
+      <div class="card__head">
+        <h2><span class="card__num">5</span>Проверка таблицы</h2>
+        <label class="switch">
+          <input type="checkbox" id="checkEnabled">
+          <span class="switch__track"></span>
+          <span class="switch__label">активна</span>
+        </label>
+      </div>
+      <div class="field">
+        <label for="checkInterval">Интервал проверки, мин</label>
+        <input type="number" id="checkInterval" min="1" value="5">
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="checkSheet">Имя листа</label>
+          <input type="text" id="checkSheet" value="Sheet1" placeholder="Sheet1">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="checkSourceCol">Столбец-источник</label>
+          <input type="text" id="checkSourceCol" value="B" maxlength="3" placeholder="B">
+        </div>
+        <div class="field">
+          <label for="checkTargetCol">Столбец-приёмник</label>
+          <input type="text" id="checkTargetCol" value="C" maxlength="3" placeholder="C">
+        </div>
+      </div>
+      <div class="field">
+        <label for="checkPoint5Note">Пункт 5 — описание проверки</label>
+        <textarea id="checkPoint5Note" rows="2" placeholder="Напр.: если в K «отказ», а в J «Одобрено поставщиком» → записать в J «Согласовано»"></textarea>
+      </div>
+      <div id="checkRulesList" class="rules"></div>
+      <button class="btn btn--ghost" id="addCheckRuleBtn">+ Добавить правило (от → к)</button>
+    </section>
+
+    <!-- Move emails card (05) -->
+    <section class="card card--move">
+      <div class="card__head">
+        <h2><span class="card__num">6</span>Перемещение писем</h2>
+        <label class="switch">
+          <input type="checkbox" id="moveEnabled">
+          <span class="switch__track"></span>
+          <span class="switch__label">активна</span>
+        </label>
+      </div>
+      <div class="field">
+        <label for="moveSpecific">Почта «определённая»</label>
+        <input type="text" id="moveSpecific" placeholder="orders@example.ru">
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="moveFolderSpecific">Папка для этой почты</label>
+          <input type="text" id="moveFolderSpecific" value="Обработано" placeholder="Обработано">
+        </div>
+        <div class="field">
+          <label for="moveFolderOther">Папка для остальных</label>
+          <input type="text" id="moveFolderOther" value="Другое" placeholder="Другое">
+        </div>
+      </div>
+      <button class="btn btn--ghost" id="foldersBtn" type="button">Показать папки ящика</button>
+      <div id="foldersList" class="hidden folders-list"></div>
+      <p class="hint">Перемещается только успешно обработанное письмо (статус изменён), и только если включено «Отмечать прочитанным».</p>
+    </section>
+
+    <!-- Section names card -->
+    <section class="card card--names">
+      <div class="card__head">
+        <h2 data-label="names"><span class="card__num">7</span>Названия разделов</h2>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="lblAppName">Название приложения</label>
+          <input type="text" id="lblAppName" placeholder="Парсер почты">
+        </div>
+        <div class="field">
+          <label for="lblMail">Раздел почты</label>
+          <input type="text" id="lblMail" placeholder="Яндекс Почта">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="lblTable">Раздел таблицы</label>
+          <input type="text" id="lblTable" placeholder="Google Таблица">
+        </div>
+        <div class="field">
+          <label for="lblRules">Раздел правил</label>
+          <input type="text" id="lblRules" placeholder="Правила «текст → статус»">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="lblRules2">Раздел второго правила</label>
+          <input type="text" id="lblRules2" placeholder="Второе правило статуса">
+        </div>
+        <div class="field">
+          <label for="lblLog">Раздел журнала</label>
+          <input type="text" id="lblLog" placeholder="Журнал">
+        </div>
+      </div>
+      <p class="hint">Названия применяются сразу при вводе. Менять могут только администраторы.</p>
+    </section>
+
+    <section class="autosavebar" id="autosavebar">
+      <span class="autosavebar__ind"></span>
+      <span class="savebar__msg" id="saveMsg">Изменения сохраняются автоматически</span>
+    </section>
+
+    <!-- Log -->
+    <section class="card card--log">
+      <div class="card__head">
+        <h2 data-label="log"><span class="card__num">8</span>Журнал</h2>
+      </div>
+      <div class="log-filter">
+        <button type="button" class="log-filter__btn is-active" data-logfilter="all">Все</button>
+        <button type="button" class="log-filter__btn" data-logfilter="mail">Почта</button>
+        <button type="button" class="log-filter__btn" data-logfilter="table">Таблица</button>
+      </div>
+      <ol id="logList" class="log"></ol>
+      <div id="logPagination" class="log__pagination"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Сверка — сравнение Excel-файлов</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css?v=53" />
+  </head>
+  <body>
+    <div class="grain"></div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">▓▒░</span>
+        <div>
+          <h1>Сверка<span class="dot">.</span></h1>
+          <p class="tagline">сопоставление двух Excel-файлов</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <div class="topbar-note">
+          <span class="status-dot"></span>
+          <span class="note-text">данные не покидают ваш сервер</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell">
+      <!-- Шаг 1: загрузка -->
+      <section class="step" id="step-upload">
+        <div class="step-head">
+          <span class="step-num">01</span>
+          <h2>Загрузите два акта сверки</h2>
+          <p>Файлы формата .xlsx. Разбор операций, сальдо и анализ для бухгалтера — автоматически.</p>
+        </div>
+
+        <div class="dropzone-grid">
+          <label class="dropzone" id="dzA">
+            <input type="file" id="fileA" accept=".xlsx,.xls" hidden />
+            <span class="dz-icon">A</span>
+            <span class="dz-title">Акт ПрофМаркетСистем</span>
+            <span class="dz-sub dz-note">наша компания</span>
+            <span class="dz-sub" id="fileAName">Нажмите, чтобы выбрать</span>
+          </label>
+          <div class="versus">vs</div>
+          <label class="dropzone" id="dzB">
+            <input type="file" id="fileB" accept=".xlsx,.xls" hidden />
+            <span class="dz-icon">B</span>
+            <span class="dz-title">Акт контрагента</span>
+            <span class="dz-sub" id="fileBName">Нажмите, чтобы выбрать</span>
+          </label>
+        </div>
+
+        <div class="counterparty-row">
+          <div class="cp-field">
+            <label for="cpB">Контрагент (акт №2)</label>
+            <input type="text" id="cpB" placeholder="Например: ООО «Формула»" autocomplete="off" />
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" id="compareBtn" disabled>
+            <span class="btn-label">Сравнить</span>
+            <span class="btn-icon">→</span>
+          </button>
+        </div>
+        <p class="error" id="error" hidden></p>
+
+      </section>
+
+      <!-- Шаг 3: результат -->
+      <section class="step" id="step-result" hidden>
+        <div class="result-head">
+          <div>
+            <span class="step-num">03</span>
+            <h2>Результат сверки</h2>
+          </div>
+          <div class="result-actions">
+            <button class="btn btn-ai-result" id="aiResultBtn" disabled title="Глубокий ИИ-разбор сверки">
+              ✨ ИИ-разбор
+            </button>
+            <button class="btn btn-ghost" id="backBtn">← К выбору файлов</button>
+            <button class="btn btn-ghost" id="exportBtn">⬇ Скачать отчёт (.xlsx)</button>
+          </div>
+        </div>
+
+        <div class="summary-grid" id="summaryGrid"></div>
+
+        <div class="result-layout">
+          <aside class="analysis-panel">
+            <h3>ИИ-анализ</h3>
+            <div class="summary-text" id="summaryText"></div>
+          </aside>
+          <div class="items-panel">
+            <div class="items-list" id="itemsList"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Модальное окно ИИ-разбора -->
+    <div class="modal-backdrop" id="aiModal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="aiModalTitle">
+        <div class="modal-head">
+          <div>
+            <span class="modal-eyebrow">Глубокий разбор</span>
+            <h3 id="aiModalTitle">ИИ-разбор сверки</h3>
+          </div>
+          <button class="modal-close" id="aiModalClose" aria-label="Закрыть">✕</button>
+        </div>
+        <div class="modal-body" id="aiModalBody">
+          <div class="ai-loading" id="aiModalLoading">
+            <span class="loading"></span>
+            <div class="ai-stage">
+              <div class="ai-stage-title" id="aiStageTitle">Анализируем документы…</div>
+              <div class="ai-stage-steps" id="aiStageSteps">
+                <span class="st done">✓ Считаем расхождения</span>
+                <span class="st">→ Ищем причины</span>
+                <span class="st">→ Формируем решение</span>
+              </div>
+            </div>
+          </div>
+          <div class="ai-result" id="aiModalResult" hidden></div>
+          <div class="ai-error-box" id="aiModalError" hidden></div>
+          <div class="ai-chat" id="aiChat" hidden>
+            <div class="ai-chat-head">
+              <span>Спросить про сверку</span>
+              <span class="ai-chat-note">отвечает только по этим актам</span>
+            </div>
+            <div class="ai-chat-log" id="aiChatLog"></div>
+            <div class="ai-chat-form">
+              <textarea id="aiChatInput" rows="1" placeholder="Например: «Какой документ расходится больше всех?»"></textarea>
+              <button id="aiChatSend" type="button">➤</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <span class="ai-balance" id="aiModalBalance">Баланс ИИ: …</span>
+          <div class="ai-foot-actions">
+            <button class="btn btn-ghost btn-ai-foot" id="aiEmail" type="button" disabled title="Скопировать письмо контрагенту">
+              ✉️ Письмо контрагенту
+            </button>
+            <button class="btn btn-ghost btn-ai-foot" id="aiCopyAsk" type="button" disabled title="Скопировать вопросы контрагенту">
+              📋 Вопросы контрагенту
+            </button>
+            <button class="btn btn-ghost btn-ai-foot" id="aiDownload" type="button" disabled title="Скачать разбор текстом">
+              ⬇ Скачать разбор
+            </button>
+          </div>
+          <span class="ai-meta-inline" id="aiModalMeta"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Скрытая форма для скачивания отчёта (POST в новую вкладку) -->
+    <form id="aiDownloadForm" method="POST" action="/api/ai-export" target="_blank" rel="noopener" hidden>
+      <input type="hidden" name="payload" id="aiDownloadPayload" value="" />
+    </form>
+
+    <script src="app.js?v=53"></script>
+  </body>
+</html>

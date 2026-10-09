@@ -1,0 +1,25 @@
+# Развёртывание одним контейнером: docker compose -f deploy/docker-compose.yml up -d
+# Данные хранятся на именованном томе biotime_data и не теряются при пересоздании.
+services:
+  biotime:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: biotime:latest
+    container_name: biotime
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - DATA_DIR=/data
+      - PORT=3000
+    # Опциональные переменные внешних интеграций — заполняются в .env рядом с
+    # compose-файлом (см. deploy/.env.example). Значения из env_file имеют приоритет
+    # ниже, чем environment, поэтому переопределите нужные здесь же при желании.
+    env_file:
+      - .env
+    volumes:
+      - biotime_data:/data
+
+volumes:
+  biotime_data:

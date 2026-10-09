@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Сравнение прайс-листов</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg-orbs"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"><span>≣</span></div>
+      <div>
+        <h1>Прайс-Мастер</h1>
+        <p class="tagline">Сверка артикулов и цен в разных валютах</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span class="currency-chip">RUB · EUR · USD · BYN</span>
+    </div>
+  </header>
+  <div class="version-badge" id="versionBadge">v0 placeholder</div>
+
+  <main class="shell">
+    <!-- ШАГ 1: загрузка -->
+    <section class="setup" id="setup">
+      <div class="step-head">
+        <span class="step-num">1</span>
+        <h2>Загрузите два прайс-листа</h2>
+        <p>Формат <b>.xlsx</b> / <b>.xls</b> / <b>.xlsm</b> / <b>.csv</b>. Прайсы до 2 млн строк нарезаются на чанки по 100 тыс. строк и обрабатываются в памяти сервера — результат собирается в один файл.</p>
+      </div>
+
+      <div class="file-grid" id="fileGrid">
+        <div class="file-card" id="cardA">
+          <div class="card-label">Прайс № 1</div>
+          <label class="dropzone" id="dropA">
+            <input type="file" id="inputA" accept=".xlsx,.xls,.xlsm,.csv" hidden />
+            <span class="dz-icon">⬆</span>
+            <span class="dz-main">Перетащите файл или нажмите</span>
+            <span class="dz-sub">Файл не выбран</span>
+          </label>
+          <div class="cfg" id="cfgA" hidden>
+            <div class="cfg-row">
+              <label>Чей это прайс</label>
+              <input type="text" id="nameA" placeholder="Напр. Поставщик А / Компания" />
+            </div>
+            <div class="cfg-row">
+              <label>Валюта</label>
+              <select id="curA">
+                <option value="RUB">Рубль (RUB)</option>
+                <option value="EUR">Евро (EUR)</option>
+                <option value="USD">Доллар (USD)</option>
+                <option value="BYN">Бел. рубль (BYN)</option>
+              </select>
+            </div>
+            <div class="cfg-row rate-row" id="rateRowA" hidden>
+              <label>Курс к рублю</label>
+              <input type="number" id="rateA" step="any" min="0" placeholder="напр. 97.30" />
+            </div>
+            <div class="cfg-row">
+              <label>Колонка артикула</label>
+              <select id="artA"></select>
+            </div>
+            <div class="cfg-row">
+              <label>Колонка цены</label>
+              <select id="priceA"></select>
+            </div>
+          </div>
+        </div>
+
+        <div class="vs">VS</div>
+
+        <div class="file-card" id="cardB">
+          <div class="card-label">Прайс № 2</div>
+          <label class="dropzone" id="dropB">
+            <input type="file" id="inputB" accept=".xlsx,.xls,.xlsm,.csv" hidden />
+            <span class="dz-icon">⬆</span>
+            <span class="dz-main">Перетащите файл или нажмите</span>
+            <span class="dz-sub">Файл не выбран</span>
+          </label>
+          <div class="cfg" id="cfgB" hidden>
+            <div class="cfg-row">
+              <label>Чей это прайс</label>
+              <input type="text" id="nameB" value="Проф" placeholder="Ваш прайс — Проф" />
+            </div>
+            <div class="cfg-row">
+              <label>Валюта</label>
+              <select id="curB">
+                <option value="RUB">Рубль (RUB)</option>
+                <option value="EUR">Евро (EUR)</option>
+                <option value="USD">Доллар (USD)</option>
+                <option value="BYN">Бел. рубль (BYN)</option>
+              </select>
+            </div>
+            <div class="cfg-row rate-row" id="rateRowB" hidden>
+              <label>Курс к рублю</label>
+              <input type="number" id="rateB" step="any" min="0" placeholder="напр. 97.30" />
+            </div>
+            <div class="cfg-row">
+              <label>Колонка артикула</label>
+              <select id="artB"></select>
+            </div>
+            <div class="cfg-row">
+              <label>Колонка цены</label>
+              <select id="priceB"></select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="compareBtn" disabled>
+          <span class="btn-ico">⏵</span> Сравнить
+        </button>
+        <div class="status" id="status"></div>
+      </div>
+
+      <div class="upload-panel" id="uploadPanel" hidden>
+        <div class="up-bar"><div class="up-fill" id="uploadBar"></div></div>
+        <div class="up-label" id="uploadLabel">0%</div>
+      </div>
+
+    </section>
+
+    <!-- ШАГ 2: результат -->
+    <section class="results" id="results" hidden>
+      <div class="result-head">
+        <div>
+          <span class="step-num">2</span>
+          <h2>Результат сравнения</h2>
+        </div>
+        <div class="dl-group">
+          <a class="btn export" id="csvBtn" href="javascript:void(0)">
+            <span class="btn-ico">⬇</span> <span class="btn-label">Скачать CSV</span>
+          </a>
+          <a class="btn export xlsx" id="xlsxBtn" href="javascript:void(0)" hidden>
+            <span class="btn-ico">⬇</span> <span class="btn-label">Скачать XLSX</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="stats" id="stats"></div>
+      <p class="res-note" id="resNote">Полный результат с тысячами строк на странице не показываем — скачайте файл выше.</p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>Итог всегда в рублях — цены конвертируются по заданным курсам.</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

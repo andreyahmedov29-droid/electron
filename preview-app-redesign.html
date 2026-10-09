@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Редизайн BIOTIME — рендер всех вкладок (превью)</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:rgba(21,26,33,.82); --panel2:#151a21;
+    --line:rgba(255,255,255,.1); --line2:rgba(255,255,255,.2);
+    --ink:#eef2f7; --ink2:rgba(238,242,247,.64); --ink3:rgba(238,242,247,.4);
+    --amber:#ffab38; --amber-soft:rgba(255,171,56,.16);
+    --green:#37d67a; --blue:#7aa2ff; --red:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    color:var(--ink);font-family:ui-monospace,"Cascadia Code",Consolas,monospace;
+    background:linear-gradient(rgba(14,17,22,.72),rgba(14,17,22,.9)),
+      url("assets/app-redesign-bg.jpg") center/cover fixed no-repeat;
+    padding:20px;min-height:100vh;
+  }
+  .wrap{max-width:1180px;margin:0 auto}
+  .hint{color:var(--ink2);font-size:11px;margin-bottom:12px}
+  /* верхнее меню */
+  .topnav{display:flex;gap:6px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);
+    border-radius:16px;padding:8px;margin-bottom:18px;backdrop-filter:blur(8px)}
+  .topnav button{margin:0;border:0;background:transparent;color:var(--ink2);font-family:inherit;
+    font-size:13px;padding:9px 13px;border-radius:10px;cursor:pointer;transition:.15s}
+  .topnav button:hover{background:rgba(255,255,255,.06);color:var(--ink)}
+  .topnav button.on{color:var(--amber);background:linear-gradient(180deg,rgba(255,171,56,.2),rgba(255,171,56,.09))}
+  /* каркас */
+  .layout{display:grid;grid-template-columns:230px 1fr;gap:16px}
+  @media(max-width:860px){.layout{grid-template-columns:1fr}}
+  .side{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;backdrop-filter:blur(8px)}
+  .side .brand{font-weight:700;letter-spacing:.02em;margin-bottom:4px}
+  .side .usr{font-size:11px;color:var(--ink2);margin-bottom:16px}
+  .side .mseg{font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.08em;margin:12px 0 6px}
+  .side button{display:flex;gap:10px;align-items:center;width:100%;margin:2px 0;border:0;background:transparent;
+    color:var(--ink2);font-family:inherit;font-size:13px;padding:9px 10px;border-radius:10px;cursor:pointer;transition:.15s}
+  .side button:hover{background:rgba(255,255,255,.05);color:var(--ink)}
+  .side button.on{color:var(--amber);background:var(--amber-soft)}
+  .main{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;backdrop-filter:blur(8px);min-height:520px}
+  .pane{display:none}
+  .pane.on{display:block;animation:in .25s ease}
+  @keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  h2{margin:0 0 2px;font-size:18px}
+  .sub{color:var(--ink2);font-size:12px;margin:0 0 16px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{color:var(--ink3);text-transform:uppercase;font-size:10px;letter-spacing:.06em;text-align:left;padding:8px 10px;border-bottom:1px solid var(--line2)}
+  td{padding:10px;border-bottom:1px solid var(--line);color:var(--ink2)}
+  .tbl{background:rgba(0,0,0,.2);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .badge{padding:2px 9px;border-radius:99px;font-size:10px;font-weight:700}
+  .b-ok{background:rgba(55,214,122,.16);color:var(--green)}
+  .b-warn{background:var(--amber-soft);color:var(--amber)}
+  .b-bad{background:rgba(255,107,107,.16);color:var(--red)}
+  .b-soft{background:rgba(255,255,255,.08);color:var(--ink2)}
+  .kv{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+  @media(max-width:700px){.kv{grid-template-columns:repeat(2,1fr)}}
+  .kpi{background:rgba(0,0,0,.2);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .kpi .n{font-size:22px;font-weight:700;color:var(--ink)}
+  .kpi .l{font-size:11px;color:var(--ink3)}
+  .list{display:flex;flex-direction:column;gap:8px}
+  .row{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.02);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  .row .g{flex:1;min-width:0}
+  .row .t{font-size:12px;font-weight:600;color:var(--ink)}
+  .row .d{font-size:11px;color:var(--ink3)}
+  .av{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:rgba(122,162,255,.16);color:var(--blue);font-weight:700;flex:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hint">Рендер редизайна BIOTIME · кликните по вкладке, чтобы посмотреть раздел · данные тестовые</div>
+  <div class="topnav" id="top">
+    <button class="on" data-t="timer">Таймер</button>
+    <button data-t="salary">Зарплата</button>
+    <button data-t="delivery">Доставка</button>
+    <button data-t="ontv">В эфире</button>
+    <button data-t="report">Отчёт</button>
+    <button data-t="routing">Маршрутизация</button>
+    <button data-t="myr">Мои маршруты</button>
+    <button data-t="ship">Отгрузка</button>
+    <button data-t="journal">Журнал</button>
+    <button data-t="warehouse">Проблемы склада</button>
+    <button data-t="logs">Логи</button>
+  </div>
+  <div class="layout">
+    <div class="side" id="side">
+      <div class="brand">BIOTIME</div>
+      <div class="usr">Андрей Ахмедов · Админ</div>
+      <div class="mseg">Работа</div>
+      <button data-t="timer">Таймер</button>
+      <button data-t="salary">Зарплата</button>
+      <button data-t="delivery">Доставка</button>
+      <button data-t="ontv">В эфире</button>
+      <div class="mseg">Логистика</div>
+      <button data-t="routing">Маршрутизация</button>
+      <button data-t="myr">Мои маршруты</button>
+      <button data-t="ship">Отгрузка</button>
+      <div class="mseg">Контроль</div>
+      <button data-t="report">Отчёт</button>
+      <button data-t="journal">Журнал</button>
+      <button data-t="warehouse">Проблемы склада</button>
+      <button data-t="logs">Логи</button>
+    </div>
+    <div class="main" id="main">
+      <div class="pane on" data-p="timer">
+        <h2>Таймер</h2><p class="sub">Учёт рабочего времени — сегодня</p>
+        <div class="kv">
+          <div class="kpi"><div class="n">08:32</div><div class="l">Начало дня</div></div>
+          <div class="kpi"><div class="n">4ч 40м</div><div class="l">Работа</div></div>
+          <div class="kpi"><div class="n">0ч 42м</div><div class="l">Перерыв</div></div>
+          <div class="kpi"><div class="n">09:30</div><div class="l">План конца</div></div>
+        </div>
+        <div class="tbl"><table><thead><tr><th>Статус</th><th>Начало</th><th>Конец</th><th>Длительность</th></tr></thead>
+        <tbody>
+          <tr><td><span class="badge b-ok">работа</span></td><td>08:32</td><td>—</td><td>4ч 40м</td></tr>
+          <tr><td><span class="badge b-soft">перерыв</span></td><td>12:40</td><td>13:22</td><td>0ч 42м</td></tr>
+        </tbody></table></div>
+      </div>
+
+      <div class="pane" data-p="salary">
+        <h2>Зарплата</h2><p class="sub">Начисления и расчёты</p>
+        <div class="kv">
+          <div class="kpi"><div class="n">62 400 ₽</div><div class="l">За месяц</div></div>
+          <div class="kpi"><div class="n">38</div><div class="l">Дней</div></div>
+        </div>
+        <div class="tbl"><table><thead><tr><th>Сотрудник</th><th>Отработано</th><th>Премия</th><th>Итог</th></tr></thead>
+        <tbody>
+          <tr><td>Андрей Забалуев</td><td>168 ч</td><td>4 500 ₽</td><td>62 400 ₽</td></tr>
+          <tr><td>Сергей Заводнов</td><td>152 ч</td><td>2 200 ₽</td><td>54 800 ₽</td></tr>
+        </tbody></table></div>
+      </div>
+
+      <div class="pane" data-p="delivery">
+        <h2>Доставка</h2><p class="sub">Заказы и доставки за день</p>
+        <div class="tbl"><table><thead><tr><th>Заказ</th><th>Адрес</th><th>Водитель</th><th>Статус</th></tr></thead>
+        <tbody>
+          <tr><td>З-1042</td><td>Каширское ш., 61</td><td>С. Заводнов</td><td><span class="badge b-ok">выполнен</span></td></tr>
+          <tr><td>З-1043</td><td>Литейная 3</td><td>А. Забалуев</td><td><span class="badge b-warn">в пути</span></td></tr>
+        </tbody></table></div>
+      </div>
+
+      <div class="pane" data-p="ontv">
+        <h2>В эфире</h2><p class="sub">Видео-конференции и прямые эфиры</p>
+        <div class="list">
+          <div class="row"><div class="av">СЗ</div><div class="g"><div class="t">Сергей Заводнов</div><div class="d">В эфире · 12 мин</div></div><span class="badge b-ok">live</span></div>
+          <div class="row"><div class="av">АЗ</div><div class="g"><div class="t">Андрей Забалуев</div><div class="d">Офлайн</div></div><span class="badge b-soft">нет</span></div>
+        </div>
+      </div>
+
+      <div class="pane" data-p="report">
+        <h2>Отчёт</h2><p class="sub">Итоги по сотрудникам</p>
+        <div class="tbl"><table><thead><tr><th>Сотрудник</th><th>Маршрутов</th><th>Точек</th><th>км</th><th>Просрочено</th></tr></thead>
+        <tbody>
+          <tr><td>Андрей Забалуев</td><td>12</td><td>54</td><td>312</td><td><span class="badge b-ok">0</span></td></tr>
+          <tr><td>Сергей Заводнов</td><td>9</td><td>37</td><td>204</td><td><span class="badge b-warn">2</span></td></tr>
+        </tbody></table></div>
+      </div>
+
+      <div class="pane" data-p="routing">
+        <h2>Маршрутизация</h2><p class="sub">Контрагенты, адреса и дневные маршруты</p>
+        <div class="list">
+          <div class="row"><div class="av">АФ</div><div class="g"><div class="t">ООО «АвтоФормула»</div><div class="d">Москва, Промышленная 12 · ИНН 7733379914</div></div><span class="badge b-soft">GLAV</span></div>
+          <div class="row"><div class="av">МТ</div><div class="g"><div class="t">ООО «Мотор»</div><div class="d">Подольск, Литейная 3</div></div><span class="badge b-soft">MOTOR</span></div>
+        </div>
+      </div>
+
+      <div class="pane" data-p="myr">
+        <h2>Мои маршруты</h2><p class="sub">Маршруты водителя на сегодня</p>
+        <div class="tbl"><table><thead><tr><th>Маршрут</th><th>Точки</th><th>Статус</th></tr></thead>
+        <tbody>
+          <tr><td>Маршрут №1</td><td>6</td><td><span class="badge b-ok">в пути</span></td></tr>
+        </tbody></table></div>
+      </div>
+
+      <div class="pane" data-p="ship">
+        <h2>Отгрузка</h2><p class="sub">Расходные накладные и загрузка</p>
+        <div class="tbl"><table><thead><tr><th>Накладная</th><th>Клиент</th><th>Позиций</th><th>Статус</th></tr></thead>
+        <tbody>
+          <tr><td>08YT-00084531</td><td>ГлобалАвто</td><td>35</td><td><span class="badge b-ok">собрано</span></td></tr>
+          <tr><td>08YT-00084520</td><td>ООО «Мотор»</td><td>22</td><td><span class="badge b-warn">в работе</span></td></tr>
+        </tbody></table></div>
+      </div>
+
+      <div class="pane" data-p="journal">
+        <h2>Журнал</h2><p class="sub">Журнал сканирования и операций</p>
+        <div class="tbl"><table><thead><tr><th>Время</th><th>Оператор</th><th>Действие</th><th>Статус</th></tr></thead>
+        <tbody>
+          <tr><td>14:09</td><td>А. Забалуев</td><td>Скан 20217/4</td><td><span class="badge b-ok">успешно</span></td></tr>
+          <tr><td>13:51</td><td>С. Заводнов</td><td>Скан 0001/2</td><td><span class="badge b-warn">не найдено</span></td></tr>
+        </tbody></table></div>
+      </div>
+
+      <div class="pane" data-p="warehouse">
+        <h2>Проблемы склада</h2><p class="sub">Не найдено / актуализация</p>
+        <div class="tbl"><table><thead><tr><th>Артикул</th><th>Клиент</th><th>Статус</th></tr></thead>
+        <tbody>
+          <tr><td>OEM0180KBPL</td><td>АвтоФормула</td><td><span class="badge b-warn">Новая проблема</span></td></tr>
+        </tbody></table></div>
+      </div>
+
+      <div class="pane" data-p="logs">
+        <h2>Логи</h2><p class="sub">Логи сканов деталей</p>
+        <div class="tbl"><table><thead><tr><th>Время</th><th>Партстикер</th><th>Код</th><th>Статус</th></tr></thead>
+        <tbody>
+          <tr><td>14:09</td><td>20217/4</td><td>353102B000</td><td><span class="badge b-ok">успешно</span></td></tr>
+          <tr><td>13:51</td><td>—</td><td>TVZ1028UA</td><td><span class="badge b-warn">неуспешно</span></td></tr>
+        </tbody></table></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  function show(t){
+    document.querySelectorAll(".topnav button,.side button").forEach(b=>b.classList.toggle("on",b.dataset.t===t));
+    document.querySelectorAll(".pane").forEach(p=>p.classList.toggle("on",p.dataset.p===t));
+  }
+  document.querySelectorAll(".topnav button,.side button").forEach(b=>b.addEventListener("click",()=>show(b.dataset.t)));
+</script>
+</body>
+</html>

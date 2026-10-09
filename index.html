@@ -2,7 +2,8 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="app-version" content="20260927c201" />
     <title>Личный кабинет ПрофМаркетСистем</title>
   <meta name="theme-color" content="#08090d" />
   <meta name="description" content="Личный кабинет ПрофМаркетСистем — учёт рабочего времени, переработок, маршрутов и отгрузок" />
@@ -23,46 +24,12 @@
   <div class="noise"></div>
   <div class="grid-bg"></div>
 
+  <!-- Заставка при старте: закрывает интерфейс, пока не решится авторизация
+       (чтобы на старте не мелькал «Таймер» до окна логина). -->
+  <div class="boot-cover" id="bootCover"></div>
+
   <header class="topbar">
     <div class="topbar-inner">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true">
-        <svg class="brand-mark-svg" viewBox="0 0 48 48" width="30" height="30" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <linearGradient id="biotimeFace" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#98a4ad"/>
-              <stop offset="1" stop-color="#b9c3ca"/>
-            </linearGradient>
-            <linearGradient id="biotimeLeaf" x1="0" y1="1" x2="1" y2="0">
-              <stop offset="0" stop-color="#c3cdd3"/>
-              <stop offset="1" stop-color="#eef2f4"/>
-            </linearGradient>
-            <radialGradient id="biotimeGlow" cx="0.5" cy="0.42" r="0.6">
-              <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
-              <stop offset="0.6" stop-color="#ffffff" stop-opacity="0"/>
-            </radialGradient>
-          </defs>
-          <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#biotimeFace)"/>
-          <rect x="2" y="2" width="44" height="44" rx="14" fill="url(#biotimeGlow)"/>
-          <circle cx="24" cy="24" r="16.6" stroke="#e9fff8" stroke-opacity="0.55" stroke-width="2.4"/>
-          <circle cx="24" cy="24" r="15.1" stroke="#0b2e33" stroke-opacity="0.35" stroke-width="1.2"/>
-          <g stroke="#e9fff8" stroke-linecap="round">
-            <path d="M24 13v2.2" stroke-width="2.6"/>
-            <path d="M24 32.8v2.2" stroke-width="2.6"/>
-            <path d="M13 24h2.2" stroke-width="2.6"/>
-            <path d="M32.8 24H35" stroke-width="2.6"/>
-          </g>
-          <path d="M24 34
-                   C 21.6 32 20.8 29.6 20.8 27
-                   C 22.6 28.2 23.9 28.7 25 28.7
-                   C 23.4 26.4 23.4 24 24.9 21.4
-                   C 27.2 23.4 28.5 25 27.7 27.8
-                   C 27.3 30.3 26.1 32.4 24 34 Z"
-                fill="url(#biotimeLeaf)"/>
-          <circle cx="24" cy="24" r="2.3" fill="#0b2e33" fill-opacity="0.35"/>
-        </svg>
-      </span>
-    </div>
     <nav class="tabs" id="tabs">
       <button class="tab active" data-tab="timer">Таймер</button>
       <button class="tab" data-tab="calendar">Зарплата</button>
@@ -73,12 +40,21 @@
       <button class="tab driver-only-tab" data-tab="myroutes" hidden>Мои маршруты</button>
       <button class="tab shipment-only" data-tab="shipment" hidden>Отгрузка</button>
       <button class="tab" data-tab="scanlog">Журнал</button>
+      <button class="tab admin-only" id="notfoundTab" data-tab="notfound">Проблемы со склада</button>
+      <button class="tab admin-only" id="logsTab" data-tab="logs">Логи</button>
+      <button class="tab admin-only reports-tab" id="reportsTab" data-tab="reports">
+        <span>Отчеты ПрофМаркет</span>
+      </button>
+      <button class="tab admin-only" id="sverkiTab" data-tab="sverki">Сверки</button>
+      <button class="tab admin-only" id="procenkaTab" data-tab="procenka">Проценка</button>
+      <button class="tab admin-only" id="parserTab" data-tab="parser">Парсер почты</button>
     </nav>
     <div class="topbar-right">
       <div class="user-chip" id="userChip" hidden>
-        <span class="user-avatar" id="userAvatar">?</span>
+        <img class="user-avatar" id="userAvatar" src="assets/acct-3d.png" alt="Учётная запись" />
         <span class="user-name" id="userName"></span>
       </div>
+      <button class="mini-btn" id="authBtn" type="button" hidden>Войти</button>
       <div class="today-chip" id="todayChip">—</div>
       <button class="icon-btn" id="settingsBtn" title="Настройки" aria-label="Настройки">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -89,6 +65,30 @@
     </div>
     </div>
   </header>
+
+  <!-- Экран входа (непрозрачный, фон приложения не виден). Первый вход — по ФИО. -->
+  <div class="auth-gate" id="authGate" hidden>
+    <div class="auth-card">
+      <div class="auth-card-head">
+        <h3 id="authTitle">Вход</h3>
+        <button class="icon-btn modal-close" id="authClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div id="authLoginView">
+        <div class="auth-field">
+          <label for="authLogin">Логин</label>
+          <input class="text-input auth-input" id="authLogin" type="text" autocomplete="username" spellcheck="false" />
+        </div>
+        <div class="auth-field">
+          <label for="authPassword">Пароль</label>
+          <input class="text-input auth-input" id="authPassword" type="password" autocomplete="current-password" />
+        </div>
+        <div class="auth-actions">
+          <button class="btn auth-submit" id="authSubmitBtn" type="button">Войти</button>
+        </div>
+        <div class="auth-hint" id="authHint"></div>
+      </div>
+    </div>
+  </div>
 
   <!-- Полоса «нет связи с сервером»: появляется при сетевых сбоях (в т.ч. когда
        VPN блокирует доступ к серверу) и исчезает, когда связь восстановилась. -->
@@ -303,11 +303,13 @@
           <span class="route-total-pill" id="routeTotalPill"><span class="route-total-dot"></span> планировщик</span>
         </div>
         <div class="drv-subtabs" role="tablist" aria-label="Разделы маршрутизации">
-          <button type="button" class="drv-subtab active" data-sub="contr" role="tab" id="subtab-contr">Контрагенты</button>
-          <button type="button" class="drv-subtab" data-sub="route" role="tab" id="subtab-route">Маршрут на день</button>
-          <button type="button" class="drv-subtab" data-sub="routes" role="tab" id="subtab-routes">Маршруты</button>
-          <button type="button" class="drv-subtab" data-sub="report" role="tab" id="subtab-report">Отчёт</button>
-          <button type="button" class="drv-subtab tracking-only" data-sub="tracking" role="tab" id="subtab-tracking">Трекинг</button>
+          <button type="button" class="drv-subtab active" data-sub="contr" role="tab" id="subtab-contr"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>Контрагенты</span></button>
+          <button type="button" class="drv-subtab" data-sub="route" role="tab" id="subtab-route"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg><span>Маршрут на день</span></button>
+          <button type="button" class="drv-subtab" data-sub="routes" role="tab" id="subtab-routes"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1.4"/><circle cx="4" cy="12" r="1.4"/><circle cx="4" cy="18" r="1.4"/></svg><span>Маршруты</span></button>
+          <button type="button" class="drv-subtab" data-sub="report" role="tab" id="subtab-report"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 3 4-6"/></svg><span>Отчёт</span></button>
+          <button type="button" class="drv-subtab" data-sub="location" role="tab" id="subtab-location"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 21s7-5.3 7-11a7 7 0 1 0-14 0c0 5.7 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/></svg><span>Местоположение</span></button>
+          <button type="button" class="drv-subtab" data-sub="1clog" role="tab" id="subtab-1clog"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 9h8M8 13h5"/></svg><span>Логи 1С</span></button>
+          <button type="button" class="drv-subtab tracking-only" data-sub="tracking" role="tab" id="subtab-tracking"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3a9 9 0 0 1 9 9c0 5-4 9-9 9s-9-4-9-9a9 9 0 0 1 9-9z"/><path d="M3.6 9h16.8M9 3.2C11 7 11 17 9 20.8M15 3.2c-2 3.8-2 13.8 0 17.6"/></svg><span>Трекинг</span></button>
         </div>
 
         <!-- Вкладка: Контрагенты -->
@@ -331,6 +333,14 @@
               <div class="drv-field">
                 <label class="drv-field-label" for="driverClientAddress">Адрес</label>
                 <input id="driverClientAddress" class="text-input" type="text" placeholder="Адрес контрагента" />
+              </div>
+              <div class="drv-field">
+                <label class="drv-field-label" for="driverClientInn">ИНН</label>
+                <input id="driverClientInn" class="text-input" type="text" placeholder="ИНН (для 1С), напр. 7701234567" autocomplete="off" />
+              </div>
+              <div class="drv-field">
+                <label class="drv-field-label" for="driverClientLogin">Логин (буквенный)</label>
+                <input id="driverClientLogin" class="text-input" type="text" placeholder="Символьный логин контрагента в 1С" autocomplete="off" />
               </div>
               <button type="button" class="drv-add-btn" id="addDriverClientBtn">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
@@ -398,7 +408,7 @@
                 <label class="drv-field-label" for="driverRouteDate">Дата</label>
                 <input id="driverRouteDate" class="text-input" type="date" />
               </div>
-              <div class="drv-field">
+              <div class="drv-field drv-route-driver-field">
                 <label class="drv-field-label" for="driverRouteDriver">Водитель</label>
                 <select id="driverRouteDriver" class="select-input"></select>
               </div>
@@ -411,6 +421,10 @@
                 title="Название маршрута. Укажите своё название — оно будет показано в списке маршрутов. Можно создать сколько угодно маршрутов на день с разными названиями."
                 autocomplete="off" />
             </div>
+            <label class="selfpickup-field" title="Самовывоз: клиент забирает товар сам. Доставки водителем нет — маршрут завершается сразу после отгрузки на складе.">
+              <input id="selfPickupChk" type="checkbox" class="selfpickup-chk" />
+              <span class="selfpickup-text">Самовывоз (клиент забирает сам)</span>
+            </label>
 
             <div class="drv-route-label">Последовательность остановок</div>
             <div class="route-multiselect" id="driverRouteClients">
@@ -452,6 +466,9 @@
               <div class="rms-auto-route-status" id="autoRouteStatus" hidden></div>
             </div>
 
+            <button type="button" class="drv-save-btn drv-soft" id="fillFrom1CBtn" title="Заполнить расходные накладные из 1С (по ИНН+логину клиентов)">
+              <span>Заполнить из 1С</span>
+            </button>
             <button type="button" class="drv-save-btn" id="saveDriverRouteBtn">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
               <span>Сохранить маршрут</span>
@@ -539,6 +556,74 @@
           </div>
         </div>
 
+        <!-- Вкладка: Местоположение — где находился водитель в течение дня (15-мин сетка) -->
+        <div class="drv-subpanel" id="routesub-location" role="tabpanel" hidden>
+          <div class="drv-panel">
+            <div class="drv-panel-head">
+              <div class="drv-panel-title">
+                <span class="drv-panel-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 21s-7-5.6-7-11a7 7 0 1 1 14 0c0 5.4-7 11-7 11z"/><circle cx="12" cy="10" r="2.2"/></svg>
+                </span>
+                Местоположение водителя
+              </div>
+            </div>
+            <div class="drv-report-sub">Где находился водитель в течение календарного дня</div>
+            <div class="driver-map-toolbar">
+              <select id="locationDriverSelect" class="text-input routes-date-filter" title="Выбрать водителя"></select>
+              <input id="locationDateFilter" class="text-input routes-date-filter" type="date" />
+              <select id="locationInterval" class="text-input routes-date-filter" title="Интервал сетки, минут">
+                <option value="5">5 мин</option>
+                <option value="10">10 мин</option>
+                <option value="15" selected>15 мин</option>
+                <option value="30">30 мин</option>
+                <option value="60">60 мин</option>
+              </select>
+              <button type="button" class="ctrl ctrl-soft" id="locationGoBtn">Показать</button>
+            </div>
+            <div class="report-table-wrap" id="locationTableWrap" hidden>
+              <table class="report-table" id="locationTable">
+                <thead>
+                  <tr>
+                    <th>Время</th>
+                    <th>Адрес</th>
+                    <th>Скорость</th>
+                  </tr>
+                </thead>
+                <tbody id="locationBody"></tbody>
+              </table>
+            </div>
+            <div class="drv-report-stub" id="locationStub" style="display:none">
+              <div class="empty-hint">За выбранную дату и водителя данных о местоположении нет.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Вкладка: Логи 1С — что забираем из 1С при заполнении накладных -->
+        <div class="drv-subpanel" id="routesub-1clog" role="tabpanel" hidden>
+          <div class="drv-panel">
+            <div class="drv-panel-head">
+              <div class="drv-panel-title">
+                <span class="drv-panel-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/></svg>
+                </span>
+                Логи 1С
+              </div>
+            </div>
+            <div class="drv-report-sub">Что именно забираем из 1С при заполнении накладных (последние операции)</div>
+            <div class="report-table-wrap">
+              <table class="report-table">
+                <thead>
+                  <tr><th>Время</th><th>ИНН</th><th>Логин</th><th>Отгрузка</th><th>Позиций</th><th>Результат</th><th style="width:38px;text-align:center"></th></tr>
+                </thead>
+                <tbody id="oneclogBody"></tbody>
+              </table>
+            </div>
+            <div class="drv-report-stub" id="oneclogStub" style="display:none">
+              <div class="empty-hint">Операций с 1С пока не было.</div>
+            </div>
+          </div>
+        </div>
+
         <!-- Вкладка: Трекинг — живая карта водителей (Yandex JS API, только админ) -->
         <div class="drv-subpanel" id="routesub-tracking" role="tabpanel" hidden>
           <div class="drv-panel">
@@ -602,6 +687,11 @@
                 <button type="button" class="shipment-subtab" id="shipmentSubtabDone">Завершённые отгрузки</button>
               </div>
             </div>
+            <div class="shipment-date-filter">
+              <label class="shipment-date-label" for="shipmentDateFilter">Календарь дат</label>
+              <input type="date" id="shipmentDateFilter" class="text-input shipment-date-input" autocomplete="off" />
+              <button type="button" class="mini-btn" id="shipmentDateClear" title="Сбросить фильтр по дате">✕</button>
+            </div>
           </div>
         </div>
         <div class="shipment-list" id="shipmentListActive"></div>
@@ -625,6 +715,7 @@
           <button type="button" class="mini-btn scanlog-filter is-active" data-action="load" role="tab">Погрузка</button>
           <button type="button" class="mini-btn scanlog-filter" data-action="unload" role="tab">Выгрузка</button>
           <button type="button" class="mini-btn scanlog-filter" data-action="waybill" role="tab">Сборка</button>
+          <button type="button" class="mini-btn scanlog-filter" data-action="waybill-missing" role="tab" title="Только позиции, помеченные «не найдено»">Не найдено</button>
         </div>
 
         <div class="scanlog-ranges" id="scanlogRanges">
@@ -641,6 +732,10 @@
             <span class="scanlog-filter-caption">Выгрузка за дату</span>
             <input class="scanlog-date" id="scanlogDateUnload" type="date" />
           </label>
+          <label class="scanlog-filter-field scanlog-date-field" id="scanlogWaybillDateField" hidden>
+            <span class="scanlog-filter-caption">Сборка за дату</span>
+            <input class="scanlog-date" id="scanlogDateWaybill" type="date" />
+          </label>
         </div>
 
         <div class="scanlog-wrap">
@@ -649,6 +744,136 @@
         <div class="scanlog-empty" id="scanlogEmpty" hidden>Пока нет записей о сканировании мест.</div>
       </section>
     </section>
+
+    <section class="tab-page" id="page-notfound" hidden>
+      <section class="cal-card">
+        <div class="nf-toolbar">
+          <input id="nfSearch" class="text-input" type="text" placeholder="Поиск: клиент / артикул" autocomplete="off" />
+          <button type="button" id="nfRefresh" class="mini-btn">Обновить</button>
+          <button type="button" id="nfDeleteSelected" class="mini-btn nfd-btn-danger" hidden>Удалить выбранные</button>
+        </div>
+        <nav class="nf-tabs" id="nfTabs">
+          <button type="button" class="nf-tab active" data-nf-view="problems">Проблемы</button>
+          <button type="button" class="nf-tab" data-nf-view="review">На проверке</button>
+          <button type="button" class="nf-tab" data-nf-view="done">Завершённые</button>
+        </nav>
+        <div id="nfSummary" class="nf-summary"></div>
+        <div id="notfoundTable" class="notfound-wrap"></div>
+      </section>
+    </section>
+
+    <!-- Детали позиции «Отчёт не найдено»: клик по строке открывает информацию и статусы -->
+    <dialog class="modal" id="notfoundDetailModal">
+      <div class="postpone-card">
+        <div class="modal-head">
+          <h3>Позиция</h3>
+          <button class="icon-btn modal-close" id="nfdModalClose" aria-label="Закрыть">&times;</button>
+        </div>
+        <div id="nfdModalBody"></div>
+      </div>
+    </dialog>
+
+    <!-- Логи сканов деталей при сборке (основной тулбар, только админ) -->
+    <section class="tab-page" id="page-logs" hidden>
+      <section class="cal-card">
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Логи</h4>
+            <p class="sub-note">Сканирование штрихкодов деталей при сборке: неуспешные видны в первую очередь для контроля ошибок</p>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="mini-btn" id="scansLogRefresh">Обновить</button>
+            <button type="button" class="mini-btn" id="scansLogClear">Очистить</button>
+          </div>
+        </div>
+        <div class="scans-toolbar">
+          <label class="scans-filter">
+            <input type="checkbox" id="scansOnlyFailed" checked /> <span>Только неуспешные</span>
+          </label>
+          <label class="scans-filter">
+            <span>День:</span>
+            <input type="date" id="scansDate" class="text-input" style="flex:0 1 auto;max-width:170px;" />
+            <button type="button" class="mini-btn" id="scansAllDays" title="Показать логи за все дни">Все дни</button>
+          </label>
+        </div>
+        <div class="scans-summary" id="scansSummary"></div>
+        <div class="notfound-wrap">
+          <table class="admin-table">
+            <thead><tr>
+              <th>Время</th><th>Сотрудник</th><th>Клиент</th><th>Партстикер</th><th>Код</th><th>Бокс</th><th>Артикул в накладной</th><th>Статус</th><th>Причина / деталь</th>
+            </tr></thead>
+            <tbody id="scansLogList"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <!-- Отчёты (встроенный модуль АБЦП) — доступ через params.reportsUsers -->
+    <section class="tab-page" id="page-reports" hidden>
+      <section class="cal-card">
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Отчёты</h4>
+            <p class="sub-note">Аналитика и отчёты по поставкам, ценам, отказам и срокам</p>
+          </div>
+        </div>
+        <div id="reportsHost"><!-- сюда монтируется модуль АБЦП --></div>
+      </section>
+    </section>
+
+    <!-- Отчёты: полноэкранное модальное окно с модулем /reports/ -->
+    <dialog class="modal reports-modal" id="reportsModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Отчеты ПрофМаркет</span>
+        <button type="button" class="icon-btn modal-close" id="reportsModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="reportsModalFrame"></div>
+    </dialog>
+
+    <!-- Сверки: полноэкранное модальное окно с модулем /sverki/ -->
+    <dialog class="modal reports-modal" id="sverkiModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Сверки</span>
+        <button type="button" class="icon-btn modal-close" id="sverkiModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="sverkiModalFrame"></div>
+    </dialog>
+
+    <!-- Проценка: полноэкранное модальное окно с модулем /procenka/ -->
+    <dialog class="modal reports-modal" id="procenkaModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Проценка</span>
+        <button type="button" class="icon-btn modal-close" id="procenkaModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="procenkaModalFrame"></div>
+    </dialog>
+
+    <!-- Парсер почты: полноэкранное модальное окно с модулем /parser/ -->
+    <dialog class="modal reports-modal" id="parserModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Парсер почты</span>
+        <button type="button" class="icon-btn modal-close" id="parserModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="parserModalFrame"></div>
+    </dialog>
+
+    <!-- Проблемы со склада: полноэкранное модальное окно -->
+    <dialog class="modal reports-modal" id="notfoundModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Проблемы со склада</span>
+        <button type="button" class="icon-btn modal-close" id="notfoundModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="notfoundModalBody"></div>
+    </dialog>
+
+    <!-- Зарплата: полноэкранное модальное окно -->
+    <dialog class="modal reports-modal" id="salaryModal">
+      <div class="reports-modal-head">
+        <span class="reports-modal-title">Зарплата</span>
+        <button type="button" class="icon-btn modal-close" id="salaryModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="reports-modal-body" id="salaryModalBody"></div>
+    </dialog>
   </main>
 
   <!-- Печать этикеток отгрузки: выбор клиента и количества мест -->
@@ -668,8 +893,10 @@
       </div>
       <div class="route-confirm-actions">
         <button class="mini-btn route-confirm-cancel" id="printCancel" type="button">Отмена</button>
-        <button class="mini-btn route-confirm-ok" id="printConfirm" type="button">Печать этикеток</button>
-        <button class="mini-btn route-confirm-append" id="printAppendBtn" type="button" title="Допечатать дополнительные места, не трогая уже созданные">Допечатать места</button>
+        <!-- Печать с отгрузки скрыта: этикетки печатаются при «Сборке» на складе.
+             В окне «Отгрузка» остаются сканирование погрузки и «Завершить отгрузку». -->
+        <button class="mini-btn route-confirm-ok" id="printConfirm" type="button" hidden>Печать этикеток</button>
+        <button class="mini-btn route-confirm-append" id="printAppendBtn" type="button" hidden title="Допечатать дополнительные места, не трогая уже созданные">Допечатать места</button>
         <button class="mini-btn route-confirm-ok route-confirm-danger" id="printShipmentComplete" type="button">Завершить отгрузку</button>
       </div>
       <div class="print-scan-block">
@@ -693,11 +920,10 @@
       </div>
     </div>
   </dialog>
-
   <!-- Допечатка дополнительных мест (отдельное окно): выбор ЛЮБОГО клиента
        маршрута — в т.ч. уже отгруженного/закрытого — и допечатка этикеток.
        Данные сохраняются на сервере при каждом допечатывании (автосохранение). -->
-  <dialog class="modal" id="appendModal">
+  <dialog class="modal" id="appendModal" hidden>
     <div class="account-card">
       <div class="modal-head">
         <h3>Допечатать места</h3>
@@ -717,6 +943,17 @@
     </div>
   </dialog>
 
+  <!-- Содержимое бокса (клик по боксу с деталями в «Сборке») -->
+  <dialog class="modal" id="boxDetailsModal">
+    <div class="account-card">
+      <div class="modal-head">
+        <h3 id="boxDetailsTitle">Содержимое бокса</h3>
+        <button class="icon-btn modal-close" id="boxDetailsClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="waybill-box-details" id="boxDetailsList"></div>
+    </div>
+  </dialog>
+
   <!-- Скрытая на экране область печати этикеток (термопринтер 58 мм) -->
   <div id="printArea"></div>
 
@@ -731,14 +968,15 @@
       </div>
 
       <nav class="admin-tabs" id="adminTabs">
-        <button class="atab active" data-sub="staff">Все сотрудники</button>
+        <button class="atab active" data-sub="staff">Сотрудники</button>
         <button class="atab" data-sub="today">Время работы</button>
         <button class="atab" data-sub="groups">Группы</button>
         <button class="atab" data-sub="salaries">Оклады и дни</button>
         <button class="atab" data-sub="multiplier">Множитель</button>
         <button class="atab" data-sub="log">Журнал</button>
         <button class="atab" data-sub="settings">Параметры</button>
-        <button class="atab" data-sub="admins">Администраторы</button>
+        <button class="atab" data-sub="access">Доступ к разделам</button>
+        <button class="atab" data-sub="backup">Бекап</button>
       </nav>
 
       <!-- Все сотрудники -->
@@ -750,7 +988,6 @@
           </div>
         </div>
         <div class="action-bar">
-          <input id="newStaffName" class="text-input" placeholder="ФИО сотрудника" />
           <button class="ctrl ctrl-primary" id="addStaffBtn">Добавить</button>
         </div>
         <div class="admin-list" id="staffList"></div>
@@ -787,8 +1024,12 @@
         <div class="sub-head">
           <div class="sub-title-wrap">
             <h4 class="sub-title">Оклады и дни</h4>
-            <p class="sub-note">Оклад, премия, надбавка, отработанные часы и переработка за текущий месяц</p>
+            <p class="sub-note">Оклад, премия, надбавка, отработанные часы и переработка за выбранный месяц</p>
           </div>
+          <label class="nf-toolbar" style="margin:0;gap:8px;">
+            <span style="font-size:12.5px;opacity:.85;">Месяц:</span>
+            <input type="month" id="salMonth" class="text-input" style="flex:0 1 auto;max-width:180px;" />
+          </label>
         </div>
         <div class="admin-table-wrap">
           <table class="admin-table">
@@ -878,6 +1119,112 @@
       </div>
 
       <!-- Настройки -->
+      <div class="asub" data-sub="access" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Доступ к разделам</h4>
+            <p class="sub-note">Настройте, какие сотрудники видят разделы приложения (админ и модератор — всегда). Галочки сохраняются сразу.</p>
+          </div>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Проблемы со склада» <span class="group-collapse-count" id="notfoundUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="notfoundUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="notfoundUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Проблемы со склада» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Логи» <span class="group-collapse-count" id="logUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="logUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="logUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Логи» видят отмеченные сотрудники (админ и модератор — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Отчёты» <span class="group-collapse-count" id="reportsUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="reportsUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="reportsUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Отчёты» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Сверки» <span class="group-collapse-count" id="sverkiUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="sverkiUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="sverkiUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Сверки» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Проценка» <span class="group-collapse-count" id="procenkaUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="procenkaUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="procenkaUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Проценка» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+        <div class="group-scope">
+          <details class="group-collapse">
+            <summary>Доступ к «Парсер почты» <span class="group-collapse-count" id="parserUsersCount"></span></summary>
+            <div class="group-access">
+              <input id="parserUsersSearch" class="text-input group-search" type="text" placeholder="Найти сотрудника..." autocomplete="off" />
+              <div class="group-check-list" id="parserUsersGroups"></div>
+              <span class="group-scope-hint">Вкладку «Парсер почты» видят отмеченные сотрудники (админ — всегда). Галочки сохраняются сразу.</span>
+            </div>
+          </details>
+        </div>
+      </div>
+      <div class="asub" data-sub="backup" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Бекап</h4>
+            <p class="sub-note">Резервное копирование и восстановление данных приложения.</p>
+          </div>
+        </div>
+        <div class="params-section">
+          <h5 class="params-heading">Резервная копия данных</h5>
+          <p class="toggle-sub">Скачайте полную базу (сотрудники, оклады, время работы, группы, клиенты, маршруты, параметры) в файл и восстановите её на любом сервере — например, при переносе приложения на новый адрес. Перед восстановлением текущая база автоматически сохраняется отдельным файлом.</p>
+          <div class="backup-row">
+            <button type="button" class="ctrl ctrl-primary" id="backupExportBtn">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              <span>Скачать бэкап</span>
+            </button>
+            <label class="ctrl ctrl-soft backup-import-label" for="backupImportFile">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 15V3m0 0 4 4m-4-4L8 7M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+              <span>Восстановить из файла</span>
+            </label>
+            <input type="file" id="backupImportFile" accept="application/json,.json" hidden />
+            <button type="button" class="ctrl ctrl-soft" id="backupAppBtn" title="Исходный код приложения + полная база данных в одном файле">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
+              <span>Копия приложения (код + данные)</span>
+            </button>
+          </div>
+          <div class="backup-status" id="backupStatus"></div>
+          <div class="backup-auto">
+            <div class="backup-auto-head">
+              <span class="backup-auto-title">Автоматические копии</span>
+              <span class="backup-auto-note" id="backupAutoNote"></span>
+            </div>
+            <p class="toggle-sub">Приложение само делает резервную копию базы примерно каждые 6 часов и хранит последние 30 копий в надёжном хранилище сервера. Копию можно скачать в любой момент и восстановить на любом сервере.</p>
+            <div class="backup-auto-list" id="backupAutoList">
+              <div class="empty-hint">Автоматических копий пока нет — первая появится при следующем запуске сервера.</div>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="asub" data-sub="settings" hidden>
         <div class="sub-head">
           <div class="sub-title-wrap">
@@ -993,16 +1340,6 @@
               <span class="slider"></span>
             </label>
           </div>
-          <div class="setting-row">
-            <div class="setting-text">
-              <span class="setting-title">Расходные накладные при сборке</span>
-              <span class="setting-sub">Разрешить складу загружать расходную накладную по маршруту/клиенту и собирать товар по сканированию штрихкода артикула (раздел «Отгрузка»). Если выключено — возможность скрыта.</span>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="allowWaybill" />
-              <span class="slider"></span>
-            </label>
-          </div>
         </div>
 
         <div class="params-section">
@@ -1032,14 +1369,14 @@
           </div>
         </div>
 
-        <div class="params-section">
+        <div class="params-section" hidden>
           <h5 class="params-heading">Множитель подработки</h5>
           <p class="toggle-sub">Правила повышенного тарифа (по сотрудникам, группам и дням недели) настраиваются на отдельной вкладке «Множитель».</p>
           <button type="button" class="ctrl" id="goToMultiplierTab">Открыть настройки множителя</button>
           <div class="multiplier-status" id="multiplierStatus">—</div>
         </div>
 
-        <div class="params-section">
+        <div class="params-section" hidden>
           <h5 class="params-heading">Обновление Android-приложения</h5>
           <p class="toggle-sub">Номер версии, которую приложение считает актуальной. Когда он станет <b>больше</b> установленного на телефоне, при запуске появится предложение обновиться. Пустые поля = значения из окружения/дефолты сервера.</p>
           <div class="field">
@@ -1060,38 +1397,6 @@
           </div>
         </div>
 
-        <div class="params-section">
-          <h5 class="params-heading">Резервная копия данных</h5>
-          <p class="toggle-sub">Скачайте полную базу (сотрудники, оклады, время работы, группы, клиенты, маршруты, параметры) в файл и восстановите её на любом сервере — например, при переносе приложения на новый адрес. Перед восстановлением текущая база автоматически сохраняется отдельным файлом.</p>
-          <div class="backup-row">
-            <button type="button" class="ctrl ctrl-primary" id="backupExportBtn">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-              <span>Скачать бэкап</span>
-            </button>
-            <label class="ctrl ctrl-soft backup-import-label" for="backupImportFile">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 15V3m0 0 4 4m-4-4L8 7M4 17v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-              <span>Восстановить из файла</span>
-            </label>
-            <input type="file" id="backupImportFile" accept="application/json,.json" hidden />
-            <button type="button" class="ctrl ctrl-soft" id="backupAppBtn" title="Исходный код приложения + полная база данных в одном файле">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
-              <span>Копия приложения (код + данные)</span>
-            </button>
-          </div>
-          <div class="backup-status" id="backupStatus"></div>
-
-          <div class="backup-auto">
-            <div class="backup-auto-head">
-              <span class="backup-auto-title">Автоматические копии</span>
-              <span class="backup-auto-note" id="backupAutoNote"></span>
-            </div>
-            <p class="toggle-sub">Приложение само делает резервную копию базы примерно каждые 6 часов и хранит последние 30 копий в надёжном хранилище сервера. Копию можно скачать в любой момент и восстановить на любом сервере.</p>
-            <div class="backup-auto-list" id="backupAutoList">
-              <div class="empty-hint">Автоматических копий пока нет — первая появится при следующем запуске сервера.</div>
-            </div>
-          </div>
-        </div>
-
       </div>
 
       <!-- Администраторы -->
@@ -1103,6 +1408,16 @@
           </div>
         </div>
         <div class="admin-list" id="adminsList"></div>
+      </div>
+      <div class="asub" data-sub="accounts" hidden>
+        <div class="sub-head">
+          <div class="sub-title-wrap">
+            <h4 class="sub-title">Учётные записи</h4>
+            <p class="sub-note">Логин и пароль для входа в приложение (вместо/поверх входа Битрикс). Введите логин и (при необходимости) новый пароль и нажмите «Сохранить».</p>
+          </div>
+        </div>
+        <button type="button" class="mini-btn" id="adminUsersLoad">Показать сотрудников</button>
+        <div id="adminUsersList" class="admin-users-list"></div>
       </div>
     </div>
   </dialog>
@@ -1119,6 +1434,38 @@
       <div class="status-clear-wrap">
         <button class="mini-btn status-clear" id="statusClear" type="button">Сбросить (авто)</button>
       </div>
+      <div class="status-clear-wrap status-reopen-wrap">
+        <button class="mini-btn status-reopen" id="statusReopen" type="button" title="Убрать «завершён» у дня этого сотрудника — день снова открыт, можно работать/сканировать">Открыть день</button>
+        <button class="mini-btn status-reopen-clear" id="statusReopenClear" type="button" title="Удалить время этого дня у сотрудника и открыть его заново">Сбросить время и открыть</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Добавить сотрудника: ФИО + группа + логин + пароль -->
+  <dialog class="modal" id="addStaffModal">
+    <div class="account-card">
+      <div class="modal-head">
+        <h3>Добавить сотрудника</h3>
+        <button class="icon-btn modal-close" id="addStaffClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="auth-form" style="display:flex;flex-direction:column;gap:12px;">
+        <label>ФИО
+          <input class="text-input" id="asName" type="text" placeholder="Фамилия Имя Отчество" autocomplete="off" />
+        </label>
+        <label>Группа
+          <select class="text-input" id="asGroup"></select>
+        </label>
+        <label>Логин
+          <input class="text-input" id="asLogin" type="text" placeholder="логин" autocomplete="off" />
+        </label>
+        <label>Пароль
+          <input class="text-input" id="asPass" type="password" placeholder="пароль" autocomplete="new-password" />
+        </label>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button type="button" class="mini-btn" id="addStaffCancel">Отмена</button>
+          <button type="button" class="ctrl ctrl-primary" id="addStaffSubmit">Добавить</button>
+        </div>
+      </div>
     </div>
   </dialog>
 
@@ -1134,8 +1481,35 @@
         <div class="account-row"><span class="account-label">Идентификатор</span><span class="account-value" id="acctId">—</span></div>
         <div class="account-row"><span class="account-label">Тип id</span><span class="account-value" id="acctIdKind">—</span></div>
         <div class="account-row"><span class="account-label">Роль</span><span class="account-value" id="acctRole">—</span></div>
-        <div class="account-row"><span class="account-label">Администратор</span><span class="account-value" id="acctAdmin">—</span></div>
-        <div class="account-row"><span class="account-label">Версия</span><span class="account-value" id="acctVersion">—</span></div>
+        <div class="account-row" id="acctAdminRow"><span class="account-label">Администратор</span><span class="account-value" id="acctAdmin">—</span></div>
+        <div class="account-row" id="acctVersionRow"><span class="account-label">Версия</span><span class="account-value" id="acctVersion">—</span></div>
+        <div class="account-row" id="acctIpRow" hidden><span class="account-label">IP-адрес</span><span class="account-value" id="acctIp">—</span></div>
+        <div class="account-row" id="acctHostRow" hidden><span class="account-label">Адрес приложения</span><span class="account-value" id="acctHost">—</span></div>
+        <div class="account-row" id="onecPingRow" hidden>
+          <button type="button" class="drv-mini-btn drv-mini-primary" id="onecPingBtn">Пинг 1С</button>
+          <span class="account-value" id="onecPingRes">—</span>
+        </div>
+        <div class="account-row" id="acctTzRow" hidden>
+          <span class="account-label">Поправка времени (мин)</span>
+          <input id="acctTzOffset" class="text-input routes-date-filter" type="number" step="1" title="Если часы устройства уходят вперёд/назад — укажите поправку в минутах (напр. +5 или -3)" />
+        </div>
+        <script>
+          // Проставляет адрес приложения/IP сразу при загрузке страницы (не дожидаясь
+          // app.js из Service Worker-кэша). Host всегда доступен; числовой IP сервера
+          // подставляем поверх, только если сервер смог его определить (/api/ip).
+          (function () {
+            function put(id, v) { var el = document.getElementById(id); if (el && v) el.textContent = v; }
+            var host = window.location.host || window.location.hostname || "";
+            put("acctHost", host);
+            put("acctIp", host); // запасной вариант — не даём «—»
+            try {
+              fetch("/api/ip", { headers: { "Accept": "application/json" } })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (d) { if (d && d.ip) put("acctIp", d.ip); })
+                .catch(function () {});
+            } catch (e) {}
+          })();
+        </script>
         <div class="account-note" id="acctReason" hidden></div>
         <button type="button" class="mini-btn account-logout-btn" id="accountLogout">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -1145,6 +1519,46 @@
           </svg>
           <span>Выйти</span>
         </button>
+        <button type="button" class="mini-btn" id="accountReloadBtn" title="Выйти из закреплённого режима и перезагрузить (если зависло)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+          <span>Перезагрузить</span>
+        </button>
+        <button type="button" class="mini-btn" id="accountLogBtn" title="Диагностический журнал приложения (сканер, ошибки)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M8 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3"/>
+            <path d="M16 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/>
+            <line x1="12" y1="9" x2="12" y2="15"/><line x1="9" y1="12" x2="15" y2="12"/>
+          </svg>
+          <span>Логи</span>
+        </button>
+        <div class="account-password-box" id="cpBox" hidden>
+          <h4>Сменить пароль</h4>
+          <div class="drv-route-label">Текущий пароль <input class="text-input" id="cpCurrent" type="password" autocomplete="current-password" /></div>
+          <div class="drv-route-label">Новый пароль (мин. 8) <input class="text-input" id="cpNew" type="password" autocomplete="new-password" /></div>
+          <button type="button" class="mini-btn" id="cpSubmit">Сменить пароль</button>
+          <div class="auth-hint" id="cpHint"></div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Диагностический журнал приложения. Пишется на устройстве (localStorage):
+       события сканера выгрузки, ответы нативного моста, ошибки JS. Открывается
+       из «Учётная запись» -> «Логи», чтобы водитель мог скопировать и прислать,
+       когда кнопка «не срабатывает и ничего не происходит». -->
+  <dialog class="modal" id="appLogModal">
+    <div class="postpone-card">
+      <div class="modal-head">
+        <h3>Логи приложения</h3>
+        <button class="icon-btn modal-close" id="appLogClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <p class="modal-note">Диагностический журнал этого устройства. Если кнопка «Сканировать выгрузку» не срабатывает, нажмите «Скопировать» и пришлите текст.</p>
+      <textarea readonly class="app-log-area" id="appLogArea" spellcheck="false" placeholder="Пока пусто. Откройте сканер повторно — события появятся здесь."></textarea>
+      <div class="route-confirm-actions" style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="ctrl" id="appLogClear">Очистить</button>
+        <button type="button" class="ctrl ctrl-finish" id="appLogCopy">Скопировать</button>
       </div>
     </div>
   </dialog>
@@ -1257,29 +1671,91 @@
     <div class="postpone-card">
       <div class="modal-head">
         <h3 id="waybillTitle">Расходная накладная</h3>
+        <button type="button" class="nfd-action-btn nfd-btn-danger waybill-remove-missing" id="waybillRemoveMissing" hidden>Убрать «не найдено»</button>
+        <button type="button" class="nfd-action-btn nfd-btn-danger waybill-remove-missing" id="waybillCleanBtn" hidden>Удалить не собранные</button>
         <button class="icon-btn modal-close" id="waybillClose" aria-label="Закрыть">&times;</button>
       </div>
       <div class="waybill-body">
         <div class="waybill-status" id="waybillStatus"></div>
+        <div class="waybill-flash" id="waybillFlash" hidden></div>
         <div class="waybill-scan-row">
           <input class="text-input" id="waybillArtInput" type="text" autocomplete="off" spellcheck="false"
                  placeholder="Штрихкод / артикул" enterkeyhint="go" />
-          <input class="text-input waybill-qty-input" id="waybillQtyInput" type="number" min="1" step="1"
-                 value="1" title="Кол-во на стикере (если >1)" />
-          <button type="button" class="ctrl ctrl-primary" id="waybillScanBtn">Сканировать</button>
         </div>
         <div class="waybill-box-row">
-          <span class="waybill-box-cur" id="waybillBoxCur">Бокс: —</span>
-          <button type="button" class="ctrl ctrl-soft" id="waybillNewBoxBtn">Новый бокс</button>
+          <div class="waybill-box-cur" id="waybillBoxCur" data-state="empty" title="Бокс, в который складываются отсканированные детали">
+            <span class="waybill-box-label">Бокс</span>
+            <span class="waybill-box-value" id="waybillBoxCurValue">—</span>
+            <span class="waybill-box-hint" id="waybillBoxCurHint">не выбран</span>
+          </div>
+          <button type="button" class="ctrl ctrl-soft" id="waybillNewBoxBtn">+ Новый бокс</button>
+        </div>
+        <div class="waybill-box-row waybill-multi-row">
+          <label class="waybill-multi-label" for="waybillBoxQty">Печать нескольких боксов:</label>
+          <input class="select-input waybill-multi-input" id="waybillBoxQty" type="number" min="1" max="200" value="1" title="Сколько боксов напечатать за раз" />
         </div>
         <div class="waybill-del-box-row">
-          <select id="waybillDelBoxSel" class="select-input"></select>
-          <button type="button" class="ctrl ctrl-danger" id="waybillDelBoxBtn">Удалить бокс</button>
+          <div class="waybill-del-box-list" id="waybillDelBoxList"></div>
+          <button type="button" class="ctrl ctrl-danger" id="waybillDelBoxBtn">Удалить выбранные</button>
+        </div>
+        <div class="waybill-tools-row">
+          <button type="button" class="ctrl ctrl-primary waybill-manual-btn" id="waybillManualBtn" disabled title="Собрать отмеченные строки как при сканировании">Собрать вручную</button>
+          <button type="button" class="ctrl ctrl-danger waybill-miss-btn" id="waybillMissBtn" disabled title="Пометить отмеченные строки как не найденные">Не найдено</button>
+          <span class="waybill-tools-hint">клик по строке — отметить ✓, затем «Собрать вручную» или «Не найдено», двойной клик — собрать строку</span>
         </div>
         <div class="waybill-list" id="waybillList"></div>
         <div class="waybill-finish-row">
           <button type="button" class="ctrl ctrl-primary" id="waybillFinishBtn" disabled>Завершить сборку</button>
         </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Список деталей на ТСД: открывается из кнопки «Показать список деталей» -->
+  <dialog class="modal" id="waybillListModal">
+    <div class="postpone-card">
+      <div class="modal-head">
+        <h3 id="waybillListModalTitle">Список деталей</h3>
+        <button class="icon-btn modal-close" id="waybillListModalClose" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="waybill-list-tools">
+        <label class="waybill-list-qty" title="Сколько единиц засчитать за одну сборку">
+          <span>Кол-во</span>
+          <input class="text-input waybill-list-qty-input" id="waybillModalQty" type="number" min="1" step="1" value="1" />
+        </label>
+        <button type="button" class="ctrl ctrl-primary" id="waybillModalAssembleBtn" disabled title="Собрать отмеченные позиции">Собрать</button>
+        <button type="button" class="ctrl ctrl-danger" id="waybillModalMissBtn" disabled title="Пометить отмеченные позиции как не найденные">Не найдено</button>
+      </div>
+      <div class="waybill-list waybill-list-modal" id="waybillListModalBody"></div>
+    </div>
+  </dialog>
+
+  <!-- Быстрый ввод количества при скане детали с количеством > 1 -->
+  <dialog class="modal" id="waybillQtyAskModal">
+    <div class="postpone-card waybill-qty-ask">
+      <div class="modal-head">
+        <h3>Введите количество</h3>
+      </div>
+      <input id="waybillQtyAsk" class="text-input waybill-qty-ask-input" type="number" min="1" step="1" inputmode="numeric" autocomplete="off" />
+      <div class="row-actions waybill-qty-ask-actions">
+        <button type="button" class="ctrl ctrl-primary" id="waybillQtyAskOk">ОК</button>
+        <button type="button" class="ctrl ctrl-soft" id="waybillQtyAskCancel">Отмена</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Общий (мультидевайсный) ввод количества: деталь просит кол-во, отвечает любой
+       открытый клиент сборки (ПК/телефон/ТСД) — засчитывается на сервере у всех -->
+  <dialog class="modal" id="waybillSharedQtyModal">
+    <div class="postpone-card waybill-qty-ask">
+      <div class="modal-head">
+        <h3>Введите количество</h3>
+      </div>
+      <div class="waybill-qty-info" id="waybillSharedQtyInfo"></div>
+      <input id="waybillSharedQty" class="text-input waybill-qty-ask-input" type="number" min="1" step="1" inputmode="numeric" autocomplete="off" />
+      <div class="row-actions waybill-qty-ask-actions">
+        <button type="button" class="ctrl ctrl-primary" id="waybillSharedQtyOk">ОК</button>
+        <button type="button" class="ctrl ctrl-soft" id="waybillSharedQtyCancel">Отмена</button>
       </div>
     </div>
   </dialog>

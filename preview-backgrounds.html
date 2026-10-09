@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Выбор заднего фона — 10 вариантов (рендер)</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#0b0e13;color:#eef2f7;font-family:ui-monospace,"Cascadia Code",Consolas,monospace;padding:22px}
+  .wrap{max-width:1200px;margin:0 auto}
+  h1{font-size:19px;margin:0 0 4px}
+  .sub{color:rgba(238,242,247,.55);font-size:12px;margin:0 0 18px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
+  .card{border-radius:16px;overflow:hidden;border:1px solid rgba(255,255,255,.1);cursor:pointer;transition:.18s}
+  .card:hover{transform:translateY(-3px)}
+  .card.sel{border-color:#ffab38;box-shadow:0 0 0 1px #ffab38,0 10px 30px rgba(255,171,56,.18)}
+  .card .cap{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#151a21;border-top:1px solid rgba(255,255,255,.08)}
+  .card .cap b{font-size:13px}
+  .card .cap span{font-size:11px;color:rgba(238,242,247,.5)}
+  /* Образец панели поверх фона */
+  .sample{height:190px;position:relative;padding:14px;display:flex;flex-direction:column;gap:8px;overflow:hidden}
+  .sample::after{content:"";position:absolute;inset:0;pointer-events:none;border:1px solid rgba(255,255,255,.16);border-radius:15px}
+  .sample .pill{width:120px;height:9px;border-radius:99px;background:rgba(255,255,255,.5)}
+  .sample .line{width:78%;height:6px;border-radius:99px;background:rgba(255,255,255,.28)}
+  .sample .blocks{display:flex;gap:8px;margin-top:auto}
+  .sample .bl{flex:1;height:46px;border-radius:10px;background:rgba(13,16,22,.45);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(4px)}
+
+  .bg-1{background:linear-gradient(135deg,#0b0f17,#111827 60%,#1f2937)}
+  .bg-2{background:linear-gradient(160deg,#0e1116,#2b1a0e)}
+  .bg-3{background:linear-gradient(45deg,#f4f7fb,#e8edf5)}
+  .bg-4{background:radial-gradient(80% 90% at 25% 15%,#1b3a66,#0b111d 70%)}
+  .bg-5{background:
+    linear-gradient(rgba(11,14,19,.55),rgba(11,14,19,.55)),
+    repeating-linear-gradient(0deg,rgba(255,255,255,.05) 0 1px,transparent 1px 44px),
+    repeating-linear-gradient(90deg,rgba(255,255,255,.05) 0 1px,transparent 1px 44px),
+    #11161f}
+  .bg-6{background:linear-gradient(120deg,#10151d,#1b2430 40%,#0e131b)}
+  .bg-7{background:linear-gradient(180deg,#eef2f8,#dde4ee)}
+  .bg-8{background:radial-gradient(80% 80% at 85% 8%,rgba(255,171,56,.34),transparent 60%),linear-gradient(160deg,#10151d,#1a1510)}
+  .bg-9{background:linear-gradient(135deg,#0c1216,#17626e 55%,#0a1418)}
+  .bg-10{background:linear-gradient(rgba(10,13,18,.25),rgba(10,13,18,.55)),url("assets/app-redesign-bg.jpg") center/cover}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Задний фон приложения — выберите вариант</h1>
+  <p class="sub">10 вариантов. Кликните по понравившемуся — он подсветится. Скажите номер, и я применю его в приложение.</p>
+  <div class="grid" id="grid">
+    <div class="card" data-n="1"><div class="sample bg-1"><span class="pill"></span><span class="line"></span><div class="blocks"><div class="bl"></div><div class="bl"></div></div></div><div class="cap"><b>1 · Ночь</b><span>тёмно-графитовый</span></div></div>
+    <div class="card" data-n="2"><div class="sample bg-2"><span class="pill"></span><span class="line"></span><div class="blocks"><div class="bl"></div><div class="bl"></div></div></div><div class="cap"><b>2 · Закат</b><span>тёмный + янтарь</span></div></div>
+    <div class="card" data-n="3"><div class="sample bg-3"><span class="pill" style="background:#0d1117"></span><span class="line" style="background:#9aa4b2"></span><div class="blocks"><div class="bl" style="background:rgba(13,16,22,.12);border-color:rgba(13,16,22,.15)"></div><div class="bl" style="background:rgba(13,16,22,.12)"></div></div></div><div class="cap"><b>3 · Облако</b><span>светлый минимал</span></div></div>
+    <div class="card" data-n="4"><div class="sample bg-4"><span class="pill"></span><span class="line"></span><div class="blocks"><div class="bl"></div><div class="bl"></div></div></div><div class="cap"><b>4 · Синева</b><span>тёмно-синий</span></div></div>
+    <div class="card" data-n="5"><div class="sample bg-5"><span class="pill"></span><span class="line"></span><div class="blocks"><div class="bl"></div><div class="bl"></div></div></div><div class="cap"><b>5 · Сетка</b><span>координатная</span></div></div>
+    <div class="card" data-n="6"><div class="sample bg-6"><span class="pill"></span><span class="line"></span><div class="blocks"><div class="bl"></div><div class="bl"></div></div></div><div class="cap"><b>6 · Графит</b><span>тёмный спокойный</span></div></div>
+    <div class="card" data-n="7"><div class="sample bg-7"><span class="pill" style="background:#0d1117"></span><span class="line" style="background:#9aa4b2"></span><div class="blocks"><div class="bl" style="background:rgba(13,16,22,.12)"></div></div></div><div class="cap"><b>7 · Свет</b><span>светлый чистый</span></div></div>
+    <div class="card" data-n="8"><div class="sample bg-8"><span class="pill"></span><span class="line"></span><div class="blocks"><div class="bl"></div><div class="bl"></div></div></div><div class="cap"><b>8 · Акцент</b><span>ночь + янтарное свечение</span></div></div>
+    <div class="card" data-n="9"><div class="sample bg-9"><span class="pill"></span><span class="line"></span><div class="blocks"><div class="bl"></div><div class="bl"></div></div></div><div class="cap"><b>9 · Морская</b><span>тёмно-бирюзовый</span></div></div>
+    <div class="card" data-n="10"><div class="sample bg-10"><span class="pill"></span><span class="line"></span><div class="blocks"><div class="bl"></div><div class="bl"></div></div></div><div class="cap"><b>10 · Карта</b><span>ночной транспорт (сгенерирован)</span></div></div>
+  </div>
+</div>
+<script>
+  var cards=document.querySelectorAll(".card");
+  cards.forEach(function(c){c.addEventListener("click",function(){
+    cards.forEach(function(x){x.classList.remove("sel")});
+    c.classList.add("sel");
+  });});
+</script>
+</body>
+</html>

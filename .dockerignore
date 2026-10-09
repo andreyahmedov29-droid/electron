@@ -1,0 +1,25 @@
+# Всё, что не должно попадать в контейнер и в контекст сборки.
+# Секреты и личные данные — категорически исключаем.
+.env
+.env.*
+!.env.example
+
+# Данные и их резервные копии (живут на томе /data, не в образе)
+data
+/data
+backups
+*.log
+
+# Служебные и инструменты разработки
+.git
+.gitignore
+.dockerignore
+.opencode
+deploy
+node_modules
+test
+dist
+ios
+check-*.png
+example-*
+export_test.xlsx

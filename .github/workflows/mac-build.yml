@@ -1,0 +1,141 @@
+﻿name: Build macOS
+
+# Собирает macOS-версию BIOTIME (.app/.dmg/.zip) на бесплатном macOS-раннере
+# GitHub Actions. Запускается по кнопке (workflow_dispatch) и при пуше в
+# main/master (когда меняются файлы приложения/сборки). Готовые артефакты
+# выгружаются как артефакт workflow и публикуются в GitHub Release
+# «biotime-mac-latest». Подпись/нотаризация НЕ выполняются (нет платной учётки
+# Apple Developer) — файлы откроются через «Правый клик ▸ Открыть».
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "electron/**"
+      - "server.js"
+      - "app.js"
+      - "index.html"
+      - "styles.css"
+      - "qr.js"
+      - "package.json"
+      - "package-lock.json"
+      - "version.json"
+  workflow_dispatch: # ручной запуск: вкладка Actions ▸ «Build macOS» ▸ Run workflow
+
+jobs:
+  build:
+    runs-on: macos-latest
+    # Нужно для публикации GitHub Release («biotime-mac-latest») системным GITHUB_TOKEN.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout репозитория
+        uses: actions/checkout@v5
+
+      - name: Установить Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: npm
+
+      # Корневой package.json — веб-only (devDependencies пусты), поэтому npm ci
+      # ставит ноль пакетов и не тащит тяжелый electron в веб-деплой. Тяжёлые
+      # зависимости десктоп-сборки (electron + electron-builder) доставляем здесь
+      # на CI через --no-save (не трогая package.json/package-lock) и собираем
+      # из корня, где лежат build.files и electron/.
+      - name: Установить зависимости
+        run: |
+          npm ci
+          npm install --no-save --no-package-lock electron electron-builder
+
+      # АВТОРЕЛИЗ НА КАЖДЫЙ PUSH в main/master: поднимаем versionCode и patch-версию
+      # (1.0.3 → 1.0.4) в version.json, коммитим и пушим с маркером [skip ci].
+      # Так ЛЮБОЙ коммит (fix, debug, release …) даёт новую версию macOS-сборки,
+      # а server/update-info и клиенты видят её. [skip ci] в сообщении останавливает
+      # повторный запуск workflow на bump-коммит — иначе получили бы бесконечный
+      # цикл push → bump → push. Коммит делает системный GITHUB_TOKEN.
+      - name: Автоинкремент версии на каждый push (авторелиз)
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = JSON.parse(fs.readFileSync("version.json", "utf8"));
+            const cur = (v.versionName || "1.0.0").replace(/^v/, "");
+            const parts = cur.split(".").map(Number);
+            parts[2] = (parts[2] || 0) + 1;                  // patch++
+            const next = parts.join(".");
+            v.versionCode = (Number(v.versionCode) || 0) + 1;
+            v.versionName = next;
+            v.notes = "Авторелиз macOS " + next + " (commit " + (process.env.GITHUB_SHA || "").slice(0, 7) + ")";
+            fs.writeFileSync("version.json", JSON.stringify(v, null, 2) + "\n");
+            console.log("Версия: " + cur + " -> " + next + " | versionCode: " + v.versionCode);
+          '
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "chore(release): bump to $(node -p "require('./version.json').versionName") [skip ci]" || echo "нет изменений для коммита"
+          git push origin HEAD:main
+
+      # Единый источник версии — version.json в корне репозитория. Перед сборкой
+      # сохраняем номер версии в переменную окружения, чтобы вписать его в имя
+      # артефактов/релиза; саму версию поднимайте в version.json одним правком.
+      - name: Прочитать версию из version.json
+        id: ver
+        run: |
+          echo "VN=$(node -p "require('./version.json').versionName || '1.0.0'")" >> "$GITHUB_OUTPUT"
+          echo "VC=$(node -p "require('./version.json').versionCode || '0'")" >> "$GITHUB_OUTPUT"
+
+      - name: Собрать приложение для macOS (arm64 + x64)
+        run: npx electron-builder --mac --publish never
+
+      - name: Выгрузить сборку как артефакт workflow
+        uses: actions/upload-artifact@v5
+        with:
+          name: biotime-mac
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/mac*/**/*.app
+          if-no-files-found: warn
+
+      # Публикуем .dmg и .zip в GitHub Release «biotime-mac-latest». .zip нужен
+      # для автообновления (electron-updater на macOS качает именно его), .dmg —
+      # для установки вручную. Ссылки прямые:
+      #   https://github.com/<owner>/<repo>/releases/download/biotime-mac-latest/...
+      - name: Опубликовать сборку в GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: biotime-mac-latest
+          name: BIOTIME macOS v${{ steps.ver.outputs.VN }}
+          body: |
+            Автоматическая сборка macOS.
+            Версия: v${{ steps.ver.outputs.VN }}
+          files: |
+            dist/*.dmg
+            dist/*.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Авто-оповещение сервера о новой версии macOS-сборки. Desktop-клиенты
+      # обновляются через electron-updater (GitHub Release), поэтому само
+      # обновление НЕ зависит от этого шага; здесь мы лишь пишем актуальную
+      # версию в db.params/version.json сервера для GET /api/app/update-info.
+      # Чтобы включить — задайте на GitHub два секрета (Settings ▸ Secrets ▸ Actions):
+      #   SERVER_UPDATE_URL   — адрес POST /api/app/update сервера BIOTIME, например:
+      #     https://app-d54dcfb4082e.vibecode.bitrix24.tech/api/app/update
+      #   SERVER_UPDATE_TOKEN — произвольный токен/секрет (передаётся заголовком
+      #     X-Update-Token; должен совпадать с SERVER_UPDATE_TOKEN на сервере).
+      # Если секреты не заданы — шаг БЕЗОПАСНО пропускается (сборка/публикация релиза уже прошли).
+      - name: Оповестить сервер о новой версии macOS
+        env:
+          SERVER_UPDATE_URL: ${{ secrets.SERVER_UPDATE_URL }}
+          SERVER_UPDATE_TOKEN: ${{ secrets.SERVER_UPDATE_TOKEN }}
+        run: |
+          if [ -z "$SERVER_UPDATE_URL" ] || [ -z "$SERVER_UPDATE_TOKEN" ]; then
+            echo "::warning::Секреты SERVER_UPDATE_URL/SERVER_UPDATE_TOKEN не заданы — пропускаем оповещение сервера."
+            exit 0
+          fi
+          VN=$(node -p "require('./version.json').versionName")
+          VC=$(node -p "require('./version.json').versionCode")
+          echo "Извещаем сервер: versionCode=$VC versionName=$VN"
+          curl -sS -X POST "$SERVER_UPDATE_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Update-Token: $SERVER_UPDATE_TOKEN" \
+            --data "{\"versionCode\":$VC,\"versionName\":\"$VN\",\"notes\":\"Авторелиз macOS $VN\"}"
