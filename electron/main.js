@@ -13,7 +13,7 @@
 //
 // Веб-версия BIOTIME остаётся нетронутой — десктоп лишь подключается к ней.
 
-const { app, BrowserWindow, shell, dialog, ipcMain } = require("electron");
+  const { app, BrowserWindow, shell, dialog, ipcMain, Notification } = require("electron");
 const { session } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -468,6 +468,18 @@ function setupAutoUpdater() {
 
   autoUpdater.on("update-available", (info) => {
     console.log("[updater] Найдено обновление:", info && info.version);
+    // Чтобы пользователь видел, что обновление доступно (не гоняем диалог
+    // посреди работы — мягкое системное уведомление).
+    try {
+      if (Notification.isSupported()) {
+        new Notification({
+          title: "Личный кабинет",
+          body: "Доступно обновление " + (info && info.version ? info.version : "") + " — скачивается…",
+        }).show();
+      }
+    } catch (err) {
+      console.error("[updater] Не удалось показать уведомление:", err && (err.message || err));
+    }
   });
   autoUpdater.on("update-not-available", () => {
     console.log("[updater] Обновлений нет — текущая версия актуальна.");
@@ -503,8 +515,8 @@ function showUpdateReady() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const choice = dialog.showMessageBoxSync(mainWindow, {
     type: "info",
-    title: "BIOTIME — доступно обновление",
-    message: "Скачана новая версия BIOTIME.",
+    title: "Личный кабинет — доступно обновление",
+    message: "Скачана новая версия приложения «Личный кабинет».",
     detail: "Перезапустить приложение сейчас, чтобы установить обновление?",
     buttons: ["Перезапустить сейчас", "Позже"],
     defaultId: 0,
