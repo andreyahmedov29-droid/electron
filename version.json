@@ -1,5 +1,5 @@
 {
-  "versionCode": 30,
-  "versionName": "1.0.29",
-  "notes": "Перезапуск Windows-сборки (macOS — ручная сборка)"
+  "versionCode": 31,
+  "versionName": "1.0.30",
+  "notes": "Авторелиз 1.0.30 (commit b38e190)"
 }
