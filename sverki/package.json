@@ -1,0 +1,13 @@
+{
+  "name": "sverka-reconciler",
+  "version": "1.0.0",
+  "description": "Сверка двух Excel-файлов: автоматическое сопоставление операций, поиск расхождений и умный анализ",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}

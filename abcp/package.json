@@ -1,0 +1,13 @@
+{
+  "name": "abcp-delay-report",
+  "version": "1.0.0",
+  "description": "Отчёт по просрочке поставки товара (данные ABCP API)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --max-old-space-size=4096 server.js",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

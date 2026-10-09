@@ -1,0 +1,423 @@
+// Биотим — desktop-приложение для Windows на Electron.
+//
+// Два режима работы:
+//  [A] Веб-версия (по умолчанию): приложение открывает веб-версию BIOTIME на
+//      платформе Вайкода (фиксированный адрес) и проходит шлюз платформы через
+//      access-токен (заголовок Authorization: Bearer). Свой локальный сервер не
+//      поднимается — данные/табель общие на всех (как в вебе), вход = выбор
+//      сотрудника внутри приложения. Адрес и токен задаются переменными
+//      окружения BIOTIME_APP_URL / BIOTIME_ACCESS_TOKEN (не хардкодятся в коде).
+//  [B] Локальный автономный: если BIOTIME_APP_URL не задан, поднимается
+//      собственная копия server.js на локальном порту (по умолчанию 3123) и
+//      открывается http://localhost:<port>. Данные — локальная БД приложения.
+//
+// Веб-версия BIOTIME остаётся нетронутой — десктоп лишь подключается к ней.
+
+const { app, BrowserWindow, shell, dialog } = require("electron");
+const { session } = require("electron");
+const { spawn } = require("child_process");
+const http = require("http");
+const path = require("path");
+const fs = require("fs");
+const { autoUpdater } = require("electron-updater");
+
+// ---- Режим A: веб-версия на платформе ----
+// Адрес веб-версии BIOTIME и access-токен для прохода через шлюз платформы.
+// Источники (приоритет сверху вниз):
+//   1) переменные окружения BIOTIME_APP_URL / BIOTIME_ACCESS_TOKEN;
+//   2) конфиг-файл biotime.config.json в папке данных приложения
+//      (поля appUrl / accessToken) — удобно прописать один раз и раздать
+//      вместе с установщиком;
+//   3) фиксированный адрес инстанса (fallback).
+// Токен в код/сборку не включается.
+let _cfg = {};
+let _cfgPathUsed = "";
+// Актуальный адрес веб-версии. Он же используется в «автомиграции»: если в
+// biotime.config.json на компьютере лежит устаревший appUrl, его не нужно чистить
+// вручную — при первом запуске новой сборки Electron сам заменит его на этот.
+// Работаем на рабочем приложении app-2660de1a180b. Если в biotime.config.json
+// остался несуществующий адрес app-0191dabf28dc (от прежней автомиграции), при
+// старте сборка перезапишет его на рабочий app-2660de1a180b — иначе окно грузит
+// удалённый сервер и показывает «Приложение не найдено».
+const CURRENT_APP_URL = "https://app-2660de1a180b.vibecode.bitrix24.tech";
+const LEGACY_APP_URLS = ["app-0191dabf28dc.vibecode.bitrix24.tech"];
+try {
+  // Толерантный поиск конфига: папки userData ("BIOTIME"/"biotime-desktop") и
+  // имена файла (biotime.config.json / biotime.config), чтобы не зависеть от того,
+  // как пользователь положил конфиг в упакованном exe или в dev-режиме.
+  const userDataBase = (() => {
+    try { return app.getPath("userData"); } catch { return ""; }
+  })();
+  const parentDir = userDataBase ? userDataBase.replace(/[\\/][^\\/]*$/, "") : "";
+  const folders = [userDataBase, parentDir ? path.join(parentDir, "BIOTIME") : "", parentDir ? path.join(parentDir, "biotime-desktop") : ""]
+    .filter(Boolean);
+  const fileNames = ["biotime.config.json", "biotime.config"];
+  outer:
+  for (const folder of folders) {
+    for (const fname of fileNames) {
+      const cfgPath = path.join(folder, fname);
+      if (fs.existsSync(cfgPath)) {
+        _cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")) || {};
+        _cfgPathUsed = cfgPath;
+        break outer;
+      }
+    }
+  }
+  // Автомиграция: устаревший appUrl из конфига заменяем на актуальный и сразу
+  // перезаписываем файл, чтобы на каждом компьютере новая ссылка подхватилась
+  // сама, без ручного удаления/правки конфига на каждой машине.
+  if (_cfg && typeof _cfg.appUrl === "string" && _cfgPathUsed) {
+    const old = String(_cfg.appUrl);
+    const outdated = LEGACY_APP_URLS.some((l) => old.indexOf(l) >= 0);
+    if (outdated) {
+      _cfg.appUrl = CURRENT_APP_URL;
+      try {
+        fs.writeFileSync(_cfgPathUsed, JSON.stringify(_cfg, null, 2), "utf8");
+        console.log("[cfg] Устаревший appUrl обновлён на " + CURRENT_APP_URL + " (" + _cfgPathUsed + ")");
+      } catch (e) {
+        console.log("[cfg] Не удалось перезаписать конфиг:", e && e.message);
+      }
+    }
+  }
+} catch { /* необязательный конфиг — при отсутствии используем env/fallback */ }
+console.log(_cfgPathUsed
+  ? "[cfg] Конфиг прочитан: " + _cfgPathUsed
+  : "[cfg] Конфиг biotime.config(.json) не найден — используем env/fallback.");
+
+const WEB_APP_URL =
+  process.env.BIOTIME_APP_URL ||
+  (_cfg.appUrl && String(_cfg.appUrl)) ||
+  CURRENT_APP_URL;
+const ACCESS_TOKEN = process.env.BIOTIME_ACCESS_TOKEN || (_cfg.accessToken || "");
+// Имя принтера для прямой печати этикеток (без диалога). Если не задано —
+// печатаем на принтер по умолчанию Windows. Пропишите в biotime.config.json
+// поле "printerName": "HP...", чтобы печать шла всегда на нужный принтер.
+const PRINTER_NAME = process.env.BIOTIME_PRINTER_NAME || (_cfg.printerName || "");
+// Включён ли режим A (веб-версия). Если адрес задан — да.
+const useWebMode = !!WEB_APP_URL && String(WEB_APP_URL).length > 0;
+
+// Порт локального сервера. Можно переопределить через переменную окружения
+// BIOTIME_PORT (например при конфликте порта на машине пользователя).
+const PORT = Number(process.env.BIOTIME_PORT) || 3123;
+// Адрес, который открывает окно.
+const APP_URL = useWebMode ? WEB_APP_URL : `http://localhost:${PORT}`;
+
+// Путь к корню проекта (папка, где лежат server.js, public/assets и т.д.).
+// В dev он рядом с electron/main.js; в упакованном exe — в resources/app.
+const PROJECT_ROOT = app.isPackaged
+  ? path.join(process.resourcesPath, "app")
+  : path.join(__dirname, "..");
+
+let serverProc = null;   // дочерний процесс Node (server.js)
+let mainWindow = null;   // главное окно
+let shuttingDown = false;
+
+// Проверяет, отвечает ли локальный сервер (готов к открытию окна).
+function serverIsUp(host, port, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const req = http.get({ host, port, path: "/", timeout: timeoutMs }, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => { req.destroy(); resolve(false); });
+  });
+}
+
+// Дожидается готовности сервера с ограниченным числом попыток.
+async function waitForServer(attempt = 0) {
+  const MAX = 50;
+  if (await serverIsUp("localhost", PORT)) return true;
+  if (attempt >= MAX) return false;
+  await new Promise((r) => setTimeout(r, 300));
+  return waitForServer(attempt + 1);
+}
+
+// Запускает локальную копию сервера BIOTIME как дочерний процесс.
+function startServer() {
+  const serverPath = path.join(PROJECT_ROOT, "server.js");
+  if (!fs.existsSync(serverPath)) {
+    console.error("Server not found:", serverPath);
+    return false;
+  }
+  const env = {
+    ...process.env,
+    PORT: String(PORT),
+    // Локальный запуск без шлюза: сервер хранит БД и файлы не в /data (его на
+    // Windows нет), а в папке данных приложения (куда у Electron есть права
+    // записи). Путь резолвит server.js через process.env.DATA_DIR.
+    DATA_DIR: path.join(app.getPath("userData"), "data"),
+    // Ключевой трюк упаковки: process.execPath в dev и в exe указывает на
+    // electron(.exe). Чтобы запустить server.js как обычный Node-скрипт, а не
+    // новый инстанс Electron, передаём флаг ELECTRON_RUN_AS_NODE=1 — при нём
+    // Electron отрабатывает как чистый Node-рантайм (без GUI).
+    ELECTRON_RUN_AS_NODE: "1",
+  };
+  serverProc = spawn(process.execPath, [serverPath], {
+    cwd: PROJECT_ROOT,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  serverProc.stdout.on("data", (d) => {
+    const s = String(d).trim();
+    if (s) console.log("[server]", s);
+  });
+  serverProc.stderr.on("data", (d) => {
+    const s = String(d).trim();
+    if (s) console.error("[server]", s);
+  });
+  serverProc.on("error", (err) => {
+    console.error("Failed to start server:", err);
+  });
+  serverProc.on("exit", (code) => {
+    console.log("[server] exited with code", code);
+    serverProc = null;
+    if (!shuttingDown) app.quit();
+  });
+  return true;
+}
+
+// Создаёт главное окно приложения.
+async function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 960,
+    minHeight: 640,
+    title: "BIOTIME",
+    backgroundColor: "#0e1116",
+    autoHideMenuBar: true,
+    webPreferences: {
+      // Локальный сервер доверяем; дополнительных node-привилегий странице не даём.
+      contextIsolation: true,
+      nodeIntegration: false,
+      // sandbox НЕ включаем: иначе страница в песочнице и window.print() игнорируется
+      // («document is sandboxed, allow-modals not set»). Безопасность — через
+      // contextIsolation:true + nodeIntegration:false.
+      sandbox: false,
+      // Постоянная partition: cookies и сессия шлюза (вход в личную учётку)
+      // сохраняются в userData и держатся между перезапусками приложения.
+      // Без неё окно использует непостоянную defaultSession, вход теряется на
+      // каждом запуске и шлюз отвечает BH_LOGIN_REQUIRED при старте.
+      partition: "persist:biotime",
+    },
+  });
+
+  // В режиме A (веб-версия) постоянно очищаем кэш и service worker partition
+  // перед загрузкой, чтобы окно всегда тянуло СВЕЖИЙ фронтенд и не показывало
+  // старый закэшированный app.js с устаревшей логикой (например, выбор клиента
+  // для печати этикеток). Cookises и сессия входа не трогаются.
+  if (useWebMode) {
+    try {
+      const ses = session.fromPartition("persist:biotime");
+      await ses.clearCache();
+      await ses.clearStorageData({ storages: ["cachestorage", "serviceworkers"] });
+      // Блокируем /sw.js на поддомене приложения: в Electron (изолированная
+      // partition) регистрация защищённого 401-sw.js ломает mainFrame-навигацию
+      // (net::ERR_ABORTED → чёрное окно). Свой service worker десктопу не нужен.
+      ses.webRequest.onBeforeRequest((details, callback) => {
+        const u = details.url || "";
+        if (/\.vibecode\.bitrix24\.tech/.test(u) && /\/sw\.js(\?|$)/.test(u)) {
+          callback({ cancel: true });
+        } else {
+          callback({});
+        }
+      });
+    } catch (_) { /* очистка кэша — необязательный шаг */ }
+  }
+  // Дожидаемся очистки, затем грузим страницу (иначе WebView успеет подхватить
+  // закэшированную старую версию app.js).
+  mainWindow.loadURL(APP_URL);
+
+  // Внешние ссылки (портал, документация) открываем во внешнем браузере.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
+
+  // Прямая печать этикеток БЕЗ окна предпросмотра. Когда страница вызывает
+  // window.print() (печать этикеток), Chromium генерирует событие "print" в
+  // webContents. Мы перехватываем его и печатаем молча (silent) на принтер:
+  //   * принтер — из конфига (printerName) или системный по умолчанию;
+  //   * размер листа — этикетка 58×58 мм (в микронах);
+  //   * без полей и без диалога — стикер уходит на печать сразу.
+  // Благодаря правилу @media print из styles.css в печать попадает только
+  // #printArea (макет этикетки), остальной интерфейс скрывается.
+  mainWindow.webContents.on("print", (event, wc) => {
+    // Если printerName НЕ задан — НЕ перехватываем печать: штатное нативное окно
+    // печати Electron появляется само, пользователь выбирает принтер.
+    if (!PRINTER_NAME) return;
+    // Задан printerName — печатаем молча прямо на него, без окна.
+    event.preventDefault();
+    const printOpts = {
+      silent: true,
+      printBackground: true,
+      margins: { marginType: "none" },
+      pageSize: { width: 58000, height: 58000 },
+    };
+    printOpts.printerName = PRINTER_NAME;
+    wc.print(printOpts, (ok, failureReason) => {
+      if (!ok) console.error("[print] Печать не удалась:", failureReason || "unknown");
+      else console.log("[print] Этикетки отправлены на печать.");
+    });
+  });
+
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+}
+
+// В режиме A окно открывает веб-версию КАК ОБЫЧНЫЙ БРАУЗЕР — никакой общий
+// access-токен НЕ подставляется. Шлюз Black Hole сам проводит вход каждого
+// пользователя: открывает экран входа в личную учётку, выдаёт сессию и
+// запоминает её в userData. Так каждый входит под своей учёткой, и
+// `Authorization: Bearer vibe_app_local_...` (который шлюз не принимает и
+// отвечает BH_LOGIN_REQUIRED / malformed) больше не отправляется.
+async function applyWebToken() {
+  // Ничего не подставляем в заголовки: полагаемся на шлюзовую сессию.
+  console.log("[web] Личный вход через шлюз: окно открывает веб-версию браузером, "
+    + "кто войдёт в учётку — тот и используется.");
+  if (useWebMode) {
+    // Дополнительная страховка: сбрасываем service worker / кэш partition до
+    // первой навигации, чтобы старый sw.js не перехватывал её как fetch/XHR и
+    // не оставлял чёрный экран. Session (вход) при этом сохраняется.
+    try {
+      const webSes = session.fromPartition("persist:biotime");
+      await webSes.clearStorageData({ storages: ["serviceworkers", "cachestorage", "indexdb"] });
+    } catch (_) { /* необязательно */ }
+  }
+}
+
+// Останавливает локальный сервер при завершении приложения.
+function stopServer() {
+  shuttingDown = true;
+  if (serverProc && !serverProc.killed) {
+    try {
+      serverProc.kill();
+    } catch { /* ignore */ }
+  }
+  serverProc = null;
+}
+
+// Запуск приложения.
+app.whenReady().then(async () => {
+  if (useWebMode) {
+    // Режим A: подключаемся к веб-версии напрямую (без локального сервера).
+    // Дожидаемся сброса service worker / кэша partition, чтобы первая навигация
+    // loadURL() не была перехвачена старым сервис-воркером и не ушла как XHR.
+    await applyWebToken();
+    await createWindow();
+  } else {
+    // Режим B: поднимаем локальную копию сервера.
+    if (!startServer()) {
+      app.quit();
+      return;
+    }
+    const up = await waitForServer();
+    if (!up) {
+      console.error("Local server did not start within the allowed time.");
+      app.quit();
+      return;
+    }
+    await createWindow();
+  }
+
+  // Автообновление: только в упакованном приложении (не в dev). Проверяем и,
+  // если есть новая версия, качаем её фоном и предлагаем установить.
+  if (app.isPackaged) {
+    setupAutoUpdater();
+  }
+
+// macOS: пересоздание окна при активации (стандартное поведение).
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+// ---- Автообновление приложения (только в упакованной сборке) ----
+// Проверяет наличие новой версии на GitHub Releases (поле "publish" в
+// package.json) и, если она есть, скачивает фоном, а при завершении загрузки
+// показывает пользователю предложение перезапустить приложение для установки.
+// Печать и интерфейс при этом не блокируются.
+function setupAutoUpdater() {
+  // Не показываем диалог обновления посреди работы водителя внезапно —
+  // просто тихо качаем новую версию в фоне.
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.autoDownload = true;      // качаем фоном
+  autoUpdater.autoInstallOnAppQuit = true; // установим при закрытии
+
+  autoUpdater.on("update-available", (info) => {
+    console.log("[updater] Найдено обновление:", info && info.version);
+  });
+  autoUpdater.on("update-not-available", () => {
+    console.log("[updater] Обновлений нет — текущая версия актуальна.");
+  });
+  autoUpdater.on("download-progress", (p) => {
+    // окно занято работой — только лог, без диалогов
+    if (p && Number.isFinite(p.percent)) {
+      console.log(`[updater] Загрузка: ${p.percent.toFixed(0)}%`);
+    }
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    console.log("[updater] Обновление скачано:", info && info.version);
+    // Предлагаем перезапуск системным диалогом (мягко, не прерывает работу).
+    showUpdateReady();
+  });
+  autoUpdater.on("error", (err) => {
+    console.error("[updater] Ошибка проверки обновления:", err && (err.message || err));
+  });
+
+  // Отложенная проверка: даём приложению и окну полностью подняться,
+  // затем проверяем обновления в фоне.
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((err) => {
+      console.error("[updater] checkForUpdates failed:", err && (err.message || err));
+    });
+  }, 5000);
+}
+
+// Показывает нативный диалог, что обновление скачано и готово к установке.
+// Окно грузит веб-версию по URL, поэтому уведомляем через системный диалог,
+// а не через IPC (веб-страница не слушает канал update-ready).
+function showUpdateReady() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const choice = dialog.showMessageBoxSync(mainWindow, {
+    type: "info",
+    title: "BIOTIME — доступно обновление",
+    message: "Скачана новая версия BIOTIME.",
+    detail: "Перезапустить приложение сейчас, чтобы установить обновление?",
+    buttons: ["Перезапустить сейчас", "Позже"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  try {
+    if (choice === 0) {
+      // Квитирование для autoUpdater и перезапуск с установкой.
+      autoUpdater.quitAndInstall(false, true);
+    }
+  } catch (err) {
+    console.error("[updater] Не удалось перезапустить для установки:", err && (err.message || err));
+  }
+}
+
+// Один экземпляр приложения — повторный запуск фокусирует окно.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
+// Чистый выход: убить сервер при закрытии всех окон.
+app.on("window-all-closed", () => {
+  stopServer();
+  if (process.platform !== "darwin") app.quit();
+});
+
+app.on("will-quit", stopServer);

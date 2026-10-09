@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Редизайн разделов «Маршрутизация» — превью</title>
+<style>
+  :root {
+    --bg:#0e1116; --panel:#151a21; --panel2:#1a2028;
+    --line:rgba(255,255,255,.1); --line2:rgba(255,255,255,.18);
+    --ink:#eef2f7; --ink-2:rgba(238,242,247,.62); --ink-3:rgba(238,242,247,.4);
+    --amber:#ffab38; --amber-soft:rgba(255,171,56,.16);
+    --green:#37d67a; --red:#ff6b6b; --blue:#7aa2ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(255,171,56,.09), transparent 60%),
+      radial-gradient(900px 500px at 0% 110%, rgba(122,162,255,.08), transparent 60%),
+      var(--bg);
+    color:var(--ink);font-family:ui-monospace,"Cascadia Code",Consolas,monospace;padding:28px 20px;}
+  .wrap{max-width:1120px;margin:0 auto}
+  .hint{color:var(--ink-2);font-size:12px;letter-spacing:.04em;margin-bottom:16px}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.01));
+    border:1px solid var(--line);border-radius:20px;padding:22px;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 24px 60px rgba(0,0,0,.4)}
+  .card-title{font-size:18px;margin:0 0 4px}
+  .card-sub{color:var(--ink-2);font-size:12px;margin:0 0 20px}
+
+  /* вкладки */
+  .drv-subtabs{display:flex;gap:8px;padding:6px;overflow-x:auto;scrollbar-width:thin;
+    border-radius:16px;background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));
+    border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.05);margin-bottom:18px}
+  .drv-subtab{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border:1px solid transparent;
+    border-radius:12px;background:transparent;color:var(--ink-2);font-size:13px;font-weight:600;
+    white-space:nowrap;cursor:pointer;transition:.15s}
+  .drv-subtab svg{opacity:.72;transition:.15s;flex:none}
+  .drv-subtab:hover{color:var(--ink);background:rgba(255,255,255,.06);transform:translateY(-1px)}
+  .drv-subtab.active{color:var(--amber);background:linear-gradient(180deg,rgba(255,171,56,.22),rgba(255,171,56,.1));
+    border-color:rgba(255,171,56,.45);box-shadow:inset 0 0 0 1px rgba(255,171,56,.16),0 6px 16px rgba(255,171,56,.16)}
+  .drv-subtab.active svg{opacity:1}
+
+  .panel{animation:in .25s ease}
+  @keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* общие элементы панелей */
+  .pane-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .pane-title{font-size:15px;margin:0;display:flex;align-items:center;gap:9px}
+  .pane-title .ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+    background:var(--amber-soft);color:var(--amber);border:1px solid rgba(255,171,56,.3)}
+  .pane-title .ic.s{background:rgba(122,162,255,.14);color:var(--blue);border-color:rgba(122,162,255,.3)}
+  .pane-title .ic.g{background:rgba(55,214,122,.14);color:var(--green);border-color:rgba(55,214,122,.3)}
+  .chip{margin-left:auto;font-size:11px;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.06);color:var(--ink-2)}
+  .btn{padding:8px 14px;border-radius:10px;border:1px solid var(--line2);background:rgba(255,255,255,.05);
+    color:var(--ink);font-size:12px;font-weight:600;cursor:pointer;transition:.15s}
+  .btn:hover{background:rgba(255,255,255,.1)}
+  .btn.amber{background:linear-gradient(180deg,rgba(255,171,56,.25),rgba(255,171,56,.12));border-color:rgba(255,171,56,.45);color:var(--amber)}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-size:10px;letter-spacing:.06em;color:var(--ink-3);text-transform:uppercase}
+  .input{background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:10px;color:var(--ink);
+    padding:9px 11px;font-size:12px;width:100%}
+  .form-grid{display:flex;gap:12px;flex-wrap:wrap;background:rgba(255,255,255,.02);
+    border:1px dashed var(--line);border-radius:14px;padding:14px;margin-bottom:16px}
+
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;color:var(--ink-3);font-weight:600;font-size:10px;text-transform:uppercase;
+    letter-spacing:.06em;padding:8px 10px;border-bottom:1px solid var(--line2)}
+  td{padding:10px;border-bottom:1px solid var(--line);color:var(--ink-2)}
+  tr:hover td{background:rgba(255,255,255,.02)}
+  .tbl{background:rgba(0,0,0,.18);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .code{font-weight:700;color:var(--ink);font-family:inherit}
+  .badge{padding:2px 9px;border-radius:999px;font-size:10px;font-weight:700}
+  .b-ok{background:rgba(55,214,122,.16);color:var(--green)}
+  .b-warn{background:var(--amber-soft);color:var(--amber)}
+  .b-bad{background:rgba(255,107,107,.16);color:var(--red)}
+  .b-soft{background:rgba(255,255,255,.07);color:var(--ink-2)}
+
+  .list{display:flex;flex-direction:column;gap:8px}
+  .row{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.02);
+    border:1px solid var(--line);border-radius:12px;padding:11px 13px;transition:.15s}
+  .row:hover{border-color:var(--line2);transform:translateX(2px)}
+  .row .grow{flex:1;min-width:0}
+  .row .t{font-size:12px;font-weight:600;color:var(--ink)}
+  .row .d{font-size:11px;color:var(--ink-3);margin-top:2px}
+  .avatar{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;
+    background:rgba(122,162,255,.16);color:var(--blue);font-weight:700;flex:none}
+
+  /* карта-заглушка трекинга */
+  .map{position:relative;height:180px;border-radius:14px;overflow:hidden;
+    background:
+      repeating-linear-gradient(0deg, rgba(255,255,255,.02) 0 1px, transparent 1px 40px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.02) 0 1px, transparent 1px 40px),
+      radial-gradient(circle at 30% 40%, rgba(122,162,255,.08), transparent 60%),
+      rgba(0,0,0,.25);
+    border:1px solid var(--line)}
+  .map .dot{position:absolute;width:12px;height:12px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 5px rgba(255,171,56,.2)}
+  .map .path{position:absolute;border:2px dashed rgba(255,171,56,.6);border-radius:50%}
+  .map-label{position:absolute;left:14px;top:12px;font-size:10px;color:var(--ink-2);background:rgba(0,0,0,.4);
+    padding:4px 9px;border-radius:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hint">Превью редизайна разделов «Маршрутизации» — кликайте по вкладкам. Данные вымышленные, для примера.</div>
+  <div class="card">
+    <h1 class="card-title">Маршрутизация</h1>
+    <p class="card-sub">Контрагенты, адреса и дневные маршруты для водителей</p>
+    <div class="drv-subtabs" id="tabs">
+      <button class="drv-subtab active" data-p="contr"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Контрагенты</button>
+      <button class="drv-subtab" data-p="route"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>Маршрут на день</button>
+      <button class="drv-subtab" data-p="routes"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1.4"/><circle cx="4" cy="12" r="1.4"/><circle cx="4" cy="18" r="1.4"/></svg>Маршруты</button>
+      <button class="drv-subtab" data-p="report"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 3 4-6"/></svg>Отчёт</button>
+      <button class="drv-subtab" data-p="location"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s7-5.3 7-11a7 7 0 1 0-14 0c0 5.7 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/></svg>Местоположение</button>
+      <button class="drv-subtab" data-p="1clog"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 9h8M8 13h5"/></svg>Логи 1С</button>
+      <button class="drv-subtab" data-p="tracking"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a9 9 0 0 1 9 9c0 5-4 9-9 9s-9-4-9-9a9 9 0 0 1 9-9z"/><path d="M3.6 9h16.8M9 3.2C11 7 11 17 9 20.8M15 3.2c-2 3.8-2 13.8 0 17.6"/></svg>Трекинг</button>
+    </div>
+
+    <!-- Контрагенты -->
+    <div class="panel" data-panel="contr">
+      <div class="pane-top"><h2 class="pane-title"><span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span>Контрагенты</h2><span class="chip">46 адресов</span></div>
+      <div class="form-grid">
+        <div class="field" style="flex:1;min-width:200px"><label>Контрагент</label><input class="input" value="ООО «АвтоФормула»" disabled></div>
+        <div class="field" style="flex:1;min-width:220px"><label>Адрес</label><input class="input" value="Москва, ул. Промышленная, 12" disabled></div>
+        <div class="field" style="flex:0 1 160px"><label>ИНН</label><input class="input" value="7733379914" disabled></div>
+        <div class="field" style="flex:0 1 140px"><label>Логин</label><input class="input" value="AUTOF" disabled></div>
+        <button class="btn amber">Добавить</button>
+      </div>
+      <div class="list">
+        <div class="row"><div class="avatar">АФ</div><div class="grow"><div class="t">ООО «АвтоФормула»</div><div class="d">Москва, ул. Промышленная, 12 · ИНН 7733379914</div></div><span class="badge b-soft">GLAV</span></div>
+        <div class="row"><div class="avatar">МТ</div><div class="grow"><div class="t">ООО «Мотор»</div><div class="d">Московская обл., Подольск, Литейная 3 · ИНН 5024001202</div></div><span class="badge b-soft">MOTOR</span></div>
+        <div class="row"><div class="avatar">СИ</div><div class="grow"><div class="t">ООО «Система»</div><div class="d">Москва, Каширское ш., 61 · ИНН 7715290480</div></div><span class="badge b-soft">SIST</span></div>
+      </div>
+    </div>
+
+    <!-- Маршрут на день -->
+    <div class="panel" data-panel="route" hidden>
+      <div class="pane-top"><h2 class="pane-title"><span class="ic s"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg></span>Маршрут на день</h2><span class="chip">8 октября</span><button class="btn amber">Сохранить маршрут</button></div>
+      <div class="form-grid">
+        <div class="field" style="flex:1;min-width:200px"><label>Водитель</label><input class="input" value="Андрей Забалуев" disabled></div>
+        <div class="field" style="flex:0 1 180px"><label>Дата</label><input class="input" value="08.10.2026" disabled></div>
+        <div class="field" style="flex:1;min-width:220px"><label>Базовый адрес</label><input class="input" value="Склад «Осн.» — ул. Почтовая 1" disabled></div>
+        <button class="btn">Построить</button>
+      </div>
+      <div class="list">
+        <div class="row"><span class="avatar" style="background:rgba(255,171,56,.2);color:var(--amber)">1</span><div class="grow"><div class="t">ООО «АвтоФормула»</div><div class="d">Москва, ул. Промышленная, 12 · 26 поз.</div></div><span class="badge b-warn">5 км</span></div>
+        <div class="row"><span class="avatar" style="background:rgba(55,214,122,.16);color:var(--green)">2</span><div class="grow"><div class="t">ГлобалАвто</div><div class="d">Москва, Волгоградский пр-т, 42 · 35 поз.</div></div><span class="badge b-warn">12 км</span></div>
+        <div class="row"><span class="avatar" style="background:rgba(122,162,255,.16);color:var(--blue)">3</span><div class="grow"><div class="t">ООО «Мотор»</div><div class="d">Подольск, Литейная 3 · 7 поз.</div></div><span class="badge b-warn">21 км</span></div>
+      </div>
+    </div>
+
+    <!-- Маршруты -->
+    <div class="panel" data-panel="routes" hidden>
+      <div class="pane-top"><h2 class="pane-title"><span class="ic g"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1.4"/><circle cx="4" cy="12" r="1.4"/><circle cx="4" cy="18" r="1.4"/></svg></span>Маршруты</h2><span class="chip">за сегодня: 4</span></div>
+      <div class="tbl"><table><thead><tr><th>Маршрут</th><th>Водитель</th><th>Точки</th><th>Статус</th><th>Дата</th></tr></thead>
+      <tbody>
+        <tr><td class="code">Маршрут №1</td><td>Андрей Забалуев</td><td>6</td><td><span class="badge b-ok">в пути</span></td><td>08.10</td></tr>
+        <tr><td class="code">Маршрут №2</td><td>Сергей Заводнов</td><td>4</td><td><span class="badge b-ok">начат</span></td><td>08.10</td></tr>
+        <tr><td class="code">Маршрут №3</td><td>Максим Глаголин</td><td>8</td><td><span class="badge b-bad">завершён</span></td><td>07.10</td></tr>
+      </tbody></table></div>
+    </div>
+
+    <!-- Отчёт -->
+    <div class="panel" data-panel="report" hidden>
+      <div class="pane-top"><h2 class="pane-title"><span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 3 4-6"/></svg></span>Отчёт</h2><button class="btn amber">Экспорт</button></div>
+      <div class="tbl"><table><thead><tr><th>Сотрудник</th><th>Маршрутов</th><th>Точек</th><th>Пройдено км</th><th>Просрочено</th></tr></thead>
+      <tbody>
+        <tr><td>Андрей Забалуев</td><td>12</td><td>54</td><td>312 км</td><td><span class="badge b-ok">0</span></td></tr>
+        <tr><td>Сергей Заводнов</td><td>9</td><td>37</td><td>204 км</td><td><span class="badge b-warn">2</span></td></tr>
+        <tr><td>Максим Глаголин</td><td>11</td><td>48</td><td>289 км</td><td><span class="badge b-ok">0</span></td></tr>
+      </tbody></table></div>
+    </div>
+
+    <!-- Местоположение (реальный вид: таблица треков водителя за день) -->
+    <div class="panel" data-panel="location" hidden>
+      <div class="pane-top"><h2 class="pane-title"><span class="ic s"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21s-7-5.6-7-11a7 7 0 1 1 14 0c0 5.4-7 11-7 11z"/><circle cx="12" cy="10" r="2.2"/></svg></span>Местоположение водителя</h2><span class="chip">Где находился за день</span></div>
+      <div class="form-grid" style="gap:10px;padding:12px 14px">
+        <div class="field" style="flex:0 1 190px"><label>Водитель</label><select class="input"><option>Максим Сорокин</option><option>Андрей Забалуев</option></select></div>
+        <div class="field" style="flex:0 1 140px"><label>Дата</label><input class="input" value="08.10.2026"></div>
+        <div class="field" style="flex:0 1 100px"><label>Шаг</label><select class="input"><option selected>15 мин</option><option>5 мин</option></select></div>
+        <button class="btn amber" style="align-self:flex-end">Показать</button>
+      </div>
+      <div style="border:1px solid var(--line);border-radius:14px;overflow:hidden">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:rgba(255,255,255,.02)">
+            <th style="text-align:left;color:var(--ink-3);font-size:10px;text-transform:uppercase;letter-spacing:.06em;padding:9px 12px;border-bottom:1px solid var(--line2)">Время</th>
+            <th style="text-align:left;color:var(--ink-3);font-size:10px;text-transform:uppercase;letter-spacing:.06em;padding:9px 12px;border-bottom:1px solid var(--line2)">Адрес</th>
+            <th style="text-align:right;color:var(--ink-3);font-size:10px;text-transform:uppercase;letter-spacing:.06em;padding:9px 12px;border-bottom:1px solid var(--line2)">Координаты</th>
+          </tr></thead>
+          <tbody>
+            <tr><td style="padding:9px 12px;border-bottom:1px solid var(--line);color:var(--ink);font-weight:600">12:15</td><td style="padding:9px 12px;border-bottom:1px solid var(--line);color:var(--ink-2)">Россия, Москва, пос. Птичное, центральная улица</td><td style="padding:9px 12px;border-bottom:1px solid var(--line);text-align:right;font-family:inherit;color:var(--ink-2)">55,52 / 37,22</td></tr>
+            <tr><td style="padding:9px 12px;border-bottom:1px solid var(--line);color:var(--ink);font-weight:600">12:30</td><td style="padding:9px 12px;border-bottom:1px solid var(--line);color:var(--ink-2)">Московская обл., Подольск, Литейная 3</td><td style="padding:9px 12px;border-bottom:1px solid var(--line);text-align:right;color:var(--ink-2)">55,44 / 37,54</td></tr>
+            <tr><td style="padding:9px 12px;color:var(--ink);font-weight:600">13:00</td><td style="padding:9px 12px;color:var(--ink-2)">Москва, Каширское ш., 61</td><td style="padding:9px 12px;text-align:right;color:var(--ink-2)">55,63 / 37,64</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Логи 1С -->
+    <div class="panel" data-panel="1clog" hidden>
+      <div class="pane-top"><h2 class="pane-title"><span class="ic g"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 9h8M8 13h5"/></svg></span>Логи 1С</h2><button class="btn">Пинг 1С</button></div>
+      <div class="tbl"><table><thead><tr><th>Время</th><th>ИНН</th><th>Логин</th><th>Отгрузка</th><th>Позиций</th><th>Результат</th></tr></thead>
+      <tbody>
+        <tr><td>08.10 14:09</td><td>7733379914</td><td>GLAV</td><td>08YT-00084531</td><td>35</td><td><span class="badge b-ok">забрано</span></td></tr>
+        <tr><td>08.10 13:51</td><td>5024001202</td><td>MOTOR</td><td>08YT-00084520</td><td>22</td><td><span class="badge b-ok">забрано</span></td></tr>
+        <tr><td>08.10 13:20</td><td>7715290480</td><td>SIST</td><td>—</td><td>—</td><td><span class="badge b-bad">ошибка</span></td></tr>
+      </tbody></table></div>
+    </div>
+
+    <!-- Трекинг -->
+    <div class="panel" data-panel="tracking" hidden>
+      <div class="pane-top"><h2 class="pane-title"><span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3a9 9 0 0 1 9 9c0 5-4 9-9 9s-9-4-9-9a9 9 0 0 1 9-9z"/><path d="M3.6 9h16.8M9 3.2C11 7 11 17 9 20.8M15 3.2c-2 3.8-2 13.8 0 17.6"/></svg></span>Трекинг</h2><span class="chip">3 водителя онлайн</span></div>
+      <div class="map">
+        <span class="map-label">Карта (пример · маркеры и маршрут)</span>
+        <div class="path" style="width:200px;height:120px;left:60px;top:26px"></div>
+        <div class="dot" style="left:118px;top:60px"></div>
+        <div class="dot" style="left:210px;top:90px"></div>
+        <div class="dot" style="left:300px;top:44px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  const tabs=document.getElementById("tabs");
+  const panels={};document.querySelectorAll(".panel").forEach(p=>{panels[p.dataset.panel]=p;});
+  tabs.querySelectorAll(".drv-subtab").forEach(b=>{
+    b.addEventListener("click",()=>{
+      tabs.querySelectorAll(".drv-subtab").forEach(x=>x.classList.remove("active"));
+      b.classList.add("active");
+      Object.values(panels).forEach(p=>p.hidden=true);
+      const t=panels[b.dataset.p]; if(t){t.hidden=false;t.style.animation="none";void t.offsetWidth;t.style.animation="";}
+    });
+  });
+</script>
+</body>
+</html>

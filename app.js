@@ -1,6 +1,17 @@
 (() => {
   "use strict";
 
+  // Слабый WebView/ТСД (APK на Android): включаем режим low-motion — отключаем
+  // тяжёлые CSS-переходы и анимации. При частых перерисовках (опросы каждые
+  // 5–10 с, секундные таймеры) это заметно снижает нагрузку на слабый CPU.
+  try {
+    const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+    if (typeof window !== "undefined" &&
+        (window.AndroidBridge || /Android/i.test(ua))) {
+      document.documentElement.classList.add("low-motion");
+    }
+  } catch (_) { /* не критично */ }
+
   // UI-only preference keeps living in localStorage (per browser). Everything else is server-side.
   const COLLAPSE_KEY = "biotime.collapsed";
   const FINISH_KEY = "biotime.finishKey";
@@ -630,12 +641,21 @@
     const s = await api("/api/state");
     state.me = s.me;
     state.isAdmin = !!s.me.isAdmin;
+    updateAdminUsersVisibility && updateAdminUsersVisibility();
     state.isModerator = !!s.isModerator;
     state.isDriver = !!s.me.isDriver;
     state.isLoader = !!s.me.isLoader;
     state.canEditStatus = !!s.canEditStatus;
     state.canManageShipment = !!s.canManageShipment;
-    state.canSeeShipment = !!s.canSeeShipment;
+    state.canSeeLogs = !!s.canSeeLogs;
+    state.canSeeReports = !!s.canSeeReports;
+    state.canSeeSverki = !!s.canSeeSverki;
+    state.canSeeProcenka = !!s.canSeeProcenka;
+    state.canSeeParser = !!s.canSeeParser;
+    // Latch: если раздел «Отгрузка» уже был доступен — держим его на этом устройстве,
+    // чтобы транзиентный `false` при перезапросе состояния (напр. при нескольких
+    // открытых устройствах) не прятал вкладку до перезагрузки страницы.
+    state.canSeeShipment = state.canSeeShipment === true ? true : !!s.canSeeShipment;
     state.staff = s.staff || [];
     state.groups = s.groups || [];
     state.days = s.days || {};
@@ -653,6 +673,7 @@
     state.admins = s.admins || [];
     state.blocked = s.blocked || [];
     state.params = Object.assign({ showOverHours: true, showOverSum: true, showDrivers: false, adminSeeRoutes: false, driverSeeRoutes: false, showShipment: false, shipmentGroups: [], allowDriverStartWithoutShipment: false, allowFinishUnloadIncomplete: false, allowDriverReorderPoints: false, allowWaybill: false, routeDeleteCode: "", scanLogLimit: 30000, multiplier: 1, multFrom: null, multTo: null, multGroups: [], multRules: [] }, s.params || {});
+    state.params.allowWaybill = true; // сборка с расходными накладными теперь всегда включена
     state.norm = (s.norm != null && s.norm >= 0 && s.norm <= 24) ? s.norm : 8;
     // Единый опорный пояс (смещение сервера от UTC в минутах). Если сервер его
     // не прислал (старая версия) — фолбэк на локальный пояс устройства.
@@ -682,7 +703,22 @@
       const prevDays = JSON.stringify(state.days || {});
       const prevSegments = JSON.stringify(state.segments);
       state.days = s.days || {};
+      state.salaryMonth = s.salaryMonth || {};
       state.dayKey = dayKeyOf(Date.now());
+      // САМОЛЕЧЕНИЕ «завершённого» дня (актуально для APK): в localStorage может
+      // остаться старый маркер «день завершён» (biotime.finishKey = сегодня) ещё со
+      // старой сессии/устаревшей сборки. Он заставлял refreshToday сразу ставить
+      // день finished — через веб это не видно (чистый localStorage браузера), а в
+      // APK WebView «день завершался сразу при входе». Если сервер считает день НЕ
+      // завершённым — устаревший finishKey убираем, чтобы день был открыт.
+      if (state.finishKey === state.dayKey) {
+        const e = state.days[state.dayKey] && state.days[state.dayKey].byEmployee
+          && state.days[state.dayKey].byEmployee[state.me.id];
+        if (!(e && e.finished)) {
+          state.finishKey = null;
+          try { localStorage.removeItem(FINISH_KEY); } catch { /* приватный режим */ }
+        }
+      }
       const serverSegs = daySegments(state.dayKey, state.me.id);
       // Protect the live running timer from a stale / lagging server copy. When the
       // user is actively working (open local segment) but the server read does not
@@ -824,6 +860,7 @@
   function startLocationReporting() {
     if (locWatchId != null || !navigator.geolocation) return;
     let lastSent = 0;
+    let _gpsSpeedSmooth = null; // скользящее среднее GPS-скорости
     const activeRouteId = () => {
       const a = (myRoutesCache || []).find((r) => r.progress && r.progress.status === "active");
       return a ? a.id : "";
@@ -833,6 +870,15 @@
       if (now - lastSent < 15000) return;
       lastSent = now;
       const rid = activeRouteId();
+      // Реальная скорость от GPS-приёмника (м/с → км/ч) + сглаживание скользящим
+      // средним (эффект «варианта 3» — акселерометр-эквивалент: убирает рывки/скачки).
+      let gpsSpeedKmh = (pos && pos.coords && Number.isFinite(pos.coords.speed))
+        ? Math.round((pos.coords.speed * 3.6) * 10) / 10
+        : null;
+      if (gpsSpeedKmh != null) {
+        _gpsSpeedSmooth = (_gpsSpeedSmooth == null) ? gpsSpeedKmh : Math.round(((_gpsSpeedSmooth * 0.6) + (gpsSpeedKmh * 0.4)) * 10) / 10;
+        gpsSpeedKmh = _gpsSpeedSmooth;
+      }
       // Передаём активный маршрут нативному Android-трекеру (WebView-обёртка):
       // тот шлёт координаты на /api/drivers/location в фоне вместе с routeId.
       try {
@@ -846,6 +892,10 @@
           lat: pos.coords.latitude,
           lon: pos.coords.longitude,
           routeId: rid,
+          speed: gpsSpeedKmh,
+          // Реальное время устройства водителя + поправка (мин), заданная в настройке
+          // устройства, — компенсирует рассинхрон часов ТСД/сканера.
+          ts: Date.now() + deviceTimeOffsetMs(),
         }),
       }).catch(() => {});
     };
@@ -857,6 +907,12 @@
   }
 
   // ------------- Helpers -------------
+  // Поправка времени устройства (мин), заданная в профиле: компенсирует рассинхрон
+  // часов ТСД/сканера — прибавляется к метке геолокации.
+  function deviceTimeOffsetMs() {
+    try { return (Number(localStorage.getItem("biotime_time_offset_min")) || 0) * 60000; } catch { return 0; }
+  }
+
   function dayKeyOf(ts) {
     const d = new Date(ts);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -928,6 +984,34 @@
   function activeExtraBonus() {
     const st = staffById(state.me.id);
     return (st && st.extraBonus != null) ? st.extraBonus : 0;
+  }
+  // Значения оклада/премии/надбавки КОНКРЕТНОГО месяца (per-month): если для
+  // месяца есть явная запись (state.salaryMonth) — берём её, иначе «текущее».
+  // Благодаря этому правка оклада/надбавки за один месяц не переписывает другие.
+  function staffPayForMonth(st, monthKey) {
+    const map = state.salaryMonth && state.salaryMonth[st.id];
+    const overlay = (m) => ({
+      salary: (m && m.salary != null) ? m.salary : st.salary,
+      bonus: (m && m.bonus != null) ? m.bonus : st.bonus,
+      extraBonus: (m && m.extraBonus != null) ? m.extraBonus : st.extraBonus,
+    });
+    if (map) {
+      if (map[monthKey]) return overlay(map[monthKey]);
+      for (const mKey of Object.keys(map).sort().reverse()) {
+        if (String(mKey) < String(monthKey)) return overlay(map[mKey]);
+      }
+    }
+    // Нет записи и нет предшествующей: для ПРОШЕДШЕГО месяца не берём «текущие»
+    // значения (октябрьская надбавка не должна попадать в сентябрь). Оклад — как
+    // есть, премию/надбавку без явной месячной записи показываем 0.
+    if (String(monthKey) < currentMonthKey()) {
+      return { salary: (st && st.salary != null) ? st.salary : 50000, bonus: 0, extraBonus: 0 };
+    }
+    return overlay(null);
+  }
+  function currentMonthKey() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   }
 
   // Мемоизация «текущего» множителя для таймера: пересчитывается редко (смена
@@ -1119,6 +1203,21 @@
       if (state.segments[i].kind === "work" && state.segments[i].end == null) return state.segments[i];
     }
     return null;
+  }
+
+  // ------------- Боксы: человекочитаемое отображение -------------
+  // В интерфейсе и на стикере показываем «Бокс N» (N — номер из кода этикетки,
+  // последний сегмент «...-N»). Настоящий «кракозябристый» код при этом хранится в
+  // QR и используется при сканировании. Если номер выделить не получается —
+  // показываем сам код как есть.
+  function waybillBoxNumber(box) {
+    const s = String(box == null ? "" : box).trim();
+    const m = /\-(\d+)$/.exec(s);
+    return m ? m[1] : "";
+  }
+  function waybillBoxName(box) {
+    const n = waybillBoxNumber(box);
+    return n ? "Бокс " + n : (String(box == null ? "" : box) || "");
   }
 
   // ------------- Formatting -------------
@@ -1314,8 +1413,13 @@
       }
       // Приоритет часов: есть таймер → используем его (ручная явка игнорируется).
       // Нет таймера → если проставлена ручная явка «Я», считаем день за 8 часов.
+      // Больничный (Б) и отпуск (ОТ) — оплачиваемое отсутствие: засчитываем как
+      // явку (8 ч/день), как это делает карточка «Расчёт ЗП» (employeeSalaryCalc).
+      // Иначе в личном кабинете недобор получался больше, чем в табеле админа,
+      // и вся переработка списывалась в недобор (к оплате 00:00).
+      const isPaidIdle = status === "Б" || status === "ОТ";
       const hasTimer = closedReal > 0;
-      const workEff = hasTimer ? work : (status === "Я" ? RATE_BASE_HOURS * 3600000 : 0);
+      const workEff = hasTimer ? work : (status === "Я" || isPaidIdle ? RATE_BASE_HOURS * 3600000 : 0);
       if (workEff <= 0) continue;
       const over = hasTimer ? Math.max(0, closedReal - normDayMs) : 0;
       totalWorkMs += workEff;
@@ -1324,9 +1428,13 @@
     }
     const bizDays = businessDaysInMonth(year, m0);
     const rateMonthMs = bizDays * RATE_BASE_HOURS * 3600000;
-    const salary = activeSalary();
-    const bonus = activeBonus();
-    const extraBonus = activeExtraBonus();
+    // Оклад/премия/надбавка — по-МЕСЯЧНО (может отличаться от текущего значения).
+    const mKeyPay = year + "-" + String(m0 + 1).padStart(2, "0");
+    const meSt0 = staffById(state.me.id);
+    const pay = meSt0 ? staffPayForMonth(meSt0, mKeyPay) : {};
+    const salary = (pay.salary != null) ? pay.salary : activeSalary();
+    const bonus = (pay.bonus != null) ? pay.bonus : activeBonus();
+    const extraBonus = (pay.extraBonus != null) ? pay.extraBonus : activeExtraBonus();
     const ratePerHour = rateMonthMs > 0 ? salary / (rateMonthMs / 3600000) : 0;
     // Автокомпенсация: месячная норма = 22 рабочих дня × 8 ч = 176 ч
     // (по ТК — стандартная норма полного месяца; обед 1 ч не входит в часовую
@@ -1371,33 +1479,55 @@
     settingsBtn: $("settingsBtn"), settingsModal: $("settingsModal"), toast: $("toast"), tabs: $("tabs"),
     userChip: $("userChip"), userName: $("userName"), userAvatar: $("userAvatar"),
     accountModal: $("accountModal"), accountClose: $("accountClose"),
-    accountLogout: $("accountLogout"), authScreen: $("authScreen"), authLoginBtn: $("authLoginBtn"), authHint: $("authHint"),
+    accountLogout: $("accountLogout"), accountLogBtn: $("accountLogBtn"), authScreen: $("authScreen"), authLoginBtn: $("authLoginBtn"), authHint: $("authHint"),
+    appLogModal: $("appLogModal"), appLogArea: $("appLogArea"), appLogClose: $("appLogClose"), appLogCopy: $("appLogCopy"), appLogClear: $("appLogClear"),
     acctName: $("acctName"), acctId: $("acctId"), acctIdKind: $("acctIdKind"), acctRole: $("acctRole"), acctAdmin: $("acctAdmin"), acctVersion: $("acctVersion"), acctReason: $("acctReason"),
     monthList: $("monthList"), calSalaryChip: $("calSalaryChip"),
     pageTimer: $("page-timer"), pageCalendar: $("page-calendar"), pageLive: $("page-live"), pageReport: $("page-report"), pageDrivers: $("page-drivers"),
     pageMyRoutes: $("page-myroutes"), myroutesList: $("myroutesList"), myroutesCount: $("myroutesCount"), myroutesDateFilter: $("myroutesDateFilter"),
     pageShipment: $("page-shipment"),
     pageScanlog: $("page-scanlog"),
+    pageNotfound: $("page-notfound"), pageLogs: $("page-logs"), pageReports: $("page-reports"), reportsHost: $("reportsHost"),
+    notfoundModal: $("notfoundModal"), notfoundModalBody: $("notfoundModalBody"), notfoundModalClose: $("notfoundModalClose"),
+    salaryModal: $("salaryModal"), salaryModalBody: $("salaryModalBody"), salaryModalClose: $("salaryModalClose"),
+    reportsModal: $("reportsModal"), reportsModalFrame: $("reportsModalFrame"), reportsModalClose: $("reportsModalClose"),
+    sverkiModal: $("sverkiModal"), sverkiModalFrame: $("sverkiModalFrame"), sverkiModalClose: $("sverkiModalClose"),
+    procenkaModal: $("procenkaModal"), procenkaModalFrame: $("procenkaModalFrame"), procenkaModalClose: $("procenkaModalClose"),
+    parserModal: $("parserModal"), parserModalFrame: $("parserModalFrame"), parserModalClose: $("parserModalClose"),
+    nfdModal: $("notfoundDetailModal"), nfdModalBody: $("nfdModalBody"), nfdModalClose: $("nfdModalClose"),
+    nfTabs: $("nfTabs"),
+    nfSummary: $("nfSummary"),
     scanlogTable: $("scanlogTable"), scanlogEmpty: $("scanlogEmpty"), scanlogFilters: $("scanlogFilters"),
     scanlogSearch: $("scanlogSearch"), scanlogDateLoad: $("scanlogDateLoad"), scanlogDateUnload: $("scanlogDateUnload"),
     scanlogLoadDateField: $("scanlogLoadDateField"), scanlogUnloadDateField: $("scanlogUnloadDateField"),
+    scanlogWaybillDateField: $("scanlogWaybillDateField"), scanlogDateWaybill: $("scanlogDateWaybill"),
+    scanlogWbToggle: $("scanlogWbToggle"), scanlogWbAll: $("scanlogWbAll"), scanlogWbMissing: $("scanlogWbMissing"),
+    notfoundTable: $("notfoundTable"), nfSearch: $("nfSearch"), nfRefresh: $("nfRefresh"), nfDeleteSelected: $("nfDeleteSelected"), nfdDate: $("nfdDate"),
     pageDelivery: $("page-delivery"), deliveryList: $("deliveryList"), deliveryDateFilter: $("deliveryDateFilter"), deliveryCount: $("deliveryCount"),
-    driverClientName: $("driverClientName"), driverClientAddress: $("driverClientAddress"),
+    driverClientName: $("driverClientName"), driverClientAddress: $("driverClientAddress"), driverClientInn: $("driverClientInn"), driverClientLogin: $("driverClientLogin"),
     driverClientsForm: $("driverClientsForm"), driverClientsBlock: $("driverClientsBlock"), driverClientsToggle: $("driverClientsToggle"), driverRouteForm: $("driverRouteForm"),
     addDriverClientBtn: $("addDriverClientBtn"), driverClientsList: $("driverClientsList"), driverClientsCount: $("driverClientsCount"),
     bundleToggle: $("bundleToggle"), bundlePanel: $("bundlePanel"), bundlePickList: $("bundlePickList"),
     bundleAddress: $("bundleAddress"), bundleName: $("bundleName"), bundleCreateBtn: $("bundleCreateBtn"), bundleList: $("bundleList"),
     driverRouteDate: $("driverRouteDate"), driverRouteDriver: $("driverRouteDriver"), driverRouteName: $("driverRouteName"), driverRouteClients: $("driverRouteClients"),
+    selfPickupChk: $("selfPickupChk"),
     routeClientSearch: $("routeClientSearch"), routeClientOptions: $("routeClientOptions"), routeClientSelected: $("routeClientSelected"),
     routeStepCount: $("routeStepCount"), routeSelectedCount: $("routeSelectedCount"), routeTotalPill: $("routeTotalPill"),
-    subtabContr: $("subtab-contr"), subtabRoute: $("subtab-route"), subtabRoutes: $("subtab-routes"), subtabReport: $("subtab-report"), subtabTracking: $("subtab-tracking"),
-    routesubContr: $("routesub-contr"), routesubRoute: $("routesub-route"), routesubRoutes: $("routesub-routes"), routesubReport: $("routesub-report"), routesubTracking: $("routesub-tracking"),
+    subtabContr: $("subtab-contr"), subtabRoute: $("subtab-route"), subtabRoutes: $("subtab-routes"), subtabReport: $("subtab-report"), subtabLocation: $("subtab-location"), subtab1cLog: $("subtab-1clog"), subtabTracking: $("subtab-tracking"),
+    routesubContr: $("routesub-contr"), routesubRoute: $("routesub-route"), routesubRoutes: $("routesub-routes"), routesubReport: $("routesub-report"), routesubLocation: $("routesub-location"), routesub1cLog: $("routesub-1clog"), routesubTracking: $("routesub-tracking"),
+    oneclogBody: $("oneclogBody"), oneclogStub: $("oneclogStub"),
+    locationDriverSelect: $("locationDriverSelect"), locationDateFilter: $("locationDateFilter"), locationGoBtn: $("locationGoBtn"),
+    locationInterval: $("locationInterval"),
+    locationBody: $("locationBody"), locationTableWrap: $("locationTableWrap"), locationStub: $("locationStub"),
+    onecPingRow: $("onecPingRow"), onecPingBtn: $("onecPingBtn"), onecPingRes: $("onecPingRes"),
+    acctTzRow: $("acctTzRow"), acctTzOffset: $("acctTzOffset"),
     driverMap: $("driverMap"), driverMapCount: $("driverMapCount"), driverMapHint: $("driverMapHint"), driverTrackDate: $("driverTrackDate"), driverTrackStatus: $("driverTrackStatus"),
     motionDateFilter: $("motionDateFilter"),
     motionDrivers: $("motionDrivers"), motionKm: $("motionKm"), motionMove: $("motionMove"), motionLunch: $("motionLunch"),
     motionTable: $("motionTable"), motionBody: $("motionBody"),
     netBanner: $("netBanner"), netBannerText: $("netBannerText"), netRetry: $("netRetry"),
     saveDriverRouteBtn: $("saveDriverRouteBtn"), driverRoutesList: $("driverRoutesList"), driverRoutesCount: $("driverRoutesCount"),
+    fillFrom1CBtn: $("fillFrom1CBtn"),
     routeWaybillsBlock: $("routeWaybillsBlock"), routeWaybillsList: $("routeWaybillsList"),
     autoRouteBtn: $("autoRouteBtn"), routeBaseAddress: $("routeBaseAddress"), autoRouteStatus: $("autoRouteStatus"),
     driverRoutesDateFilter: $("driverRoutesDateFilter"),
@@ -1409,14 +1539,18 @@
     salaryCalcMonth: $("salaryCalcMonth"), salaryCalcList: $("salaryCalcList"),
     statusModal: $("statusModal"), statusClose: $("statusClose"), statusWho: $("statusWho"),
     statusOptions: $("statusOptions"), statusClear: $("statusClear"),
+    statusReopen: $("statusReopen"), statusReopenClear: $("statusReopenClear"),
     routeConfirmModal: $("routeConfirmModal"), routeConfirmText: $("routeConfirmText"),
     routeConfirmOk: $("routeConfirmOk"), routeConfirmCancel: $("routeConfirmCancel"), routeConfirmClose: $("routeConfirmClose"),
     updateModal: $("updateModal"), updateText: $("updateText"),
     updateClose: $("updateClose"), updateLater: $("updateLater"), updateDownload: $("updateDownload"),
     postponeModal: $("postponeModal"), postponeClose: $("postponeClose"), postponeTiles: $("postponeTiles"),
     adminClose: $("adminClose"), adminTabs: $("adminTabs"),
-    staffCountNote: $("staffCountNote"), newStaffName: $("newStaffName"), addStaffBtn: $("addStaffBtn"),
-    staffList: $("staffList"), salariesBody: $("salariesBody"),
+    staffCountNote: $("staffCountNote"), addStaffBtn: $("addStaffBtn"),
+    addStaffModal: $("addStaffModal"), addStaffClose: $("addStaffClose"), addStaffCancel: $("addStaffCancel"), addStaffSubmit: $("addStaffSubmit"),
+    asName: $("asName"), asGroup: $("asGroup"), asLogin: $("asLogin"), asPass: $("asPass"),
+    staffList: $("staffList"), salariesBody: $("salariesBody"), salMonth: $("salMonth"),
+    scansLogList: $("scansLogList"), scansLogRefresh: $("scansLogRefresh"), scansOnlyFailed: $("scansOnlyFailed"), scansLogClear: $("scansLogClear"), scansDate: $("scansDate"), scansAllDays: $("scansAllDays"), scansSummary: $("scansSummary"),
     todayList: $("todayList"), todayDateNote: $("todayDateNote"),
     groupsList: $("groupsList"), newGroupName: $("newGroupName"), addGroupBtn: $("addGroupBtn"),
     clearLogBtn: $("clearLogBtn"), logTabs: $("logTabs"), logList: $("logList"), adminsList: $("adminsList"),
@@ -1425,10 +1559,21 @@
     adminSeeRoutes: $("adminSeeRoutes"), driverSeeRoutes: $("driverSeeRoutes"),
     showOverHoursGroups: $("showOverHoursGroups"), showOverSumGroups: $("showOverSumGroups"),
     showShipment: $("showShipment"), shipmentGroups: $("shipmentGroups"),
+    notfoundUsersGroups: $("notfoundUsersGroups"),
+    logUsersGroups: $("logUsersGroups"), logUsersSearch: $("logUsersSearch"), logUsersCount: $("logUsersCount"),
+    reportsUsersGroups: $("reportsUsersGroups"), reportsUsersSearch: $("reportsUsersSearch"), reportsUsersCount: $("reportsUsersCount"),
+    reportsSectionsWrap: $("reportsSectionsWrap"),
+    notfoundTab: $("notfoundTab"),
+    reportsTab: $("reportsTab"),
+    sverkiTab: $("sverkiTab"),
+    sverkiUsersGroups: $("sverkiUsersGroups"), sverkiUsersSearch: $("sverkiUsersSearch"), sverkiUsersCount: $("sverkiUsersCount"),
+    procenkaTab: $("procenkaTab"),
+    procenkaUsersGroups: $("procenkaUsersGroups"), procenkaUsersSearch: $("procenkaUsersSearch"), procenkaUsersCount: $("procenkaUsersCount"),
+    parserTab: $("parserTab"),
+    parserUsersGroups: $("parserUsersGroups"), parserUsersSearch: $("parserUsersSearch"), parserUsersCount: $("parserUsersCount"),
     allowDriverStartWithoutShipment: $("allowDriverStartWithoutShipment"),
     allowFinishUnloadIncomplete: $("allowFinishUnloadIncomplete"),
     allowDriverReorderPoints: $("allowDriverReorderPoints"),
-    allowWaybill: $("allowWaybill"),
     routeDeleteCode: $("routeDeleteCode"),
     scanLogLimit: $("scanLogLimit"),
     routeDeleteModal: $("routeDeleteModal"), routeDeleteInput: $("routeDeleteInput"),
@@ -1439,6 +1584,7 @@
     driverScanOk: $("driverScanOk"),
     shipmentListActive: $("shipmentListActive"), shipmentListDone: $("shipmentListDone"),
     shipmentSubtabActive: $("shipmentSubtabActive"), shipmentSubtabDone: $("shipmentSubtabDone"),
+    shipmentDateFilter: $("shipmentDateFilter"), shipmentDateClear: $("shipmentDateClear"),
     printModal: $("printModal"), printClientsTiles: $("printClientsTiles"),
     printPlacesQty: $("printPlacesQty"), printConfirm: $("printConfirm"),
     printCancel: $("printCancel"), printClose: $("printClose"), printArea: $("printArea"),
@@ -1458,13 +1604,36 @@
     multRuleFormTitle: $("multRuleFormTitle"), multRuleList: $("multRuleList"),
     goToMultiplierTab: $("goToMultiplierTab"),
     waybillModal: $("waybillModal"), waybillTitle: $("waybillTitle"),
-    waybillClose: $("waybillClose"), waybillFile: $("waybillFile"),
-    waybillStatus: $("waybillStatus"), waybillArtInput: $("waybillArtInput"),
+    waybillClose: $("waybillClose"), waybillFile: $("waybillFile"), waybillRemoveMissing: $("waybillRemoveMissing"), waybillCleanBtn: $("waybillCleanBtn"),
+    waybillStatus: $("waybillStatus"), waybillFlash: $("waybillFlash"), waybillArtInput: $("waybillArtInput"),
     waybillQtyInput: $("waybillQtyInput"),
     waybillScanBtn: $("waybillScanBtn"), waybillList: $("waybillList"),
     waybillFinishBtn: $("waybillFinishBtn"),
+    waybillMissBtn: $("waybillMissBtn"), waybillManualBtn: $("waybillManualBtn"),
+    waybillListModal: $("waybillListModal"), waybillListModalBody: $("waybillListModalBody"),
+    waybillListModalClose: $("waybillListModalClose"), waybillListModalTitle: $("waybillListModalTitle"),
+    waybillModalAssembleBtn: $("waybillModalAssembleBtn"), waybillModalMissBtn: $("waybillModalMissBtn"),
+    waybillModalQty: $("waybillModalQty"),
+    waybillQtyAskModal: $("waybillQtyAskModal"), waybillQtyAsk: $("waybillQtyAsk"),
+    waybillQtyAskOk: $("waybillQtyAskOk"), waybillQtyAskCancel: $("waybillQtyAskCancel"),
+    waybillSharedQtyModal: $("waybillSharedQtyModal"), waybillSharedQty: $("waybillSharedQty"), waybillSharedQtyInfo: $("waybillSharedQtyInfo"),
+    waybillSharedQtyOk: $("waybillSharedQtyOk"), waybillSharedQtyCancel: $("waybillSharedQtyCancel"),
     waybillBoxCur: $("waybillBoxCur"), waybillNewBoxBtn: $("waybillNewBoxBtn"),
-    waybillDelBoxSel: $("waybillDelBoxSel"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
+    waybillBoxQty: $("waybillBoxQty"),
+    boxDetailsModal: $("boxDetailsModal"), boxDetailsList: $("boxDetailsList"),
+    boxDetailsTitle: $("boxDetailsTitle"), boxDetailsClose: $("boxDetailsClose"),
+    authBtn: $("authBtn"), authModal: null, authClose: $("authClose"),
+    authLogin: $("authLogin"), authPassword: $("authPassword"), authSubmitBtn: $("authSubmitBtn"),
+    authHint: $("authHint"), authTitle: $("authTitle"),
+    authLoginView: $("authLoginView"), authFirstView: $("authFirstView"),
+    authFirstLink: $("authFirstLink"), authBackLogin: $("authBackLogin"),
+    authName: $("authName"), authFindBtn: $("authFindBtn"), authResults: $("authResults"),
+    authSetView: $("authSetView"), authNewLogin: $("authNewLogin"), authNewPass: $("authNewPass"),
+    authSetBtn: $("authSetBtn"), authFirstHint: $("authFirstHint"),
+    authUserChip: $("userChip"), authUserName: $("userName"), authAvatar: $("userAvatar"),
+    authGate: $("authGate"),
+    cpBox: $("cpBox"), cpCurrent: $("cpCurrent"), cpNew: $("cpNew"), cpSubmit: $("cpSubmit"), cpHint: $("cpHint"),
+    waybillDelBoxList: $("waybillDelBoxList"), waybillDelBoxBtn: $("waybillDelBoxBtn"),
     updateVersionCode: $("updateVersionCode"), updateVersionName: $("updateVersionName"),
     updateApkUrl: $("updateApkUrl"), updateNotes: $("updateNotes"),
     backupExportBtn: $("backupExportBtn"), backupAppBtn: $("backupAppBtn"), backupImportFile: $("backupImportFile"), backupStatus: $("backupStatus"),
@@ -1484,6 +1653,77 @@
     el.toast.classList.add("show");
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.toast.classList.remove("show"), 2600);
+  }
+
+  // ------------- Диагностический журнал на устройстве -------------
+  // Пишет события сканера выгрузки, ответы нативного моста и ошибки JS в
+  // localStorage, чтобы водитель мог открыть «Учётная запись» -> «Логи» и
+  // посмотреть/скопировать, когда кнопка «Сканировать выгрузку» молчит.
+  // В APK (WebView) console-логи в Logcat видны только через adb, а этот буфер
+  // доступен прямо на устройстве.
+  const APP_LOG_KEY = "biotime_app_log";
+  const APP_LOG_LIMIT = 400;
+  function readAppLog() {
+    try {
+      const raw = localStorage.getItem(APP_LOG_KEY);
+      const a = raw ? JSON.parse(raw) : [];
+      return Array.isArray(a) ? a : [];
+    } catch { return []; }
+  }
+  function logApp(level, msg) {
+    let line;
+    try {
+      const t = new Date().toISOString().slice(11, 19);
+      line = "[" + t + "] " + String(level).toUpperCase() + " " + String(msg);
+    } catch {
+      line = String(msg);
+    }
+    try {
+      if (console && typeof console[level] === "function") console[level](msg);
+      else if (console && console.log) console.log(msg);
+    } catch { /* ignore */ }
+    try {
+      const a = readAppLog();
+      a.push(line);
+      if (a.length > APP_LOG_LIMIT) a.splice(0, a.length - APP_LOG_LIMIT);
+      localStorage.setItem(APP_LOG_KEY, JSON.stringify(a));
+    } catch { /* ignore */ }
+    return line;
+  }
+  function openAppLogModal() {
+    if (el.appLogArea) el.appLogArea.value = readAppLog().join("\n");
+    if (el.appLogModal) { try { el.appLogModal.showModal(); } catch { /* уже открыта */ } }
+  }
+  function closeAppLogModal() {
+    if (el.appLogModal && el.appLogModal.open) { try { el.appLogModal.close(); } catch { /* ignore */ } }
+  }
+  function copyAppLog() {
+    const txt = readAppLog().join("\n");
+    if (!txt) { toast("Логи пока пусты"); return; }
+    const done = () => toast("Логи скопированы");
+    const fail = () => {
+      // Фолбэк без Clipboard API (старый WebView): выделяем и говорим водителю.
+      if (el.appLogArea) { try { el.appLogArea.focus(); el.appLogArea.select(); } catch { /* ignore */ } }
+      toast("Выделите текст и скопируйте вручную");
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(done).catch(fail);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = txt;
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        ta.remove();
+        ok ? done() : fail();
+      }
+    } catch { fail(); }
+  }
+  function clearAppLog() {
+    try { localStorage.removeItem(APP_LOG_KEY); } catch { /* ignore */ }
+    if (el.appLogArea) el.appLogArea.value = "";
+    toast("Логи очищены");
   }
 
   // ------------- Actions -------------
@@ -1506,13 +1746,22 @@
   }
 
   async function startWork() {
-    if (state.phase === "working") return;
-    // A finished day is closed: you cannot start (or "resume") it again today.
-    // The "Начать работу" button returns automatically on the next day (idle).
-    if (state.phase === "finished") {
+    if (state.phase === "working" && openSegment()) return;
+    // День завершён на сервере — сегодня начать нельзя. НО если админ «Открыл» день
+    // (сбросил завершение: finished=false), день снова рабочий — разрешаем старт,
+    // сняв устаревший локальный маркер завершения (иначе фоновый poll/refreshToday
+    // видел бы «завершено» и закрывал свежезапущенный таймер через пару минут).
+    const sd = state.days[state.dayKey]
+      && state.days[state.dayKey].byEmployee
+      && state.days[state.dayKey].byEmployee[state.me.id];
+    if (state.phase === "finished" && sd && sd.finished) {
       toast("Рабочий день уже завершён — сегодня начать нельзя");
       return;
     }
+    // Снимаем локальный маркер завершения и открываем день на сервере.
+    state.finishKey = null;
+    try { localStorage.removeItem(FINISH_KEY); } catch { /* приватный режим */ }
+    if (sd) sd.finished = false;
     state.segments.push({ start: Date.now(), end: null, kind: "work", id: uid() });
     state.phase = "working";
     writeOpenSegCache(); // помним начало дня локально — переживёт сворачивание/потерю сети
@@ -2090,17 +2339,20 @@
       const seeHoursVal = showOver && (st.seeOverHours !== false);
       const seeSumVal = showOver && (st.seeOverSum !== false);
       // Money for overtime, from the employee's salary rate (salary / month norm).
+      // Оклад/премия/надбавка — по-МЕСЯЧНО (не трогаем соседние месяцы).
+      const mKeyPay0 = y + "-" + String(m0 + 1).padStart(2, "0");
+      const pay0 = staffPayForMonth(st, mKeyPay0);
       const normMonthH = bizDays * RATE_BASE_HOURS;
-      const staffRate = st.salary != null && st.salary > 0 && normMonthH > 0 ? st.salary / normMonthH : 0;
+      const staffRate = pay0.salary != null && pay0.salary > 0 && normMonthH > 0 ? pay0.salary / normMonthH : 0;
       const overEarn = seeSumVal
         ? overByDay.reduce((acc, od) => acc + (od.overDay / 3600000) * staffRate * multiplierForDate(od.dKey, st.id), 0)
         : 0;
       return {
         id: st.id,
         name: st.name,
-        salary: st.salary != null ? st.salary : 0,
-        bonus: st.bonus != null ? st.bonus : 0,
-        extraBonus: st.extraBonus != null ? st.extraBonus : 0,
+        salary: pay0.salary != null ? pay0.salary : 0,
+        bonus: pay0.bonus != null ? pay0.bonus : 0,
+        extraBonus: pay0.extraBonus != null ? pay0.extraBonus : 0,
         workMs: dayWork,
         dayStatus: dayStatus,
         workDays: Object.keys(dayWork).filter((d) => dayWork[d] > 0).map(Number),
@@ -2262,6 +2514,39 @@
     groupsArr.forEach((grp) => {
       bodyParts.push(groupHead(grp.name, grp.members.length));
       grp.members.forEach((r) => { bodyParts.push(rowHtml(r, gi)); gi += 1; });
+      // Итог по группе (по окладу/премии/переработке/сумме) — «шапка как у Итого».
+      let gSalary = 0, gBonus = 0, gOverMs = 0, gOverEarn = 0;
+      grp.members.forEach((r) => {
+        gSalary += (r.salary ? r.salary : 0) + (r.extraBonus ? r.extraBonus : 0);
+        gBonus += r.bonus ? r.bonus : 0;
+        gOverMs += r.overMs ? r.overMs : 0;
+        gOverEarn += r.overEarn ? r.overEarn : 0;
+      });
+      let gDay = "";
+      for (let d = 1; d <= daysInMonth; d += 1) {
+        const cnt = grp.members.filter((r) => r.dayStatus[d] === "Я").length;
+        const dow = new Date(y, m0, d).getDay();
+        gDay += `<td class="num ${(dow === 0 || dow === 6) ? "dow-we" : ""}">${cnt || ""}</td>`;
+      }
+      bodyParts.push(anySeeHours
+        ? `<tr class="report-group-subtotal">
+            <td class="report-idx-head"></td>
+            <td class="report-total-key">Итого · ${escapeHtml(grp.name)}</td>
+            ${gDay}
+            <td class="num report-total-val">${fmtMoney(gSalary)}</td>
+            <td class="num report-total-val">${fmtMoney(gBonus)}</td>
+            <td></td>
+            <td class="num report-over">${gOverMs > 0 ? fmtHours(gOverMs) : "—"}</td>
+            <td class="num report-total-val">${fmtMoney(gOverEarn)}</td>
+          </tr>`
+        : `<tr class="report-group-subtotal">
+            <td class="report-idx-head"></td>
+            <td class="report-total-key">Итого · ${escapeHtml(grp.name)}</td>
+            ${gDay}
+            <td class="num report-total-val">${fmtMoney(gSalary)}</td>
+            <td class="num report-total-val">${fmtMoney(gBonus)}</td>
+            <td></td>
+          </tr>`);
     });
     if (ungroupedRows.length) {
       if (groupsArr.length) bodyParts.push(groupHead("Без группы", ungroupedRows.length));
@@ -2430,7 +2715,11 @@
 
   // Расчёт зарплаты одного сотрудника за месяц (year, m0) с автокомпенсацией.
   function employeeSalaryCalc(staffId, year, m0) {
-    const normDayMs = state.norm * 3600000;
+    // Рабочая норма дня — 8 ч: именно эти часы показываем как «отработано».
+    const workedNormMs = RATE_BASE_HOURS * 3600000;
+    // Порог переработки — та же норма дня, что в табеле (state.norm, обычно 9 ч =
+    // 8 рабочих + 1 ч обед). Переработка идёт СВЕРХ этой нормы, а не сверх 8 ч.
+    const overNormMs = (state.norm > 0 ? state.norm : RATE_BASE_HOURS) * 3600000;
     const daysInMonth = new Date(year, m0 + 1, 0).getDate();
     const bizDays = businessDaysInMonth(year, m0);
     // Месячная норма для автокомпенсации = рабочие дни × 8 ч рабочего времени.
@@ -2458,9 +2747,8 @@
       // Выходной день: если таймер был запущен и завершён (есть закрытый сегмент)
       // — ставим явку независимо от часов и ВЕСЬ интервал пишем в подработку.
       if (!isBiz && hasTimer) {
-        totalWorkMs += closedReal;
         totalOverMs += closedReal;
-        rows.push({ day: d, date: new Date(year, m0, d), work: closedReal, over: closedReal });
+        rows.push({ day: d, date: new Date(year, m0, d), work: 0, over: closedReal });
         continue;
       }
       // Приоритет: есть таймер → используем его (ручная явка игнорируется).
@@ -2469,20 +2757,26 @@
       const work = hasTimer ? reportDayWorkMs(staffId, key)
         : (st === "Я" || isPaidIdle ? RATE_BASE_HOURS * 3600000 : 0);
       if (work <= 0) continue;
-      const over = hasTimer ? Math.max(0, closedReal - normDayMs) : 0;
-      totalWorkMs += work;
+      // Переработка дня = рабочее время сверх 8 ч нормы.
+      const over = hasTimer ? Math.max(0, work - overNormMs) : 0;
+      // «Факт» (Отработано) = базовая норма до 8 ч, БЕЗ переработки.
+      totalWorkMs += Math.min(work, workedNormMs);
       if (over > 0) totalOverMs += over;
       if (isPaidIdle && !hasTimer) { paidIdleDays += 1; paidIdleMs += work; }
-      rows.push({ day: d, date: new Date(year, m0, d), work, over, st: isPaidIdle ? st : undefined });
+      rows.push({ day: d, date: new Date(year, m0, d), work: Math.min(work, workedNormMs), over, st: isPaidIdle ? st : undefined });
     }
     const deficitMs = Math.max(0, normMonthMs - totalWorkMs);
     // Автокомпенсация применяется ТОЛЬКО после завершения месяца: пока месяц
     // идёт, показываем полную переработку, а недобор ещё может закрыться.
     const isComplete = new Date(year, m0 + 1, 1) <= new Date();
     const st = state.staff.find((x) => String(x.id) === String(staffId));
-    const salary = st && st.salary != null ? st.salary : 50000;
-    const extraBonus = st && st.extraBonus != null ? st.extraBonus : 0;
-    const bonus = st && st.bonus != null ? st.bonus : 0;
+    // Значения оклада/премии/надбавки — по-МЕСЯЧНО (не из «текущего» st.*), чтобы
+    // надбавка, установленная в октябре, не попадала в сентябрьский «Расчёт ЗП».
+    const mKey0 = year + "-" + String(m0 + 1).padStart(2, "0");
+    const payM = st ? staffPayForMonth(st, mKey0) : {};
+    const salary = (payM.salary != null) ? payM.salary : (st ? 50000 : 0);
+    const extraBonus = (payM.extraBonus != null) ? payM.extraBonus : 0;
+    const bonus = (payM.bonus != null) ? payM.bonus : 0;
     const rateMonthH = bizDays * RATE_BASE_HOURS;
     const ratePerHour = rateMonthH > 0 ? salary / rateMonthH : 0;
     // Деньги за переработку с ПО-ДНЕВНЫМ множителем (повышенный тариф только в
@@ -2678,6 +2972,11 @@
     if (name === "myroutes" && !((state.isAdmin && state.params.adminSeeRoutes) || (state.isDriver && state.params.driverSeeRoutes))) name = "calendar";
     // Отгрузка — по группам.
     if (name === "shipment" && !shipmentVisible()) name = "calendar";
+    if (name === "notfound" && !canSeeNotfound()) name = "calendar";
+    // Вкладка «Логи» — админ, модератор или сотрудник из «Параметры → Доступ к “Логи”».
+    if (name === "logs" && !canSeeLogs()) name = "calendar";
+    // Вкладка «Отчёты» — админ, модератор или сотрудник из «Параметры → Доступ к “Отчёты”».
+    if (name === "reports" && !canSeeReports()) name = "calendar";
     el.pageTimer.hidden = name !== "timer";
     el.pageCalendar.hidden = name !== "calendar";
     el.pageLive.hidden = name !== "live";
@@ -2686,7 +2985,12 @@
     el.pageMyRoutes.hidden = name !== "myroutes";
     el.pageShipment.hidden = name !== "shipment";
     el.pageScanlog.hidden = name !== "scanlog";
+    el.pageNotfound.hidden = name !== "notfound";
+    if (el.pageLogs) el.pageLogs.hidden = name !== "logs";
+    if (el.pageReports) el.pageReports.hidden = name !== "reports";
     el.pageDelivery.hidden = name !== "delivery";
+    if (name === "logs") renderScansLog();
+    if (name === "reports") renderReports();
     document.body.classList.remove("report-full", "live-full");
     // Отчёт — полноширинный на больших дисплеях: табель занимает весь экран.
     if (name === "report") document.body.classList.add("report-full");
@@ -2696,25 +3000,67 @@
     if (name === "report") switchReportSubtab(state.reportSubtab || "timesheet");
     if (name === "drivers") renderDrivers();
     if (name === "myroutes") { renderMyRoutes(); startMyRoutesPolling(); } else { stopMyRoutesPolling(); }
-    if (name === "shipment") { loadShipments(); startShipmentPolling(); } else { stopShipmentPolling(); }
+    if (name === "shipment") {
+      loadShipments(); // обновит кэш и (раз раздел теперь виден) отрисует
+      if (typeof renderShipments === "function") renderShipments(); // гарантированно свежий список из кэша
+      startShipmentPolling();
+    } else { stopShipmentPolling(); }
     if (name === "scanlog") loadScanLog();
+    if (name === "notfound") renderNotfound();
     if (name === "delivery") renderDeliveries();
   }
 
   // ---- Журнал сканирования мест (раздел «Журнал», виден всем) ----
   let scanlogFilterAction = "load"; // "load" (Погрузка) | "unload" (Выгрузка)
+  let scanlogDateWaybill = dayKeyOf(Date.now()); // календарь «Сборка за дату»
+  let scanlogMissingOnly = false; // под-вкладка «Не собрано» (только не найденные)
+  // Состояние раскрытия дерева журнала сборки. Загружается из localStorage ОДИН раз
+  // при старте и в сессии живёт в памяти (единственный источник) — перерисовки его
+  // не сбрасывают, и раскрытый бокс не сворачивается сам.
+  let _wblogState = (() => {
+    try {
+      const raw = localStorage.getItem("biotime_wblog_open");
+      if (raw) return Object.assign({ clients: {}, boxes: {} }, JSON.parse(raw) || {});
+    } catch { /* ignore */ }
+    return { clients: {}, boxes: {} };
+  })();
+  // Позиция нажатия пальцем/мышью перед возможным скроллом: чтобы жест прокрутки,
+  // начавшийся на заголовке бокса, не превращался браузером в «клик» и не схлопывал
+  // развёрнутый бокс на тач-устройствах (ТСД/телефон).
+  let _wbPointerStart = null;
   let scanlogSearchText = "";   // подстрока для поиска по клиенту
   let scanlogDateLoad = "";     // "YYYY-MM-DD" — дата отгрузки (погрузки); "" = все
   let scanlogDateUnload = "";   // "YYYY-MM-DD" — дата выгрузки; "" = все
   let scanlogEntries = [];      // последние записи, полученные с сервера
+  // Сигнатура последней отрисованной выборки журнала. Автообновление (раз в
+  // несколько секунд) НЕ перерисовывает дерево, если данные не изменились —
+  // иначе полная перерисовка DOM сбрасывала прокрутку и раскрытые боксы,
+  // и пользователь видел, что «бокс сам через пару секунд схлопнулся».
+  let scanlogSignature = null;
+  const scanlogSig = (entries) => {
+    const parts = [];
+    for (const e of entries) {
+      parts.push([
+        e && e.ts, e && e.action, e && e.client, e && e.bundleName, e && e.box,
+        e && e.code, e && e.name, e && e.missing ? 1 : 0, e && e.userName, e && e.qty,
+      ].join("|"));
+    }
+    parts.sort();
+    return parts.join("\n");
+  };
   async function loadScanLog() {
     try {
       const q = scanlogFilterAction ? `?action=${encodeURIComponent(scanlogFilterAction)}` : "";
       const r = await api(`/api/scanlog${q}`);
-      scanlogEntries = r.entries || [];
+      const fresh = r.entries || [];
+      const sig = scanlogSig(fresh);
+      if (sig === scanlogSignature) return; // данных не изменилось — DOM не трогаем
+      scanlogSignature = sig;
+      scanlogEntries = fresh;
       renderScanLog(applyScanlogFilters(scanlogEntries));
     } catch {
       scanlogEntries = [];
+      scanlogSignature = null;
       renderScanLog([]);
     }
   }
@@ -2725,10 +3071,11 @@
     const q = scanlogSearchText.trim().toLowerCase();
     const isWaybill = scanlogFilterAction === "waybill";
     const activeAction = isWaybill ? "waybill" : (scanlogFilterAction === "unload" ? "unload" : "load");
-    const activeDate = isWaybill ? null : (activeAction === "load" ? scanlogDateLoad : scanlogDateUnload);
+    const activeDate = isWaybill ? scanlogDateWaybill : (activeAction === "load" ? scanlogDateLoad : scanlogDateUnload);
     return entries.filter((e) => {
       if (q && !String(e.client || "").toLowerCase().includes(q)) return false;
       if (e.action !== activeAction) return false;
+      if (isWaybill && scanlogMissingOnly && !e.missing) return false;
       if (activeDate && e.ts && dayKeyOf(e.ts) !== activeDate) return false;
       return true;
     });
@@ -2749,23 +3096,91 @@
     const isWaybillView = scanlogFilterAction === "waybill";
     // Русские названия статусов мест в журнале (для складской погрузки/выгрузки).
     const STATUS_RU = { created: "Создана", loaded: "Отгружен", delivered: "Выгружен" };
-    const rows = entries.map((e) => {
-      if (isWaybillView) {
+    if (isWaybillView) {
+      // Журнал «Сборка»: дерево Клиент → Бокс → Детали, чтобы не обрезать колонку «Бокс».
+      const byClient = new Map();
+      const clientMeta = new Map();
+      for (const e of entries) {
+        const key = String(e.bundleName || (e.client && e.client.trim()) || "Без клиента");
+        let meta = clientMeta.get(key);
+        if (!meta) {
+          meta = {
+            title: e.bundleName || e.client || "Без клиента",
+            sub: (e.bundleName && Array.isArray(e.members) && e.members.length) ? e.members.join(", ") : "",
+            who: new Set(), // кто собирал (имена операторов)
+          };
+          clientMeta.set(key, meta);
+        }
+        if (e.userName) meta.who.add(String(e.userName));
+        if (!byClient.has(key)) byClient.set(key, new Map());
+        const box = String(e.box || "без бокса");
+        if (!byClient.get(key).has(box)) byClient.get(key).set(box, []);
+        byClient.get(key).get(box).push(e);
+      }
+      function detailRow(e) {
         const miss = !!e.missing;
-        return `<tr class="${miss ? "scanlog-missing" : "scanlog-ok"}">
-          <td class="scanlog-time" data-label="Дата/время">${e.ts ? fmtDateTimeSec(e.ts) : "—"}</td>
-          <td class="scanlog-user" data-label="Оператор">${escapeHtml(e.userName || "—")}</td>
-          <td data-label="Клиент">${escapeHtml(e.client || "—")}</td>
-          <td class="scanlog-code" data-label="Позиция">${escapeHtml(e.code || "—")}</td>
-          <td data-label="Наименование">${escapeHtml(e.name || "—")}</td>
-          <td class="scanlog-box" data-label="Бокс">${escapeHtml(e.box || "—")}</td>
-          <td data-label="Кол-во">${miss ? "не найдено" : (Number(e.qty) || "—")}</td>
+        // Партстикер позиции — сокращённой формой, как в сборке (ведущие нули урезаем).
+        const ps = (e && e.partsticker) ? escapeHtml(shortPs(e.partsticker)) : "";
+        // Детали в виде таблицы по столбцам: Время | ID(партстикер) | Артикул | Наименование | Кол-во/статус.
+        return `<tr class="wb-log-detail${miss ? " wb-missing" : ""}">
+          <td class="wbl-time">${e.ts ? fmtDateTimeSec(e.ts) : ""}</td>
+          <td class="wbl-ps">${ps || "—"}</td>
+          <td class="wbl-art">${escapeHtml(e.code || "—")}</td>
+          <td class="wbl-name">${escapeHtml(e.name || "")}</td>
+          <td class="wbl-qty">${miss ? "не найдено" : (Number(e.qty) || "—")}</td>
         </tr>`;
       }
+      let html = "";
+      let ci = 0;
+      for (const [client, boxes] of byClient) {
+        const meta = clientMeta.get(client) || { title: client, sub: "" };
+        const clientOpen = !!_wblogState.clients[client];
+        html += `<div class="wb-log-client" data-wlc="${ci}" data-wlc-key="${escapeHtml(client)}">
+          <span class="wbl-arrow">${clientOpen ? "▾" : "▸"}</span>
+          <span class="wbl-client">${escapeHtml(meta.title)}${meta.sub ? `<span class="wbl-client-sub"> · ${escapeHtml(meta.sub)}</span>` : ""}</span>
+          <span class="wbl-count">(${[...boxes.values()].reduce((s, a) => {
+            const seen2 = new Set(); let c = 0;
+            for (const e of a) { const k = String(e.code || "—"); if (!seen2.has(k)) { seen2.add(k); c++; } }
+            return s + c;
+          }, 0)} поз.)</span>
+          <span class="wbl-who">Собирал: ${escapeHtml([...(meta.who || [])].filter(Boolean).join(", ") || "—")}</span>
+        </div>`;
+        html += `<div class="wb-log-boxes" id="wbox-${ci}"${clientOpen ? "" : " hidden"}>`;
+        const boxKeys = [...boxes.keys()].sort((a, b) => {
+          const na = parseInt(waybillBoxNumber(a), 10) || 0;
+          const nb = parseInt(waybillBoxNumber(b), 10) || 0;
+          return na !== nb ? na - nb : String(a).localeCompare(String(b));
+        });
+        let bi = 0;
+        for (const box of boxKeys) {
+          const dets = boxes.get(box);
+          const uniq = [];
+          const seenP = new Set();
+          for (const e of dets) {
+            const k = String(e.code || "—");
+            if (!seenP.has(k)) { seenP.add(k); uniq.push(e); }
+          }
+          const boxOpen = !!_wblogState.boxes[client + "::" + box];
+          html += `<div class="wb-log-box" data-wlb="${ci}-${bi}" data-wlb-key="${escapeHtml(box)}">
+            <span class="wbl-arrow">${boxOpen ? "▾" : "▸"}</span>
+            <span class="wbl-box">Бокс: ${escapeHtml(waybillBoxName(box))}</span>
+            <span class="wbl-count">(${uniq.length})</span>
+          </div>`;
+          html += `<div class="wb-log-details wb-tbl" id="wdet-${ci}-${bi}"${boxOpen ? "" : " hidden"}><table><thead><tr>
+            <th class="wbl-time">Время</th><th class="wbl-ps">ID</th><th class="wbl-art">Артикул</th>
+            <th class="wbl-name">Наименование</th><th class="wbl-qty">Кол-во</th>
+          </tr></thead><tbody>${uniq.map(detailRow).join("")}</tbody></table></div>`;
+          bi++;
+        }
+        html += `</div>`;
+        ci++;
+      }
+      el.scanlogTable.innerHTML = `<tbody><tr><td colspan="7"><div class="wb-log">${html}</div></td></tr></tbody>`;
+      return;
+    }
+    const rows = entries.map((e) => {
       const isLoad = e.action === "load";
       const actionLabel = isLoad ? "Погрузка" : (e.action === "unload" ? "Выгрузка" : (e.action || "—"));
-      // Номер места и общее число мест: «1 из 2». Общее число приходит с сервера
-      // (totalPlaces); если его нет — показываем только номер места.
       const placeLabel = e.place != null
         ? (e.totalPlaces != null ? `${e.place} из ${e.totalPlaces}` : String(e.place))
         : "—";
@@ -2802,6 +3217,9 @@
     updateRouteStepCount();
     loadDriverClients();
     loadDriverRoutes();
+    // Восстанавливаем набранный черновик маршрута после подгрузки контрагентов
+    // (id выбранных клиентов должны уже быть в кэше, чтобы выбор применился).
+    setTimeout(restoreRouteDraft, 60);
   }
 
   // Внутренняя вкладка маршрутизации: «Контрагенты» / «Маршрут на день» / «Маршруты».
@@ -2811,6 +3229,8 @@
       { key: "route", btn: el.subtabRoute, panel: el.routesubRoute },
       { key: "routes", btn: el.subtabRoutes, panel: el.routesubRoutes },
       { key: "report", btn: el.subtabReport, panel: el.routesubReport },
+      { key: "location", btn: el.subtabLocation, panel: el.routesubLocation },
+      { key: "1clog", btn: el.subtab1cLog, panel: el.routesub1cLog },
       { key: "tracking", btn: el.subtabTracking, panel: el.routesubTracking },
     ];
     for (const t of tabs) {
@@ -2828,6 +3248,166 @@
     if (name === "tracking") loadDriverMap();
     // Дашборд движения водителей грузим при каждом открытии «Отчёта».
     if (name === "report") loadMotionReport();
+    // Отчёт «Местоположение»: наполняем список водителей и грузим данные.
+    if (name === "location") {
+      populateLocationDrivers();
+      loadLocationReport();
+    }
+    if (name === "1clog") loadOnecLog();
+  }
+
+  // Логи заборов из 1С (что и когда забирали).
+  // Сигнатура журнала: при опросе не перерисовываем список, если данные не
+  // изменились — иначе вручную раскрытая строка состава сворачивалась бы
+  // каждые 10 секунд автообновлением.
+  let onecLogLastSig = null;
+  async function loadOnecLog() {
+    if (!el.oneclogBody) return;
+    let rows = [];
+    try { const r = await api("/api/1c/log"); rows = (r && Array.isArray(r.rows)) ? r.rows : []; } catch { rows = []; }
+    const sig = JSON.stringify(rows.map((e) => [String(e && e.ts), String(e && e.inn), String(e && e.login), String(e && e.ok), String(e && e.number), String(e && e.posCount)]));
+    if (sig === onecLogLastSig) return; // данные не изменились — не трогаем DOM
+    onecLogLastSig = sig;
+    const body = el.oneclogBody;
+    body.innerHTML = "";
+    if (el.oneclogStub) el.oneclogStub.style.display = rows.length ? "none" : "";
+    if (!rows.length) return;
+    const frag = document.createDocumentFragment();
+    rows.slice().reverse().forEach((e) => {
+      const tr = document.createElement("tr");
+      const ok = !!(e && e.ok);
+      const time = e && e.ts ? new Date(Number(e.ts) + (3 * 3600000)).toISOString().slice(11, 19) : "—";
+      const result = ok ? ("Хорошо · " + ((e.reason) || "забрано")) : ("Пусто · " + ((e && e.reason) || "нет данных"));
+      // Дополнительные пояснения: имя контрагента и человеко-читаемая причина
+      // (пусто по ИНН, HTTP-код 1С, ошибка сети и т.п.), чтобы было видно, по
+      // какому клиенту 1С ничего не нашла.
+      const detail = [];
+      if (e && e.clientName) detail.push("клиент: " + String(e.clientName));
+      if (e && e.message) detail.push(String(e.message));
+      const resultFull = detail.length ? (result + " (" + detail.join("; ") + ")") : result;
+      const items = (e && Array.isArray(e.items) && e.items.length) ? e.items : [];
+      // Успешная запись с составом — клик раскрывает список позиций.
+      if (items.length) {
+        tr.style.cursor = "pointer";
+        tr.addEventListener("click", () => {
+          const sub = tr.nextElementSibling;
+          if (sub) sub.hidden = !sub.hidden;
+        });
+      }
+      tr.innerHTML =
+        `<td>${escapeHtml(time)}</td>` +
+        `<td>${escapeHtml((e && e.inn) || "—")}</td>` +
+        `<td>${escapeHtml((e && e.login) || "—")}</td>` +
+        `<td>${escapeHtml((e && e.number) || "—")}</td>` +
+        `<td>${escapeHtml(String((e && e.posCount) != null ? e.posCount : "—"))}</td>` +
+        `<td>${escapeHtml(resultFull)}</td>` +
+        `<td style="width:38px;text-align:center;vertical-align:middle;padding:4px 6px"><button type="button" class="icon-btn" data-1clog-del="${escapeHtml(String((e && e.id) || ""))}" title="Удалить из лога (позволит забрать накладную повторно)">✕</button></td>`;
+      frag.appendChild(tr);
+      const sub = document.createElement("tr");
+      sub.hidden = true;
+      const itemRows = items.map((it) =>
+        `<tr>
+           <td style="padding:3px 10px;white-space:nowrap">${escapeHtml(shortPs((it && it.partsticker) || "") || "—")}</td>
+           <td style="padding:3px 10px;white-space:nowrap">${escapeHtml(String((it && it.art) || ""))}</td>
+           <td style="padding:3px 10px">${escapeHtml(String((it && it.name) || ""))}</td>
+           <td style="padding:3px 10px;text-align:right;white-space:nowrap">${escapeHtml(String((it && it.qty) != null ? it.qty : ""))} шт</td>
+         </tr>`
+      ).join("");
+      sub.innerHTML = `<td colspan="7"><table class="oneclog-items" style="width:100%;border-collapse:collapse;font-size:12px;color:var(--text-2,#aaa)">
+        <thead><tr style="font-size:10px;color:#777;text-transform:uppercase;letter-spacing:.04em">
+          <th style="padding:3px 10px;text-align:left">Партстикер</th>
+          <th style="padding:3px 10px;text-align:left">Артикул</th>
+          <th style="padding:3px 10px;text-align:left">Наименование</th>
+          <th style="padding:3px 10px;text-align:right">Кол-во</th>
+        </tr></thead>
+        <tbody>${itemRows || ""}</tbody>
+      </table></td>`;
+      frag.appendChild(sub);
+    });
+    body.appendChild(frag);
+    // Удаление записи из журнала (снимает защиту от дублей — можно забрать заново).
+    body.querySelectorAll("[data-1clog-del]").forEach((btn) => {
+      btn.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        const id = btn.getAttribute("data-1clog-del");
+        if (!id) return;
+        try { await api("/api/1c/log/delete", { method: "POST", body: JSON.stringify({ id }) }); } catch { /* ignore */ }
+        onecLogLastSig = null;
+        loadOnecLog();
+      });
+    });
+  }
+
+  // Наполняет селект «Водитель» в отчёте «Местоположение» (из state.staff).
+  function populateLocationDrivers() {
+    if (!el.locationDriverSelect) return;
+    const prev = el.locationDriverSelect.value;
+    // Только пользователи группы «Водители» (как в селекте водителя маршрута);
+    // остальные сотрудники не выводятся.
+    const driverGroup = (Array.isArray(state.groups) ? state.groups : [])
+      .find((g) => /водител/i.test(String(g.name || "")));
+    const ids = driverGroup && Array.isArray(driverGroup.memberIds) ? new Set(driverGroup.memberIds) : null;
+    const allStaff = Array.isArray(state.staff) ? state.staff : [];
+    const staff = ids ? allStaff.filter((s) => ids.has(String(s.id))) : allStaff;
+    const options = staff
+      .slice()
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
+      .map((s) => `<option value="${escapeHtml(String(s.id))}">${escapeHtml(s.name || "—")}</option>`)
+      .join("");
+    el.locationDriverSelect.innerHTML = options || '<option value="">—</option>';
+    if (prev && [...el.locationDriverSelect.options].some((o) => o.value === prev)) {
+      el.locationDriverSelect.value = prev;
+    }
+    if (!el.locationDateFilter) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(el.locationDateFilter.value || "")) {
+      el.locationDateFilter.value = dayKeyOf(Date.now());
+    }
+    // Восстанавливаем сохранённый интервал (по умолчанию 15 мин).
+    if (el.locationInterval) {
+      try {
+        const saved = localStorage.getItem("biotime_location_interval");
+        if (saved && [...el.locationInterval.options].some((o) => o.value === saved)) {
+          el.locationInterval.value = saved;
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  // Отчёт «Местоположение»: где был водитель за календарный день, шаг 15 минут.
+  async function loadLocationReport() {
+    if (!el.locationBody || !el.locationDriverSelect) return;
+    if (el.locationStub) el.locationStub.style.display = "none";
+    const driverId = el.locationDriverSelect.value;
+    const date = el.locationDateFilter ? el.locationDateFilter.value : "";
+    if (!driverId || !/^\d{4}-\d{2}-\d{2}$/.test(date || "")) {
+      if (el.locationTableWrap) el.locationTableWrap.hidden = true;
+      if (el.locationStub) el.locationStub.style.display = "";
+      return;
+    }
+    const interval = el.locationInterval ? (Number(el.locationInterval.value) || 15) : 15;
+    let data = null;
+    try {
+      data = await api("/api/drivers/location-report?date=" + encodeURIComponent(date) +
+        "&driverId=" + encodeURIComponent(driverId) +
+        "&interval=" + encodeURIComponent(String(interval)));
+    } catch { data = null; }
+    const rows = (data && data.rows) || [];
+    const body = el.locationBody;
+    body.innerHTML = "";
+    if (el.locationStub) el.locationStub.style.display = rows.length ? "none" : "";
+    if (el.locationTableWrap) el.locationTableWrap.hidden = !rows.length;
+    if (!rows.length) return;
+    const frag = document.createDocumentFragment();
+    rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      const speedTxt = (r.speed != null) ? `${r.speed} км/ч` : "—";
+      tr.innerHTML =
+        `<td>${escapeHtml(r.time || "—")}</td>` +
+        `<td>${r.address ? escapeHtml(r.address) : "—"}</td>` +
+        `<td>${escapeHtml(speedTxt)}</td>`;
+      frag.appendChild(tr);
+    });
+    body.appendChild(frag);
   }
 
   // ---- Живая карта водителей (вкладка «Отчёт» маршрутизации) ----
@@ -2837,93 +3417,52 @@
   let driverMap = null;
   let driverMapScript = null;
   let driverMapTimer = null;
-  // Предзагрузка API Яндекс.Карт: config + обещание загрузки скрипта. Запускаем
-  // заранее (при старте для тех, кому доступна карта), чтобы вкладка «Трекинг»
-  // открывалась сразу, а не ждала скачивания API с серверов Яндекса.
   let yandexPreload = null;
   async function ensureYandexPreloaded() {
     if (yandexPreload && yandexPreload.promise) return;
     let cfg = {};
     try { cfg = await api("/api/maps/config"); } catch { /* конфиг недоступен */ }
     const key = (cfg && cfg.yandexKey) || "";
-    // loadYandexMaps отклоняет промис, если ключа нет — это ловится в loadDriverMap.
     const promise = loadYandexMaps(key);
     yandexPreload = { cfg, promise };
-    // Не допускаем unhandled-rejection на фоне, если предзагрузку никто не ждёт.
     promise.catch(() => {});
   }
   function preloadYandexMaps() { ensureYandexPreloaded().catch(() => {}); }
-  // Показываем/фокусируем камеру на всех точках ТОЛЬКО при первой загрузке.
-  // При последующих автообновлениях не двигаем камеру, чтобы не «сбрасывать»
-  // зум/позицию, которые выбрал пользователь (иначе увеличение откатывается
-  // на мировой масштаб у каждого тика автообновления).
   let driverMapFitted = false;
-  // ---- Инкрементальная отрисовка (для скорости) ----
-  // Метки живых водителей (зелёные) перерисовываются «на лету» — без полного
-  // removeAll() карты, который дорого стоит при множестве точек. Статичный слой
-  // (базы, клиенты, полилинии пройденного пути) строится заново только когда
-  // реально изменился набор/статус маршрутов (сигнатура) или прошёл таймер.
   let driverLiveMarks = {};      // id водителя -> ymaps.Placemark (зелёная метка)
-  let driverRoutesSig = "";      // сигнатура последнего отрисованного набора маршрутов
-  let driverRoutesReady = false; // статичный слой построен хотя бы раз
-  let driverRoutesDueAt = 0;     // когда снова перезагрузить маршруты (для смены статусов)
+  let driverRoutesSig = "";
+  let driverRoutesReady = false;
+  let driverRoutesDueAt = 0;
   let driverRoutesLoading = false;
-  // ---- Слой реального GPS-следа (обновляется редко, отдельно от позиций) ----
   let driverTrackCollection = null;   // GeoObjectCollection следа; создаётся с картой
-  let driverTracksDueAt = 0;          // когда снова перезагрузить треки
-  let driverTracks = {};              // id водителя -> [[lat, lon], ...]
-  let driverTracksSnapped = {};       // id водителя -> true, если трек привязан к дорогам
-
-  // ---- Слой всех клиентов справочника (серые маркеры) ----
-  // Вся география клиентов показывается на карте, чтобы видеть, где они находятся,
-  // даже если клиент не попал в маршрут выбранного дня. Обновляется редко, отдельно
-  // от позиций водителей, по тому же принципу, что маршруты (не чаще раза в 30 с).
+  let driverTracksDueAt = 0;
+  let driverTracks = {};
+  let driverTracksSnapped = {};
   let driverClientMarks = {};         // id клиента -> ymaps.Placemark (серый маркер)
-  let driverClientsDueAt = 0;         // когда снова перезагрузить справочник клиентов
+  let driverClientsDueAt = 0;
   let driverClientsLoading = false;
-  let driverClientSig = "";           // сигнатура набора клиентов (id+координаты)
-  let driverClientClusterer = null;   // ymaps.Clusterer — группирует маркеры клиентов, ускоряя карту
-
-  // Метки на карте трекинга используем простыми встроенными пресетами точек
-  // (~точки того же цвета, что и раньше): они легче и быстрее кастомных PNG —
-  // при многих маркерах карту не «тормозит». Водители — зелёные точки,
-  // клиенты — красные точки.
+  let driverClientSig = "";
+  let driverClientClusterer = null;   // ymaps.Clusterer — группирует маркеры клиентов
 
   function loadYandexMaps(apikey) {
     return new Promise((resolve, reject) => {
-      // Экранируем повторные срабатывания (onload + таймер), чтобы продемонстрировать
-      // только одну причину завершения.
       let settled = false;
       const done = (fn, v) => { if (!settled) { settled = true; fn(v); } };
-
       if (window.ymaps && window.ymaps.Map) { resolve(window.ymaps); return; }
-
       if (driverMapScript) {
-        // Скрипт уже начал грузиться в этом заходе — ждём появления API.
         const t = setInterval(() => {
           if (window.ymaps && window.ymaps.Map) { clearInterval(t); resolve(window.ymaps); }
         }, 250);
         setTimeout(() => { clearInterval(t); done(reject, new Error("Карта не загрузилась за отведённое время")); }, 25000);
         return;
       }
-
-      if (!apikey) {
-        done(reject, new Error("Нет ключа Яндекс.Карт — карта недоступна"));
-        return;
-      }
-
+      if (!apikey) { done(reject, new Error("Нет ключа Яндекс.Карт — карта недоступна")); return; }
       driverMapScript = document.createElement("script");
-      driverMapScript.src = "https://api-maps.yandex.ru/2.1/?apikey=" +
-        encodeURIComponent(apikey) + "&lang=ru_RU";
-      // Скрипт грузится (loader отдаётся 200) даже если ключ не разрешает домен
-      // приложения — при этом window.ymaps появляется, но ymaps.ready не срабатывает,
-      // и карта «вечно загружается». Ловим этот случай явным тайм-аутом и
-      // подсказкой про разрешённые домены ключа.
+      driverMapScript.src = "https://api-maps.yandex.ru/2.1/?apikey=" + encodeURIComponent(apikey) + "&lang=ru_RU";
       driverMapScript.onload = () => {
         if (window.ymaps && window.ymaps.ready) {
           const tm = setTimeout(() => {
-            done(reject, new Error("Яндекс.Карты не инициализировались (похоже, ключ карт не разрешает этот домен: " +
-              window.location.hostname + ")"));
+            done(reject, new Error("Яндекс.Карты не инициализировались (похоже, ключ карт не разрешает этот домен: " + window.location.hostname + ")"));
           }, 25000);
           window.ymaps.ready(() => { clearTimeout(tm); done(resolve, window.ymaps); });
         } else {
@@ -2939,21 +3478,19 @@
     if (!el.driverMap || !el.routesubTracking || el.routesubTracking.hidden) return;
     if (el.driverMapHint) el.driverMapHint.textContent = "Загрузка карты…";
     try {
-      // Дожидаемся предзагруженного API (предзагрузка стартовала ещё при запуске
-      // приложения) либо, если её не было, инициализируемся прямо сейчас. Так
-      // карта показывается, как только API уже скачан, а не после ожидания сети.
       await ensureYandexPreloaded();
       const ymaps = await yandexPreload.promise;
       if (!driverMap) {
+        // Контейнер мог быть нулевой высоты в момент инициализации (вкладка ещё
+        // не дорисовала layout) — тогда Яндекс.Карты не запрашивают тайлы и карта
+        // пустая. Назначаем высоту явно, если она ещё 0.
+        if (el.driverMap && el.driverMap.clientHeight <= 0) el.driverMap.style.height = "460px";
         driverMap = new ymaps.Map(el.driverMap, {
           center: [55.75, 37.62], zoom: 10,
           controls: ["zoomControl", "fullscreenControl"],
         });
-        // Отдельный слой для GPS-следа: рисуется редко, чтобы не тормозить карту.
         driverTrackCollection = new ymaps.GeoObjectCollection();
         driverMap.geoObjects.add(driverTrackCollection);
-        // Кластерер для маркеров клиентов: при большом числе точек группирует их
-        // в кластеры и тем самым ускоряет карту (меньше объектов рендерится).
         driverClientClusterer = new ymaps.Clusterer({
           preset: "islands#invertedGreyClusterIcons",
           clusterDisableClickZoom: false,
@@ -2963,17 +3500,14 @@
         driverMap.geoObjects.add(driverClientClusterer);
         driverTracksDueAt = 0;
       }
-      // Контейнер мог быть нулевого размера в момент создания карты (вкладка
-      // «Трекинг» изначально скрыта). Яндекс.Карты в таком случае запоминают
-      // размер 0×0, не запрашивают тайлы области и показывают серую карту
-      // «Для этого участка местности нет данных». Явно просим карту пересчитать
-      // размер и подгрузить тайлы сейчас, а не ждать следующего таймера.
       try { driverMap.container.fitToViewport(); } catch { /* ignore */ }
       if (el.driverMapHint) el.driverMapHint.textContent = "";
-      await refreshDriverMap(ymaps);
+      try { await refreshDriverMap(ymaps); } catch { /* не роняем приёмку карты у маркеров */ }
       if (!driverMapTimer) {
         driverMapTimer = setInterval(() => {
-          if (el.routesubTracking && !el.routesubTracking.hidden) refreshDriverMap(ymaps);
+          if (el.routesubTracking && !el.routesubTracking.hidden) {
+            try { refreshDriverMap(ymaps); } catch { /* ignore */ }
+          }
         }, 10000);
       }
     } catch (e) {
@@ -3053,8 +3587,8 @@
     if (!driverMapFitted) {
       const pts = [];
       Object.keys(driverLiveMarks).forEach((id) => {
-        const g = driverLiveMarks[id] && driverLiveMarks[id].geometry;
-        if (g) pts.push(g.getCoordinates());
+        const m = driverLiveMarks[id];
+        if (m) { const g = m && m.geometry; if (g) pts.push(g.getCoordinates()); }
       });
       if (routes) {
         routes.forEach((route) => {
@@ -3098,7 +3632,6 @@
       const hint = (c.bundleAddress && c.bundleAddress !== c.address)
         ? `${c.client} · ${c.bundleAddress}`
         : (c.client || "Клиент");
-      // Пояснение (балун) при клике: название клиента + адрес.
       const addr = (c.bundleAddress || c.address || "").trim();
       const balloon = `<b>${escapeHtml(c.client || "Клиент")}</b>${addr ? `<br>${escapeHtml(addr)}` : ""}`;
       const mark = driverClientMarks[id];
@@ -3110,38 +3643,22 @@
         try { mark.properties.set("hintContent", hint); } catch { /* ignore */ }
         try { mark.properties.set("balloonContentBody", balloon); } catch { /* ignore */ }
       } else {
-        const m = new ymaps.Placemark(
-          [c.lat, c.lon],
-          { hintContent: hint, balloonContentBody: balloon },
-          { preset: "islands#redCircleDotIcon" }
+        driverClientMarks[id] = new ymaps.Placemark(
+          [c.lat, c.lon], { hintContent: hint, balloonContentBody: balloon }, { preset: "islands#redCircleDotIcon" }
         );
-        driverClientMarks[id] = m;
       }
     });
     Object.keys(driverClientMarks).forEach((id) => {
-      if (!seen.has(id) && driverClientMarks[id]) {
-        delete driverClientMarks[id];
-      }
+      if (!seen.has(id) && driverClientMarks[id]) { delete driverClientMarks[id]; }
     });
-    // Сам маркеры в карту не добавляем — их держит кластерер. Пересобираем его,
-    // ТОЛЬКО когда набор/позиции клиентов изменились (иначе на каждом 30-секундном
-    // тике пересборка тысячи маркеров впустую тормозила бы раздел).
-    const newSig = Object.keys(driverClientMarks)
-      .sort()
-      .map((id) => {
-        const m = driverClientMarks[id];
-        const g = m && m.geometry ? m.geometry.getCoordinates() : null;
-        return id + ":" + (g ? g[0].toFixed(4) + "," + g[1].toFixed(4) : "");
-      })
-      .join("|");
+    const newSig = Object.keys(driverClientMarks).sort().map((id) => {
+      const m = driverClientMarks[id];
+      const g = m && m.geometry ? m.geometry.getCoordinates() : null;
+      return id + ":" + (g ? g[0].toFixed(4) + "," + g[1].toFixed(4) : "");
+    }).join("|");
     if (newSig !== driverClientSig) {
       driverClientSig = newSig;
-      if (driverClientClusterer) {
-      try {
-        driverClientClusterer.removeAll();
-        driverClientClusterer.add(Object.values(driverClientMarks));
-      } catch { /* ignore */ }
-      }
+      if (driverClientClusterer) { try { driverClientClusterer.removeAll(); driverClientClusterer.add(Object.values(driverClientMarks)); } catch { /* ignore */ } }
     }
   }
 
@@ -3151,23 +3668,17 @@
   function drawDriverRouteLayers(ymaps, routes) {
     if (!driverMap) return;
     driverMap.geoObjects.removeAll();
-    // Возвращаем на карту слой GPS-следа (removeAll снимает и его).
     if (driverTrackCollection) driverMap.geoObjects.add(driverTrackCollection);
-    // Возвращаем на карту живые метки водителей (их мы ведём инкрементально).
     Object.keys(driverLiveMarks).forEach((id) => {
       if (driverLiveMarks[id]) driverMap.geoObjects.add(driverLiveMarks[id]);
     });
-    // Возвращаем на карту кластерер маркеров клиентов (removeAll снимает и его).
     if (driverClientClusterer) driverMap.geoObjects.add(driverClientClusterer);
     routes.forEach((route) => {
       const base = route.progress;
       if (base && Number.isFinite(base.baseLat) && Number.isFinite(base.baseLon)) {
         driverMap.geoObjects.add(new ymaps.Placemark(
           [base.baseLat, base.baseLon],
-          {
-            hintContent: "База · " + (route.driverName || ""),
-            balloonContentBody: `<b>База</b>${route.driverName ? `<br>${escapeHtml(route.driverName)}` : ""}`,
-          },
+          { hintContent: "База · " + (route.driverName || ""), balloonContentBody: `<b>База</b>${route.driverName ? `<br>${escapeHtml(route.driverName)}` : ""}` },
           { preset: "islands#darkBlueDotIcon" }
         ));
       }
@@ -3176,9 +3687,7 @@
           const addr = (c.address || "").trim();
           const balloon = `<b>${escapeHtml(c.client || "Точка")}</b>${addr ? `<br>${escapeHtml(addr)}` : ""}`;
           driverMap.geoObjects.add(new ymaps.Placemark(
-            [c.lat, c.lon],
-            { hintContent: c.client || "Точка", balloonContentBody: balloon },
-            { preset: "islands#blueDotIcon" }
+            [c.lat, c.lon], { hintContent: c.client || "Точка", balloonContentBody: balloon }, { preset: "islands#blueDotIcon" }
           ));
         }
       });
@@ -3194,8 +3703,9 @@
       if (!Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
       seen.add(d.id);
       const label = (d.routeId && routeNameById[d.routeId]) ? ` · ${routeNameById[d.routeId]}` : "";
-      const hint = (d.name || "Водитель") + " · на карте" + label;
-      const balloon = `<b>${escapeHtml(d.name || "Водитель")}</b><br>на карте${label ? escapeHtml(label) : ""}`;
+      const spd = (d.speed != null && Number.isFinite(d.speed)) ? ` · ${Number(d.speed).toFixed(0)} км/ч` : "";
+      const hint = (d.name || "Водитель") + " · на карте" + label + spd;
+      const balloon = `<b>${escapeHtml(d.name || "Водитель")}</b><br>на карте${label ? escapeHtml(label) : ""}${escapeHtml(spd)}`;
       let m = driverLiveMarks[d.id];
       if (m) {
         try { m.geometry.setCoordinates([d.lat, d.lon]); } catch { /* ignore */ }
@@ -3254,11 +3764,16 @@
   // GPS-ломанные, так и дорожные) полностью убраны с карты «Трекинг»: карта
   // показывает только живые метки водителей и точки клиентов. Данные треков
   // по-прежнему грузятся (нужны для отчёта о пробеге), но не отрисовываются.
+  // Рисует маршрут водителя ПО ДОРОГАМ (как в навигаторе). Сервер уже возвращает
+  // snapped-трек (map-matching по дорожной сети, /api/drivers/tracks/snapped) —
+  // рисуем именно его, координаты идут по дорогам и дают ровную линию. Если по
+  // какой-то причине snapped отсутствует — рисуем сырые координаты (ломаной).
   function drawDriverTracks(ymaps) {
     if (!driverMap || !driverTrackCollection) return;
     const coll = driverTrackCollection;
     try { coll.removeAll(); } catch { /* ignore */ }
-    // Полилинии не добавляются — см. комментарий выше.
+    // Линии (дорожные «полосы» движения) по запросу больше не рисуем —
+    // коллекцию очищаем, чтобы старые линии не оставались на карте.
   }
 
   // ---- Дашборд движения водителей (подвкладка «Отчёт» маршрутизации) ----
@@ -3781,13 +4296,13 @@
     // развернул карточку (expandedShipmentCards), она ДОЛЖНА остаться раскрытой
     // и при последующих перерисовках (автообновление раз в N сек) — иначе карточка
     // «сама схлопывается» через пару секунд. Активный маршрут всегда раскрыт.
-    const dExpanded = !dActive && expandedShipmentCards.has(String(d.id));
+    const dExpanded = !dActive && expandedShipmentCards.has(String(d.routeId));
     const dCollapsed = dActive ? "" : (dExpanded ? "" : " route-collapsed");
     return `
-      <div class="delivery-card${dCollapsed}">
+      <div class="delivery-card${dCollapsed}" data-route-id="${escapeHtml(String(d.routeId))}">
         <div class="delivery-card-head">
           <div class="delivery-driver">
-            <span class="delivery-driver-name">${escapeHtml(d.driverName || "Водитель")}</span>
+            <span class="delivery-driver-name">${escapeHtml(d.driverId ? (d.driverName || "Водитель") : "Маршрут: Самовывоз")}</span>
             <span class="delivery-driver-route">${escapeHtml(slot)} · ${escapeHtml(dateStr)} ${routePlaces}</span>
           </div>
           ${statusBadge}
@@ -3852,7 +4367,10 @@
 
   function renderMyRoutesList(routes) {
     const filter = el.myroutesDateFilter ? el.myroutesDateFilter.value : "";
-    const list = filter ? routes.filter((r) => String(r.date) === filter) : routes;
+    // Маршруты самовывоза (без назначенного водителя) в «Моих маршрутах» не показываем —
+    // водителю видны только маршруты, назначенные на него.
+    const mine = (Array.isArray(routes) ? routes : []).filter((r) => r && r.driverId);
+    const list = filter ? mine.filter((r) => String(r.date) === filter) : mine;
     if (el.myroutesCount) {
       el.myroutesCount.textContent = list.length
         ? `${list.length} ${plural(list.length, "маршрут", "маршрута", "маршрутов")}`
@@ -3925,11 +4443,27 @@
   // (polling раз в 5 с) не видит изменений, раздел не перестраивается — раскрытые
   // карточки отгрузки не «схлопываются» сами через пару секунд.
   let lastShipmentsSig = "";
+  // Койлдаун запросов отгрузки: при пачке событий (скан + SSE + таймер) реально
+  // ходим на сервер не чаще ~1,5 с, а лишние вызовы схлопываются в один. Это снижает
+  // сетевую нагрузку и тормоза на слабом ТСД.
+  let lastShipmentsFetch = 0;
+  let shipmentsFetchQueued = false;
   // Подвкладка раздела «Отгрузка»: "active" — маршруты в работе, "done" — завершённые.
   let shipmentSubtab = "active";
 
   async function loadShipments() {
     if (!el.shipmentListActive) return;
+    const now = Date.now();
+    const wait = 1500 - (now - lastShipmentsFetch);
+    if (wait > 0) {
+      // Уже был недавний запрос — откладываем накопленный запрос на крайний срок.
+      if (!shipmentsFetchQueued) {
+        shipmentsFetchQueued = true;
+        setTimeout(() => { shipmentsFetchQueued = false; loadShipments(); }, wait);
+      }
+      return;
+    }
+    lastShipmentsFetch = Date.now();
     let routes = [];
     try {
       const r = await api("/api/shipments");
@@ -3960,7 +4494,9 @@
     if (sig === lastShipmentsSig) return; // не изменилось — не перерисовываем
     shipmentsCache = routes;
     lastShipmentsSig = sig;
-    renderShipments();
+    // Перерисовываем только когда раздел «Отгрузка» реально виден — иначе на ТСД
+    // карточки перестраиваются в фоне без нужды (раздел может быть свёрнут/другая вкладка).
+    if (!el.pageShipment.hidden) renderShipments();
   }
 
   // Показывает контейнер активной подвкладки, скрывает другую. Сворачивание
@@ -3971,11 +4507,32 @@
   const expandedShipmentCards = new Set();
   // Карточки отгрузки, которые пользователь явно СВЕРНУЛ. По умолчанию раскрыты:
   // склад должен сразу видеть клиентов и кнопку «Сборка», без лишних кликов.
-  const collapsedShipmentCards = new Set();
+  function loadCollapsedSet(key) {
+    const s = new Set();
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) arr.forEach((x) => s.add(String(x)));
+      }
+    } catch { /* ignore */ }
+    return s;
+  }
+  function saveCollapsedSet(key, setObj) {
+    try { localStorage.setItem(key, JSON.stringify([...setObj])); } catch { /* ignore */ }
+  }
+  // Состояние свёрнутых/развёрнутых карточек сохраняем в localStorage, чтобы при
+  // перезагрузке/обновлении данных развёрнутые вкладки НЕ сворачивались сами.
+  const collapsedShipmentCards = new Set(loadCollapsedSet("biotime_collapsed_cards"));
+  const saveShipCollapsed = () => saveCollapsedSet("biotime_collapsed_cards", collapsedShipmentCards);
   // Аналогичный набор для «Моих маршрутов» водителя: раздел автообновляется через
   // loadMyRoutes каждые несколько секунд, и без него раскрытая карточка маршрута
   // при перерисовке снова сворачивалась бы, из-за чего маршрут «сразу исчезал».
-  const expandedMyRouteCards = new Set();
+  const expandedMyRouteCards = new Set(loadCollapsedSet("biotime_expanded_myroutes"));
+  // Развёрнутые водителем карточки маршрутов в разделе «Движение водителей»
+  // (drv-route-card): раздел перерисовывается автообновлением, и без этого набора
+  // вручную раскрытая карточка снова сворачивалась бы при каждом обновлении.
+  const expandedDriverRouteCards = new Set();
   function applyShipmentCollapseUI() {
     const showActive = shipmentSubtab === "active";
     const showDone = shipmentSubtab === "done";
@@ -3986,6 +4543,10 @@
   function renderShipments() {
     if (!el.shipmentListActive && !el.shipmentListDone) return;
     const isDone = (r) => !!(r.progress && r.progress.shippedAt);
+    // Фильтр по дате (календарь дат в шапке раздела). Действует и на «В работе»,
+    // и на «Завершённые отгрузки». Значение — строка YYYY-MM-DD или пусто.
+    const dateFilter = (typeof state.shipmentDateFilter === "string") ? state.shipmentDateFilter.trim() : "";
+    const byDate = (r) => !dateFilter || String(r.date || "") === dateFilter;
     const cardHtml = (r) => {
       const dateStr = r.date ? fmtDateReadable(r.date) : "—";
       const shipStarted = !!(r.progress && r.progress.shipmentStartedAt);
@@ -4012,22 +4573,31 @@
         if (boxOrder.length) {
           boxesHtml = `<div class="shipment-client-boxes">` + boxOrder.map((b) => {
             const dets = byBox[b];
-            // Удаление бокса из отгрузки — та же защита, что в сборке: бокс с
-            // деталями удалить нельзя (сервер вернёт отказ).
-            const delBtn = `<button type="button" class="shipment-del-box" title="Удалить бокс"
-              data-shipment-delbox="${escapeHtml(r.id)}:${ci}:${escapeHtml(b)}">✕</button>`;
-            return `<div class="shipment-client-box"><span class="shipment-client-box-code">${escapeHtml(b)}</span><span class="shipment-client-box-items">${dets.map((it) => escapeHtml(it.art)).join(", ")}</span>${delBtn}</div>`;
+            // Удаление бокса из отгрузки: бокс С деталями удалить нельзя (кнопка
+            // неактивна) — можно удалять только пустые боксы.
+            const hasDetails = dets.length > 0;
+            const delBtn = hasDetails
+              ? `<button type="button" class="shipment-del-box" disabled title="Бокс содержит детали — удалить нельзя">✕</button>`
+              : `<button type="button" class="shipment-del-box" title="Удалить бокс"
+                  data-shipment-delbox="${escapeHtml(r.id)}:${ci}:${escapeHtml(b)}">✕</button>`;
+            // Собранные детали внутри бокса в отгрузке не показываем — только код
+            // бокса и (для склада) кнопку удаления.
+            return `<div class="shipment-client-box"><span class="shipment-client-box-code">${escapeHtml(b)}</span>${delBtn}</div>`;
           }).join("") + `</div>`;
         }
+        // Кнопка «Сборка» отражает состояние: «Завершена» / «Идёт сборка» / «Сборка».
+        const wbp = c && c.waybillProgress ? c.waybillProgress : { finished: false, anyScanned: false };
+        const wbLabel = wbp.finished ? "Завершена" : (wbp.anyScanned ? "Идёт сборка" : "Сборка");
         const wbBtn = waybillOn
-          ? `<button type="button" class="ctrl ctrl-soft shipment-waybill-btn" data-waybill-open="${escapeHtml(r.id)}:${ci}">Сборка</button>`
+          ? `<button type="button" class="ctrl ctrl-soft shipment-waybill-btn" data-waybill-open="${escapeHtml(r.id)}:${ci}">${escapeHtml(wbLabel)}</button>`
           : "";
+        // В отгрузке у клиента показываем только кнопку «Сборка» — список боксов
+        // и крестики удаления скрыты (состав боксов см. в окне сборки).
         return `
           <div class="shipment-client shipment-client-center">
             <span class="shipment-client-name">${escapeHtml(members ? (c.bundleName || c.address || c.client || "Связка") : (c.client || "—"))}</span>
             ${members ? `<span class="shipment-client-sub">${members.map((m) => escapeHtml(m.client)).join(", ")}</span>` : ""}
             ${(Number(c.loadedCount) || 0) > 0 ? `<span class="shipment-client-count">Мест: ${Number(c.loadedCount) || 0}</span>` : ""}
-            ${boxesHtml}
             ${wbBtn}
           </div>
         `;
@@ -4042,22 +4612,26 @@
           : "";
         btn = `<span class="shipment-shipped-note">Отгрузка завершена — водитель может начать маршрут</span>${reopen}`;
       } else if (shipStarted) {
-        btn = "";
+        btn = r.selfPickup
+          ? `<button type="button" class="ctrl ctrl-primary" data-shipment-selfpickup="${escapeHtml(r.id)}">Завершить самовывоз</button>`
+          : "";
       } else {
-        // При включённых накладных — нельзя начать, пока нет накладной на каждого
-        // клиента маршрута (иначе склад не видит, что собирать).
-        const wbReady = !waybillOn || (r.clients || []).every((_, ci) => {
-          const wb = r.waybills && r.waybills[ci];
-          return wb && Array.isArray(wb.items) && wb.items.length > 0;
+        // При включённых накладных — нельзя начать, пока нет готовности по каждому
+        // клиенту (сборка завершена ИЛИ накладная с позициями загружена).
+        // Готовность берём из waybillProgress (в /api/shipments он приходит), а не из
+        // r.waybills, которого в этом ответе нет.
+        const wbReady = !waybillOn || (r.clients || []).every((c2) => {
+          const wp = c2 && c2.waybillProgress;
+          return wp ? (!!wp.finished || !!wp.hasItems) : false;
         });
         btn = wbReady
           ? `<button type="button" class="ctrl ctrl-primary" data-shipment-start="${escapeHtml(r.id)}">Начать отгрузку</button>`
           : `<button type="button" class="ctrl" disabled title="Сначала загрузите расходную накладную">Начать отгрузку</button>`;
       }
-      // Боксы печатаются при сборке («Новый бокс»), поэтому в отгрузке кнопка
-      // «Печать этикеток» не нужна (если накладные/сборка включены) — этикетки
-      // уже напечатаны, а в отгрузке их остаётся только отсканировать.
-      const printBtn = (shipStarted && !shipDone && !waybillOn)
+      // «Печать этикеток» в отгрузке доступна всегда, пока отгрузка идёт и не
+      // завершена: склад печатает стикеры из браузера или десктопа напрямую (так
+      // работало до того, как печать боксов появилась в «Сборке»).
+      const printBtn = (shipStarted && !shipDone)
         ? `<button type="button" class="ctrl ctrl-soft" data-shipment-print="${escapeHtml(r.id)}">Печать этикеток</button>`
         : "";
       // Идущую отгрузку (склад уже работает с маршрутом) свернуть нельзя —
@@ -4084,14 +4658,26 @@
         </div>
       `;
     };
-    const activeList = shipmentsCache.filter((r) => !isDone(r));
-    const doneList = shipmentsCache.filter(isDone);
+    const activeList = shipmentsCache.filter((r) => !isDone(r) && byDate(r));
+    const doneList = shipmentsCache.filter((r) => isDone(r) && byDate(r));
     if (el.shipmentListActive) {
       el.shipmentListActive.innerHTML = activeList.length
         ? activeList.map(cardHtml).join("")
         : `<div class="empty-hint">Маршрутов, ожидающих отгрузки, нет.</div>`;
       el.shipmentListActive.querySelectorAll("[data-shipment-start]").forEach((btn) => {
         btn.addEventListener("click", () => startShipment(btn.dataset.shipmentStart, btn));
+      });
+      el.shipmentListActive.querySelectorAll("[data-shipment-selfpickup]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            const r = await api("/api/shipments/selfpickup-done", {
+              method: "POST",
+              body: JSON.stringify({ routeId: btn.dataset.shipmentSelfpickup }),
+            });
+            toast((r && r.ok) ? "Самовывоз завершён — товар передан клиенту на складе" : ((r && r.error) || "Ошибка"));
+          } catch (e) { toast((e && e.message) || "Ошибка"); }
+          loadShipments();
+        });
       });
       el.shipmentListActive.querySelectorAll("[data-shipment-print]").forEach((btn) => {
         btn.addEventListener("click", () => openPrintLabels(btn.dataset.shipmentPrint));
@@ -4125,35 +4711,121 @@
   function stopWaybillPoll() {
     if (waybillPoll) { clearInterval(waybillPoll); waybillPoll = null; }
   }
-  function startWaybillPoll() {
-    stopWaybillPoll();
-    waybillPoll = setInterval(async () => {
-      try {
-        if (!el.waybillModal || !el.waybillModal.open) { stopWaybillPoll(); return; }
-        const r = await api("/api/shipments");
-        const route = (r && r.routes || []).find((x) => String(x.id) === String(waybillRouteId));
-        const fresh = route && route.waybills && route.waybills[waybillClientIdx];
-        if (fresh && Array.isArray(fresh.items)) {
-          waybillLocal = { items: fresh.items.map((x) => Object.assign({}, x)) };
+  // Перечитывает текущую накладную с сервера и перерисовывает (если окно открыто).
+  // Вызывается по опросу и (мгновенно) по SSE-уведомлению о смене данных.
+  async function refreshWaybillFromServer() {
+    try {
+      if (!el.waybillModal || !el.waybillModal.open) return;
+      const r = await api("/api/shipments");
+      const route = (r && r.routes || []).find((x) => String(x.id) === String(waybillRouteId));
+      const fresh = route && route.waybills && route.waybills[waybillClientIdx];
+      if (fresh && Array.isArray(fresh.items)) {
+        const sig = JSON.stringify(fresh.items.map((x) => [String(x.art), Number(x.qty), Number(x.scanned) || 0, Number(x.missingQty) || 0, !!x.missing, String(x.box || "")]));
+        waybillLocal = { items: fresh.items.map((x) => Object.assign({}, x)), pending: fresh.pending || null };
+        if (sig !== waybillLastSig) {
+          waybillLastSig = sig;
           renderWaybill();
         }
-      } catch { /* сеть в моменте недоступна — пропускаем такт */ }
-    }, 2500);
+      }
+      syncPendingQty(); // показываем/скрываем общую модалку ввода количества
+      // Список боксов для удаления пересобираем ТОЛЬКО когда он виден на экране.
+      // Раньше он опрашивался и перерисовывался каждые 2,5 с даже скрытым — лишняя
+      // сеть + рендер тормозили ТСД в сборке (главная причина «тормозов»).
+      try {
+        if (el.waybillDelBoxList && el.waybillDelBoxList.offsetParent !== null) {
+          renderWaybillDelBox();
+        }
+      } catch { /* ignore */ }
+    } catch { /* сеть в моменте недоступна — пропускаем такт */ }
+  }
+  function startWaybillPoll() {
+    stopWaybillPoll();
+    waybillPoll = setInterval(refreshWaybillFromServer, 2500); // страховка; скорость даёт SSE
+  }
+  // Синхронизирует общую модалку ввода количества с серверным запросом (pending):
+  // если есть ожидаемый запрос — показываем модалку на этом устройстве; если его
+  // засчитали с любого устройства — закрываем. Вызывается при каждом обновлении.
+  function syncPendingQty() {
+    const pending = waybillLocal && waybillLocal.pending;
+    if (pending && String(pending.art)) {
+      if (!el.waybillSharedQtyModal || el.waybillSharedQtyModal.open) {
+        if (el.waybillSharedQtyModal && el.waybillSharedQtyModal.open && waybillSharedPendingArt !== String(pending.art)) {
+          // другой артикул уже ждёт — переустановим лимиты под текущий
+          if (el.waybillSharedQty) { el.waybillSharedQty.max = String(pending.remaining); el.waybillSharedQty.value = ""; }
+          waybillSharedPendingArt = String(pending.art);
+        }
+        return;
+      }
+      waybillSharedPendingArt = String(pending.art);
+      if (el.waybillSharedQty) { el.waybillSharedQty.max = String(pending.remaining); el.waybillSharedQty.value = ""; }
+      // Показываем КАКУЮ строчку накладной выбрали (артикул/наименование/сколько на
+      // позиции и какой остаток) — оператор видит, что «села» нужная строка (4 или 7),
+      // и не перепутает позиции одного артикула.
+      if (el.waybillSharedQtyInfo) {
+        const row = (waybillLocal && waybillLocal.items || []).find((it) => waybillNormArt(it.art) === waybillNormArt(pending.art));
+        if (row) {
+          const qtyN = Number(row.qty) || 0;
+          const scannedN = Number(row.scanned) || 0;
+          el.waybillSharedQtyInfo.innerHTML = `<span class="qty-info-code">${escapeHtml(row.art)}</span>` +
+            (row.name ? `<span class="qty-info-name">${escapeHtml(row.name)}</span>` : "") +
+            `<span class="qty-info-qty">позиция на ${qtyN} шт · осталось ${Math.max(0, qtyN - scannedN)}</span>`;
+        } else {
+          el.waybillSharedQtyInfo.innerHTML = `<span class="qty-info-code">${escapeHtml(pending.art)}</span>`;
+        }
+      }
+      setWaybillStatus(`Введите количество (макс ${pending.remaining}) — ответ с любого устройства`);
+      playScanFeedback(true, "Введите количество");
+      try { el.waybillSharedQtyModal.showModal(); } catch { /* уже открыта */ }
+    } else {
+      if (waybillSharedPendingArt && el.waybillSharedQtyModal && el.waybillSharedQtyModal.open) {
+        try { el.waybillSharedQtyModal.close(); } catch { /* ignore */ }
+      }
+      waybillSharedPendingArt = "";
+      waybillSharedPendingBox = "";
+      focusWaybillScan();
+    }
   }
   function focusWaybillScan() {
+    // Фокусируем поле всегда (и на ТСД): оно readOnly на ТСД, поэтому экранная
+    // клавиатура не вылезет, а аппаратный сканер получит цель ввода — кликать в
+    // поле при каждом скане не нужно.
     if (el.waybillArtInput) {
       try { el.waybillArtInput.focus(); } catch { /* ignore */ }
     }
+    // После закрытия <dialog> браузер сам восстанавливает фокус (и часто — НЕ в это
+    // поле). Повторяем фокусировку с задержкой, чтобы она пережила это и курсор
+    // остался в поле «Штрихкод / артикул» — сканер сразу продолжал работать.
+    setTimeout(() => { try { if (el.waybillArtInput) el.waybillArtInput.focus(); } catch { /* ignore */ } }, 60);
+    setTimeout(() => { try { if (el.waybillArtInput) el.waybillArtInput.focus(); } catch { /* ignore */ } }, 250);
   }
   // ——— Боксы сборки ———
   let waybillBox = "";       // текущий бокс (код этикетки места)
+  let waybillClientName = ""; // имя клиента текущей накладной (для логов сканов)
+  let waybillBoxCodes = new Set();  // коды боксов клиента (для надёжного распознавания скана)
+  let waybillBoxPlaces = new Set(); // номера мест боксов клиента
+  let waybillBoxMetaLoaded = false; // загружены ли списки боксов (для распознавания)
   let waybillPrinting = false; // печатаем бокс из окна СБОРКИ (не открывать модалку отгрузки)
   let waybillPendingArt = ""; // деталь, ожидающая свой бокс (скан: деталь → «МЕСТО» → бокс)
+  let waybillSelected = new Set(); // строки, отмеченные чекбоксом (для «Не найдено»/«Собрать вручную»)
+  let waybillTcd = false; // true на ТСД: список деталей — в модальном окне через кнопку
+  let waybillLastSig = "";  // сигнатура данных сборки — чтобы не перерисовывать, если не менялось
+  let waybillListModalHtml = ""; // закэшированный HTML списка в модалке ТСД
+  let waybillFlashTimer = null; // таймер автоскрытия баннера результата
+  let waybillFinishedLocal = false; // сборка завершена кнопкой «Завершить сборку»
+  let waybillSharedPendingArt = ""; // артикул, ждущий общий ввод количества (мультидевайс)
+  let waybillSharedPendingBox = ""; // активный бокс на момент запроса количества (см. qtyresolve)
   function setWaybillBox(box) {
     waybillBox = String(box || "").trim();
-    if (el.waybillBoxCur) el.waybillBoxCur.textContent = waybillBox ? `Бокс: ${waybillBox}` : "Бокс: —";
+    const cur = el.waybillBoxCur;
+    if (cur) {
+      cur.dataset.state = waybillBox ? "active" : "empty";
+      const val = cur.querySelector(".waybill-box-value");
+      const hint = cur.querySelector(".waybill-box-hint");
+      if (val) val.textContent = waybillBox ? waybillBoxNumber(waybillBox) : "—";
+      if (hint) hint.textContent = waybillBox ? "можно сканировать" : "не обязательно";
+    }
     if (el.waybillArtInput) el.waybillArtInput.value = "";
-    setWaybillStatus(waybillBox ? `Бокс выбран: ${waybillBox} — можно сканировать детали` : "Выберите бокс");
+    setWaybillStatus(waybillBox ? `Бокс выбран: ${waybillBox} — можно сканировать детали` : "Бокс не выбран — детали можно сканировать без бокса");
     if (el.waybillNewBoxBtn) el.waybillNewBoxBtn.classList.toggle("active", !waybillBox);
     focusWaybillScan();
   }
@@ -4162,21 +4834,36 @@
     // «Отгрузка»: настраиваем печать и печатаем 1 место (append). Стикер «вылезает»
     // прямо из окна сборки — сборщику остаётся отсканировать его код.
     setWaybillBox("");
+    // Новый бокс начинает новый цикл: сбрасываем ожидающую деталь, чтобы следующий
+    // скан детали шёл как «МЕСТО», а не как бокс.
+    waybillPendingArt = "";
     if (waybillRouteId) {
       printRouteId = waybillRouteId;
       printClientIndex = waybillClientIdx;
-      if (el.printPlacesQty) el.printPlacesQty.value = "1";
+      // Кол-во для «Нового бокса»: по умолчанию 1, можно ввести сколько угодно
+      // стикеров (печать нескольких боксов за раз). Ограничено 1..200.
+      const multiQty = Math.max(1, Math.min(200, Number(el.waybillBoxQty && el.waybillBoxQty.value) || 1));
+      if (el.waybillBoxQty) el.waybillBoxQty.value = String(multiQty);
+      if (el.printPlacesQty) el.printPlacesQty.value = String(multiQty);
       waybillPrinting = true;
       doPrintLabels(false);
     }
-    setWaybillStatus("Новый бокс напечатан — отсканируйте его (код BG…)");
+    // На ТСД печать не делаем (стикер — с ПК), поэтому и сообщение честное.
+    const multiQty = Math.max(1, Number(el.waybillBoxQty && el.waybillBoxQty.value) || 1);
+    setWaybillStatus(canPrintHere()
+      ? (`Новых боксов напечатано: ${multiQty} — отсканируйте их (код BG…)`)
+      : (`Создано боксов: ${multiQty} — распечатайте стикеры с ПК, затем отсканируйте их`));
+    playScanFeedback(true, "Новый бокс");
     renderWaybillDelBox();
+    // Этикетка нового бокса создаётся на сервере асинхронно (печать); когда она
+    // появится — сразу отображаем её в списке боксов, без перезахода в сборку.
+    setTimeout(() => { try { renderWaybillDelBox(); } catch { /* ignore */ } }, 350);
     focusWaybillScan();
   }
-  // Список созданных боксов для удаления (заполняет select).
+  // Список созданных боксов для удаления (чекбоксы; боксы с деталями недоступны).
   async function renderWaybillDelBox() {
-    const sel = el.waybillDelBoxSel;
-    if (!sel) return;
+    const boxList = el.waybillDelBoxList;
+    if (!boxList) return;
     let boxes = [];
     if (waybillRouteId) {
       try {
@@ -4184,31 +4871,153 @@
         boxes = (r && r.boxes) || [];
       } catch { boxes = []; }
     }
-    const prev = sel.value;
-    sel.innerHTML = boxes.length
-      ? `<option value="">— выберите бокс —</option>` + boxes.map((b) => `<option value="${escapeHtml(b.box)}">${escapeHtml(b.box)} (дет.: ${b.details})</option>`).join("")
-      : `<option value="">Боксов нет</option>`;
-    if (prev && boxes.some((b) => b.box === prev)) sel.value = prev;
+    if (!boxes.length) {
+      waybillBoxCodes = new Set();
+      waybillBoxPlaces = new Set();
+      boxList.innerHTML = '<span class="empty-hint">Боксов нет</span>';
+      return;
+    }
+    // Актуализируем известные боксы клиента — по ним надёжно распознаём скан бокса.
+    waybillBoxCodes = new Set();
+    waybillBoxPlaces = new Set();
+    boxes.forEach((b) => {
+      const bc = String(b.box || "");
+      if (!bc) return;
+      waybillBoxCodes.add(bc);
+      const p = parseInt(waybillBoxNumber(bc), 10);
+      if (Number.isFinite(p) && p > 0) waybillBoxPlaces.add(p);
+    });
+    // Сохраняем отмеченные боксы перед перерисовкой (список часто обновляется
+    // после сканов/отгрузки), чтобы галочки не «слетали» при ре-рендере.
+    const checkedBefore = new Set(
+      Array.from(boxList.querySelectorAll(".waybill-del-box-check:checked")).map((c) => c.value)
+    );
+    boxList.innerHTML = boxes.map((b) => {
+      const hasDetails = Number(b.details) > 0;
+      const code = String(b.box || "");
+      const name = escapeHtml(waybillBoxName(code));
+      const isActive = code && String(waybillBox) === String(code);
+      return `<div class="waybill-del-box-item${hasDetails ? " is-locked has-content" : ""}${isActive ? " is-active" : ""}"${hasDetails ? ` data-box-open="${escapeHtml(code)}"` : ""} title="${hasDetails ? "Нажмите, чтобы посмотреть содержимое (удалить нельзя)" : name}">
+        <input type="checkbox" class="waybill-del-box-check" value="${escapeHtml(code)}" ${hasDetails ? "disabled" : ""}>
+        <span class="waybill-del-box-code">${name}</span>
+        ${hasDetails ? `<span class="waybill-del-box-note">· с деталями</span>` : ""}
+        ${isActive ? `<span class="waybill-del-box-active">✓ активный</span>` : ""}
+        <span class="waybill-del-box-actions">
+          <button type="button" class="waybill-del-box-reprint" data-box-reprint="${escapeHtml(code)}" title="Перепечатать этот бокс">🖨</button>
+        </span>
+      </div>`;
+    }).join("");
+    // Возвращаем отметки ранее отмеченным боксам (кроме ставших «с деталями»).
+    boxList.querySelectorAll(".waybill-del-box-check").forEach((cb) => {
+      if (checkedBefore.has(cb.value)) cb.checked = true;
+    });
+    // Клик по боксу с деталями — открываем модалку с его содержимым.
+    boxList.querySelectorAll("[data-box-open]").forEach((it) => {
+      it.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        openBoxDetails(it.getAttribute("data-box-open"));
+      });
+    });
+    // Перепечатка существующего бокса (стикер того же кода).
+    boxList.querySelectorAll("[data-box-reprint]").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        reprintWaybillBox(btn.getAttribute("data-box-reprint"));
+      });
+    });
+  }
+  // Легкая подгрузка списков боксов клиента (коды + номера мест) для надёжного
+  // распознавания скана бокса, даже если панель боксов не отрисована на ТСД.
+  async function ensureWaybillBoxMeta() {
+    if (waybillBoxMetaLoaded || !waybillRouteId) return;
+    try {
+      const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/boxes?clientIndex=${waybillClientIdx}`);
+      const boxes = (r && r.boxes) || [];
+      waybillBoxCodes = new Set();
+      waybillBoxPlaces = new Set();
+      boxes.forEach((b) => {
+        const bc = String(b.box || "");
+        if (!bc) return;
+        waybillBoxCodes.add(bc);
+        const p = parseInt(waybillBoxNumber(bc), 10);
+        if (Number.isFinite(p) && p > 0) waybillBoxPlaces.add(p);
+      });
+      waybillBoxMetaLoaded = true;
+    } catch { /* сеть недоступна — распознавание по QR/BG останется */ }
+  }
+  // Перепечатывает стикер конкретного бокса (тот же код, что на этикетке).
+  function reprintWaybillBox(code) {
+    if (!canPrintHere()) { setWaybillStatus("Печать стикеров доступна на компьютере"); return; }
+    const route = (shipmentsCache || []).find((x) => String(x.id) === String(waybillRouteId));
+    const cl = route && route.clients ? route.clients[waybillClientIdx] : null;
+    const area = el.printArea;
+    if (!area || !String(code)) return;
+    area.innerHTML = "";
+    let logoHtml = "";
+    if (cl && cl.logoText) logoHtml = `<div class="label-logo label-logo-text">${escapeHtml(cl.logoText)}</div>`;
+    else if (cl && cl.logo) logoHtml = `<div class="label-logo"><img src="${escapeHtml(cl.logo)}" alt="лого" crossorigin="anonymous" /></div>`;
+    const dateStr = route ? String(route.date || "") : "";
+    const q = buildQrImage(code);
+    const px = (q && q.size) ? 70 : 0;
+    const card = document.createElement("div");
+    card.className = "label-card";
+    card.innerHTML =
+      logoHtml +
+      `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
+      `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>` +
+      `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
+    area.appendChild(card);
+    dispatchStickerPrint(function () {});
+    setWaybillStatus(`Перепечатан бокс: ${waybillBoxName(code)}`);
+    playScanFeedback(true, "Печать бокса");
+  }
+  // Модалка «содержимое бокса»: показывает детали, привязанные к боксу.
+  function openBoxDetails(box) {
+    const items = (waybillLocal && waybillLocal.items ? waybillLocal.items : [])
+      .filter((it) => String(it.box) === String(box));
+    if (!el.boxDetailsList || !el.boxDetailsModal) return;
+    if (el.boxDetailsTitle) el.boxDetailsTitle.textContent = "Содержимое бокса · " + waybillBoxNumber(box);
+    const head = items.length
+      ? `<div class="waybill-box-detail wbd-head">
+          <span class="wbd-ps">Партстикер</span>
+          <span class="wbd-art">Артикул</span>
+          <span class="wbd-name">Наименование</span>
+          <span class="wbd-qty">Кол-во</span>
+        </div>`
+      : "";
+    el.boxDetailsList.innerHTML = (head + (items.length ? items.map((it) => `
+          <div class="waybill-box-detail">
+            <span class="wbd-ps" style="color:#999;font-size:11px;margin-right:8px">${it.partsticker ? escapeHtml(shortPs(it.partsticker)) : "—"}</span>
+            <span class="wbd-art">${escapeHtml(it.art)}</span>
+            <span class="wbd-name">${escapeHtml(it.name || "")}</span>
+            <span class="wbd-qty">${Number(it.scanned) || 0}/${Number(it.qty) || 0}</span>
+          </div>`).join("") : '<div class="empty-hint">В боксе нет деталей</div>'));
+    try { el.boxDetailsModal.showModal(); } catch (_) { /* уже открыта */ }
   }
   async function deleteWaybillBox() {
-    const box = el.waybillDelBoxSel ? el.waybillDelBoxSel.value : "";
-    if (!box) { setWaybillStatus("Выберите бокс для удаления"); return; }
-    try {
-      const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/box/delete`, {
-        method: "POST",
-        body: JSON.stringify({ clientIndex: waybillClientIdx, box }),
-      });
-      if (r && r.ok) {
-        setWaybillStatus(`Бокс ${box} удалён`);
-        renderWaybillDelBox();
-        renderWaybill();
-        loadShipments();
-      } else {
-        setWaybillStatus((r && r.error) || "Не удалось удалить бокс");
-      }
-    } catch (e) {
-      setWaybillStatus((e && e.message) || "В боксе деталь — переразместите в другой бокс");
+    const boxList = el.waybillDelBoxList;
+    const checks = boxList ? Array.from(boxList.querySelectorAll(".waybill-del-box-check:checked")) : [];
+    const boxes = checks.map((c) => c.value).filter(Boolean);
+    if (!boxes.length) { setWaybillStatus("Отметьте боксы для удаления"); return; }
+    let ok = 0, blocked = 0, failed = 0;
+    for (const box of boxes) {
+      try {
+        const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/box/delete`, {
+          method: "POST",
+          body: JSON.stringify({ clientIndex: waybillClientIdx, box }),
+        });
+        if (r && r.ok) ok += 1;
+        else if (r && !r.ok && /детал|переразмест/i.test((r.error || ""))) blocked += 1;
+        else failed += 1;
+      } catch (e) { blocked += 1; }
     }
+    if (ok) setWaybillStatus(`Удалено боксов: ${ok}`);
+    else if (blocked) setWaybillStatus("Боксы с деталями удалить нельзя");
+    else if (failed) setWaybillStatus("Не удалось удалить выбранные боксы");
+    renderWaybillDelBox();
+    renderWaybill();
+    loadShipments();
     focusWaybillScan();
   }
   function waybillGet() {
@@ -4248,7 +5057,9 @@
     waybillClientIdx = Number(clientIdx) || 0;
     waybillBox = "";
     waybillPendingArt = "";
-    if (el.waybillBoxCur) el.waybillBoxCur.textContent = "Бокс: —";
+    waybillFinishedLocal = false;
+    setWaybillBox(""); // индикатор бокса: «не выбран» — детали сканируются без бокса
+    waybillPendingArt = "";
     const cached = waybillGet();
     waybillLocal = cached && cached.items ? { items: cached.items.map((x) => Object.assign({}, x)) } : null;
     if (el.waybillArtInput) el.waybillArtInput.value = "";
@@ -4256,85 +5067,236 @@
     if (el.waybillTitle) {
       const r = (shipmentsCache || []).find((x) => String(x.id) === String(routeId));
       const cl = r && r.clients[waybillClientIdx];
-      el.waybillTitle.textContent = "Накладная · " + (cl ? (cl.client || cl.bundleName || cl.address || `Клиент ${waybillClientIdx + 1}`) : "Клиент");
+      // Для логов показываем НАЗВАНИЕ клиента, а не адрес. У объединённых клиентов
+      // имя берём из bundleName или имён участников; адрес оставляем крайним фолбэком.
+      waybillClientName = cl ? (
+        cl.client ||
+        cl.bundleName ||
+        (Array.isArray(cl.members) ? cl.members.map((m) => String((m && (m.client || m.bundleName)) || "").trim()).filter(Boolean).join(", ") : "") ||
+        cl.address ||
+        ""
+      ) : "";
+      el.waybillTitle.textContent = "Накладная · " + (cl ? (waybillClientName || `Клиент ${waybillClientIdx + 1}`) : "Клиент");
     }
     const wb = waybillLocal;
+    // Кнопка «Убрать «не найдено»» — только админ/модератор; доступ в накладной.
+    if (el.waybillRemoveMissing) {
+      el.waybillRemoveMissing.hidden = !(state.isAdmin || state.isModerator === true);
+    }
+    // Кнопка «Удалить не собранные» — только администратор.
+    if (el.waybillCleanBtn) {
+      el.waybillCleanBtn.hidden = !(state.isAdmin === true);
+    }
     setWaybillStatus(wb ? `Загружено позиций: ${wb.items.length}` : "Накладная не загружена на этого клиента");
-    // Накладная уже привязана к точке в рамках отгрузки — повторно загрузить
-    // нельзя (прогресс хранится на сервере и не слетает при перезаходе).
+    // Можно добавить ещё одну расходную накладную: она ДОПОЛНИТ единый список
+    // сборки этой точки (строки просто добавятся), не заменяя уже загруженные.
+    // Кнопка загрузки всегда активна.
     if (el.waybillFile) {
-      el.waybillFile.disabled = !!wb;
+      el.waybillFile.disabled = false;
+      el.waybillFile.value = "";
       const fileRow = el.waybillFile.closest(".file-row");
-      if (fileRow) fileRow.style.display = wb ? "none" : "";
+      if (fileRow) fileRow.style.display = "";
     }
     startWaybillPoll();
+    waybillBoxMetaLoaded = false; // новый клиент/накладная → списки боксов могли поменяться
     renderWaybill();
     renderWaybillDelBox();
     try { el.waybillModal.showModal(); } catch { /* уже открыта */ }
+    // Немедленно читаем из накладной АКТУАЛЬНОЕ состояние с сервера (а не из
+    // локального кэша) — чтобы после «Завершить сборку» и повторного входа
+    // собранные детали не показывались как 0/N и не приходилось собирать заново.
+    refreshWaybillFromServer();
+    // Вход в сборку → кнопка в списке отгрузки показывает «Идёт сборка».
+    document.querySelectorAll(`[data-waybill-open="${routeId}:${clientIdx}"]`).forEach((b) => {
+      if (b && b.textContent !== "Завершена") b.textContent = "Идёт сборка";
+    });
     // Сканер работает «не вставая в строку»: фокус всегда на поле штрихкода.
     setTimeout(focusWaybillScan, 120);
   }
   function closeWaybill() {
     stopWaybillPoll();
     if (el.waybillModal && el.waybillModal.open) { try { el.waybillModal.close(); } catch { /* ignore */ } }
+    if (el.waybillSharedQtyModal && el.waybillSharedQtyModal.open) { try { el.waybillSharedQtyModal.close(); } catch { /* ignore */ } }
+    waybillSharedPendingArt = "";
+    waybillSharedPendingBox = "";
+    // Если вышел без единого скана (и не завершали) — возвращаем кнопке «Сборка».
+    if (!waybillFinishedLocal) {
+      const any = (waybillLocal && Array.isArray(waybillLocal.items))
+        && waybillLocal.items.some((it) => (Number(it.scanned) || 0) > 0 || (Number(it.missingQty) || 0) > 0);
+      if (!any && waybillRouteId != null) {
+        document.querySelectorAll(`[data-waybill-open="${waybillRouteId}:${waybillClientIdx}"]`).forEach((b) => {
+          if (b && b.textContent === "Идёт сборка") b.textContent = "Сборка";
+        });
+      }
+    }
+    loadShipments(); // свежая кнопка и для других устройств
   }
   function setWaybillStatus(t) {
     if (el.waybillStatus) el.waybillStatus.textContent = t;
+    // Результаты сканирования показываем ещё и крупным баннером, который держится
+    // ~2,5 с, чтобы оператор успел прочитать, даже если статусная строка дальше
+    // перепишется (следующий скан / фоновая синхронизация).
+    if (el.waybillFlash && /ХОРОШО|ПЛОХО|Уже отсканировано|засчитано|не найдена в накладной/.test(String(t || ""))) {
+      showWaybillFlash(String(t));
+    }
+  }
+  function showWaybillFlash(text) {
+    if (!el.waybillFlash) return;
+    el.waybillFlash.textContent = text;
+    el.waybillFlash.hidden = false;
+    el.waybillFlash.classList.remove("fw-out");
+    clearTimeout(waybillFlashTimer);
+    waybillFlashTimer = setTimeout(() => {
+      el.waybillFlash.classList.add("fw-out");
+      setTimeout(() => { if (el.waybillFlash) el.waybillFlash.hidden = true; }, 350);
+    }, 2500);
   }
   function renderWaybill() {
     if (!el.waybillList) return;
     const wb = waybillLocal;
     if (!wb || !wb.items || !wb.items.length) {
       el.waybillList.innerHTML = `<div class="mult-rule-empty">Товаров нет. Загрузите .xlsx.</div>`;
+      // Позиций нет вовсе — завершить сборку можно в любом случае.
+      if (el.waybillFinishBtn) el.waybillFinishBtn.disabled = false;
       return;
     }
     const doneAll = wb.items.every((it) =>
-      (Number(it.scanned) || 0) >= (Number(it.qty) || 0) || !!it.missing
+      ((Number(it.scanned) || 0) + (Number(it.missingQty) || 0)) >= (Number(it.qty) || 0)
     );
     const codedOne = wb.items.filter((it) => (Number(it.scanned) || 0) > 0).length;
-    const missCount = wb.items.filter((it) => !!it.missing).length;
+    const missCount = wb.items.filter((it) => (Number(it.missingQty) || 0) > 0 || !!it.missing).length;
+    // Количество в штуках (аналогично позициям): сколько деталей собрано / сколько
+    // всего единиц товара по накладной.
+    const unitsDone = wb.items.reduce((s, it) => s + (Number(it.scanned) || 0), 0);
+    const unitsTotal = wb.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
     setWaybillStatus(
       `Собрано позиций: ${codedOne}/${wb.items.length}${missCount ? ` · не найдено: ${missCount}` : ""}`
+      + ` · штук: ${unitsDone}/${unitsTotal}`
       + (doneAll ? " · сборка готова — можно начать отгрузку" : "")
     );
     // Завершение сборки доступно, когда весь товар собран или помечен «не найдено»
     // (комбинированно): кнопка просто закрывает окно — сервер при начале отгрузки
     // сам проверяет готовность.
-    if (el.waybillFinishBtn) el.waybillFinishBtn.disabled = !doneAll;
-    el.waybillList.innerHTML = wb.items.map((it, i) => {
+    // Если позиций в сборке не было вовсе — завершить можно в любом случае.
+    if (el.waybillFinishBtn) el.waybillFinishBtn.disabled = wb.items.length > 0 ? !doneAll : false;
+    // Кнопки активны, когда есть хотя бы одна отмеченная чекбоксом строка.
+    const hasSel = waybillSelected.size > 0;
+    if (el.waybillMissBtn) el.waybillMissBtn.disabled = !hasSel;
+    if (el.waybillManualBtn) el.waybillManualBtn.disabled = !hasSel;
+    if (el.waybillModalAssembleBtn) el.waybillModalAssembleBtn.disabled = !hasSel;
+    if (el.waybillModalMissBtn) el.waybillModalMissBtn.disabled = !hasSel;
+    const itemHtml = (it, i) => {
       const left = Math.max(0, (Number(it.qty) || 0) - (Number(it.scanned) || 0));
-      const done = Number(it.scanned) >= Number(it.qty);
-      const miss = !!it.missing;
-      const cls = ["waybill-item", done ? " done" : "", miss ? " missing" : ""].join(" ");
+      const scanned = Number(it.scanned) || 0;
+      const qtyN = Number(it.qty) || 0;
+      const missQty = Number(it.missingQty) || 0;
+      const miss = missQty > 0 || !!it.missing;
+      const done = (scanned + missQty) >= qtyN;
+      const sel = waybillSelected.has(i);
+      const cls = ["waybill-item", done ? " done" : "", miss ? " missing" : "", sel ? " selected" : ""].join(" ");
       const mark = miss
-        ? `<span class="waybill-mark">не найдено</span>`
+        ? `<span class="waybill-mark">не найдено${missQty > 0 ? " " + missQty : ""}</span>`
         : (done ? `<span class="waybill-mark">${it.box ? "бокс " + escapeHtml(String(it.box).slice(0, 18)) : "собрано"}</span>` : "");
-      return `<div class="${cls}" data-waybill-index="${i}" data-waybill-art="${escapeHtml(it.art)}">
-        <div class="waybill-item-art">${escapeHtml(it.art)}</div>
-        <div class="waybill-item-name">${escapeHtml(it.name || "")}</div>
-        <div class="waybill-item-qty">${Number(it.scanned) || 0}/${Number(it.qty)}</div>
-        ${mark}
-      </div>`;
-    }).join("");
+      // Очистка наименования от ведущего артикула (бывает в данных / из xlsx).
+      const cleanName = (nm, art) => {
+        let n = String(nm || "");
+        const a = String(art || "");
+        if (a && n.toLowerCase().startsWith(a.toLowerCase())) n = n.slice(a.length).replace(/\s+$/, "").trim();
+        return n || String(nm || "");
+      };
+      return `<tr class="${cls}" data-waybill-index="${i}" data-waybill-art="${escapeHtml(it.art)}">
+        <td class="waybill-check" data-wb-check="${i}">${sel ? "☑" : "☐"}</td>
+        <td class="waybill-item-ps">${it.partsticker ? escapeHtml(shortPs(it.partsticker)) : "—"}</td>
+        <td class="waybill-item-art">${escapeHtml(it.art)}</td>
+        <td class="waybill-item-name">${escapeHtml(cleanName(it.name, it.art))}</td>
+        <td class="waybill-item-qty" title="Всего: ${qtyN} шт · собрано: ${scanned}${missQty ? " · не найдено: " + missQty : ""}">${scanned} из ${qtyN} шт</td>
+        <td class="waybill-markcell">${mark}</td>
+      </tr>`;
+    };
+    // Сортируем для удобства: непринятые (не собранные) детали сверху, принятые снизу.
+    // Порядок внутри групп сохраняется; data-waybill-index остаётся исходным индексом,
+    // чтобы клики/чекбоксы не ломались.
+    const rows = wb.items.map((it, i) => ({ it, i }));
+    rows.sort((a, b) => {
+      // Порядок: 0 = не отсканировано, 1 = «не найдено», 2 = собрано.
+      const g1 = (it) => {
+        const qty = Number(it.qty) || 0;
+        const scanned = Number(it.scanned) || 0;
+        const missQty = Number(it.missingQty) || 0;
+        if (it.missing || missQty > 0) return 1;       // «не найдено» — всегда выше собранных
+        if ((scanned + missQty) >= qty) return 2;      // собрано
+        return 0;                                       // не отсканировано
+      };
+      return g1(a.it) - g1(b.it);
+    });
+    // Настоящая таблица: каждая колонка — отдельная ячейка.
+    const listHeader = `<table class="waybill-table"><thead><tr>
+      <th class="th-check"></th>
+      <th class="th-ps">Партстикер</th>
+      <th class="th-art">Артикул</th>
+      <th class="th-name">Наименование</th>
+      <th class="th-qty">Кол-во</th>
+      <th class="th-mark"></th>
+    </tr></thead><tbody>`;
+    const listFooter = `</tbody></table>`;
+    if (waybillTcd) {
+      // На ТСД вместо прокручиваемого списка — кнопка, открывающая модалку со списком.
+      const doneCount = wb.items.filter((x) => ((Number(x.scanned) || 0) + (Number(x.missingQty) || 0)) >= (Number(x.qty) || 0)).length;
+      el.waybillList.innerHTML = `<button type="button" class="ctrl ctrl-primary waybill-list-toggle" id="waybillListToggle">
+        Показать список деталей (${doneCount}/${wb.items.length})
+      </button>`;
+      // Список в модалке ТСД пересобираем ТОЛЬКО когда модалка открыта, и лишь если
+      // его содержимое реально изменилось — не тратим ресурсы ТСД на перерисовку
+      // каждого такта, когда окно закрыто или данные те же.
+      if (el.waybillListModal && el.waybillListModal.open && el.waybillListModalBody) {
+        const html = listHeader + rows.map((r) => itemHtml(r.it, r.i)).join("") + listFooter;
+        if (html !== waybillListModalHtml) { waybillListModalHtml = html; el.waybillListModalBody.innerHTML = html; }
+      }
+    } else {
+      el.waybillList.innerHTML = listHeader + rows.map((r) => itemHtml(r.it, r.i)).join("") + listFooter;
+      if (el.waybillListModalBody) el.waybillListModalBody.innerHTML = "";
+    }
   }
   async function toggleMissingWaybill(idx) {
     if (!waybillLocal || !waybillLocal.items) { setWaybillStatus("Сначала загрузите накладную"); return; }
     const item = waybillLocal.items[idx];
     if (!item) { setWaybillStatus("Позиция не найдена"); return; }
-    if (!item || (Number(item.scanned) || 0) >= (Number(item.qty) || 0)) {
-      setWaybillStatus("Нельзя пометить собранную полностью позицию");
+    const art = String(item.art);
+    const scanned = Number(item.scanned) || 0;
+    const qtyN = Number(item.qty) || 0;
+    const remaining = Math.max(0, qtyN - scanned);
+    const alreadyMissing = (Number(item.missingQty) || 0) > 0 || !!item.missing;
+    // Снимаем пометку целиком.
+    if (alreadyMissing) {
+      try {
+        const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/missing", {
+          method: "POST",
+          body: JSON.stringify({ clientIndex: waybillClientIdx, index: idx, art, on: false }),
+        });
+        if (r && r.ok) {
+          item.missing = false; item.missingQty = 0;
+          if (r.item && r.item.scanned != null) item.scanned = r.item.scanned;
+          setWaybillStatus(`Пометка ${art} снята`);
+          renderWaybill(); loadShipments();
+        } else setWaybillStatus((r && r.error) || "Ошибка сохранения пометки");
+      } catch (e) { setWaybillStatus((e && e.message) || "Ошибка: не удалось снять пометку"); }
+      focusWaybillScan();
       return;
     }
-    const art = String(item.art);
-    const next = !item.missing;
+    if (remaining <= 0) { setWaybillStatus("Нельзя пометить собранную полностью позицию"); focusWaybillScan(); return; }
+    // Спрашиваем, сколько единиц пометить «не найдено» (всегда, даже если остаток 1).
+    const qty = await askWaybillQty(remaining);
+    if (qty == null) { setWaybillStatus("Пометка отменена"); focusWaybillScan(); return; }
     try {
       const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/missing", {
         method: "POST",
-        body: JSON.stringify({ clientIndex: waybillClientIdx, index: idx, art, on: next }),
+        body: JSON.stringify({ clientIndex: waybillClientIdx, index: idx, art, on: true, qty }),
       });
       if (r && r.ok) {
-        item.missing = next;
-        setWaybillStatus(next ? `Позиция ${art} помечена как «не найдено»` : `Пометка ${art} снята`);
+        item.missing = true;
+        item.missingQty = (r.item && r.item.missingQty != null) ? Number(r.item.missingQty) : qty;
+        if (r.item && r.item.scanned != null) item.scanned = r.item.scanned;
+        setWaybillStatus(`«Не найдено»: ${item.missingQty} из ${qtyN}`);
         renderWaybill();
         loadShipments();
       } else {
@@ -4345,13 +5307,27 @@
     }
     focusWaybillScan();
   }
+  // «Собрать вручную»: собрать полностью каждую отмеченную чекбоксом строку
+  // (эквивалентно нескольким сканам — деталь зеленеет, пометка «не найдено» снимается).
+  async function manualAssembleWaybill() {
+    const idxs = [...waybillSelected];
+    waybillSelected.clear();
+    for (const idx of idxs) {
+      const it = waybillLocal && waybillLocal.items[idx];
+      if (!it) continue;
+      const rem = Math.max(0, (Number(it.qty) || 0) - ((Number(it.scanned) || 0) + (Number(it.missingQty) || 0)));
+      if (rem <= 0) continue;
+      // Спрашиваем, сколько собрать вручную (всегда, даже если остаток 1).
+      const take = await askWaybillQty(rem);
+      if (take == null) continue;
+      await waybillScanDetail(String(it.art), take);
+    }
+    renderWaybill();
+    focusWaybillScan();
+  }
   function uploadWaybill() {
     const file = el.waybillFile && el.waybillFile.files && el.waybillFile.files[0];
     if (!file) { setWaybillStatus("Выберите файл .xlsx"); return; }
-    if (waybillLocal && waybillLocal.items && waybillLocal.items.length > 0) {
-      setWaybillStatus("Накладная уже привязана к этой точке — новая загрузка недоступна");
-      return;
-    }
     const reader = new FileReader();
     reader.onload = async () => {
       setWaybillStatus("Загружаю накладную…");
@@ -4364,7 +5340,7 @@
         if (r && r.ok) {
           waybillLocal = { items: (r.items || []).map((x) => Object.assign({}, x)) };
           const total = (waybillLocal.items || []).reduce((s, it) => s + (Number(it.scanned) || 0), 0);
-          setWaybillStatus(`Загружено позиций: ${waybillLocal.items.length}${total ? " · собрано " + total : ""}`);
+          setWaybillStatus(`Загружено позиций: ${waybillLocal.items.length}${r.total ? ` · накладная дополнена` : ""}${total ? " · собрано " + total : ""}`);
           renderWaybill();
           loadShipments(); // обновляем родительский список в фоне
           focusWaybillScan();
@@ -4385,69 +5361,387 @@
     }
     const val = el.waybillArtInput ? String(el.waybillArtInput.value || "").trim() : "";
     if (!val) { setWaybillStatus("Введите/отсканируйте код"); focusWaybillScan(); return; }
-    // Сборка: ДЕТАЛЬ → «МЕСТО», затем БОКС → «ХОРОШО»/«ПЛОХО». Бокс и артикул
-    // сканируются в ОДНОМ поле, без кнопок и курсора. Порядок определяет, что
-    // сейчас скан: если есть деталь, ожидающая место, — следующий скан это бокс
-    // (код может быть любым, не обязательно «BG…»).
-    if (waybillPendingArt) {
-      // Шаг 2: отсканирован бокс (ожидалась деталь). Привязываем её к этому боксу.
-      // Успех = «ХОРОШО», ошибка привязки = «ПЛОХО».
-      const art = waybillPendingArt;
-      const scanQty = Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1);
-      setWaybillBox(val);
-      try {
-        const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
-          method: "POST",
-          body: JSON.stringify({ clientIndex: waybillClientIdx, art, box: val, qty: scanQty }),
-        });
-        if (r && r.ok) {
-          if (r.rebound) {
-            const it = waybillLocal.items.find((x) => String(x.art) === art);
-            if (it) it.box = r.item && r.item.box != null ? r.item.box : val;
-            setWaybillStatus(`ХОРОШО · ${art} → бокс ${r.item && r.item.box || val} (перенос)`);
-            playScanFeedback(true);
-          } else {
-            const item = waybillLocal.items.find((x) => String(x.art) === art && (Number(x.scanned) || 0) < (Number(x.qty) || 0) && !x.missing);
-            if (item) {
-              item.scanned = (r.item && r.item.scanned != null) ? r.item.scanned : (Number(item.scanned) + scanQty);
-              item.box = r.item && r.item.box != null ? r.item.box : val;
-            }
-            const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
-            setWaybillStatus(`ХОРОШО · ${item && item.art} → бокс ${val} · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`);
-            playScanFeedback(r.left > 0);
-          }
-          waybillPendingArt = "";
-          renderWaybill();
-          loadShipments();
-        } else {
-          setWaybillStatus("ПЛОХО · " + ((r && r.error) || "Деталь не привязалась к боксу"));
-          playScanFeedback(false);
-          renderWaybill();
-        }
-      } catch (e) {
-        setWaybillStatus("ПЛОХО · " + ((e && e.message) || "Ошибка привязки к боксу"));
-        playScanFeedback(false);
-      }
-    } else if (String(val).startsWith("BG" + waybillRouteId + "-")) {
-      // Явный код этикетки места без ожидающей детали — просто выбираем бокс.
-      setWaybillBox(val);
-      setWaybillStatus(`Бокс выбран: ${val} — отсканируйте деталь`);
-      playScanFeedback(true);
+    // Сборка: БОКС → активируется (активный бокс), ДЕТАЛЬ → засчитывается и
+    // привязывается к АКТИВНОМУ боксу. Бокс и артикул сканируются в одном поле.
+    // Чтобы переключить бокс, сканируем новый — следующие детали идут в него.
+    // Распознаём бокс надёжно: полный код «BG…», либо «Бокс N»/номер, совпадающий
+    // с одним из существующих боксов клиента (артикулы деталей боксом не считаем).
+    const rawBox = String(val).trim();
+    let isFullBox = rawBox.startsWith("BG" + waybillRouteId + "-") || waybillBoxCodes.has(rawBox);
+    const boxNumMatch = /(\d+)\s*$/.exec(rawBox);
+    const boxNum = boxNumMatch ? parseInt(boxNumMatch[1], 10) : 0;
+    const isDetailArt = (waybillLocal && waybillLocal.items || []).some((it) =>
+      String(it.art).trim() === rawBox || Number(String(it.art).replace(/[^0-9]/g, "")) === boxNum
+    );
+    let isBoxNum = /^(\s*(б\s*о\s*к\s*с|box|№|#)\s*)?\d+$/i.test(rawBox)
+      && waybillBoxPlaces.has(boxNum) && !isDetailArt;
+    // Если это не QR-код бокса и не деталь, а списки боксов ещё не подгружены — тянем
+    // их на лету и пересчитываем (на ТСД панель боксов может не отрисоваться, и скан
+    // «Бокс N» без этого был бы принят за деталь → бокс не активировался).
+    if (!isFullBox && !isDetailArt && waybillBoxPlaces.size === 0) {
+      await ensureWaybillBoxMeta();
+      isFullBox = rawBox.startsWith("BG" + waybillRouteId + "-") || waybillBoxCodes.has(rawBox);
+      isBoxNum = /^(\s*(б\s*о\s*к\s*с|box|№|#)\s*)?\d+$/i.test(rawBox)
+        && waybillBoxPlaces.has(boxNum) && !isDetailArt;
+    }
+    // Надёжное распознавание «механического» бокса: деталь уже могла лежать в
+    // боксе (сервер теперь его отдаёт в /waybill/boxes), но списки могут не
+    // успеть подгрузиться на ТСД. Если сборщик явно указал бокс словом («Бокс N»,
+    // «box N», «№N») — это бокс, а не деталь; активируем его и по номеру, даже
+    // если он ещё не в waybillBoxPlaces (главное — чтобы это не был артикул).
+    const isExplicitBoxNumber = /^(\s*(б\s*о\s*к\s*с|box|б|№|#)\s*)\d+$/i.test(rawBox)
+      && boxNum > 0 && !isDetailArt;
+    if (isFullBox || isBoxNum || isExplicitBoxNumber) {
+      // Отсканированный бокс становится АКТИВНЫМ: последующие детали привязываются
+      // к нему. Другой бокс — другой скан — детали пойдут в новый.
+      // Код бокса: полный QR-код / явное «Бокс N» → код места «BG…-place», даже
+      // если кода нет в списках (механический бокс). Голый номер без слова —
+      // только если он есть в waybillBoxPlaces (isBoxNum), чтобы не путать с артикулом.
+      const selCode = isFullBox ? rawBox : "BG" + waybillRouteId + "-" + (waybillClientIdx + 1) + "-" + boxNum;
+      setWaybillBox(selCode);
+      setWaybillStatus(`Бокс Выбран: ${waybillBoxName(selCode)} — можно сканировать детали`);
+      playScanFeedback(true, "Бокс выбран");
     } else {
-      // Шаг 1: отсканирована деталь. Если она есть в накладной — «МЕСТО» (ждём бокс),
-      // если нет — «ПЛОХО».
-      const hasArt = (waybillLocal.items || []).some((it) => String(it.art) === val);
-      if (!hasArt) {
-        setWaybillStatus("ПЛОХО · деталь " + val + " не найдена в накладной");
-        playScanFeedback(false);
-      } else {
-        waybillPendingArt = val;
-        setWaybillStatus("МЕСТО · деталь " + val + " — отсканируйте бокс");
-        playScanFeedback(true);
-      }
+      await waybillScanDetail(val);
     }
     if (el.waybillArtInput) el.waybillArtInput.value = "";
     // Сканер «не вставая в строку»: возвращаем фокус на поле штрихкода.
+    focusWaybillScan();
+  }
+
+  // Засчитать деталь (как при сканировании штрихкода) и подтвердить на сервере.
+  // Используется и самим сканером, и двойным кликом по строке накладной.
+  async function waybillScanDetail(val, qtyOverride) {
+    if (!waybillLocal || !waybillLocal.items) { setWaybillStatus("Сначала загрузите накладную"); return; }
+    const valForms = waybillArtForms(val);
+    let artRows = (waybillLocal.items || []).filter((it) => {
+      const f = waybillArtForms(it.art);
+      for (const x of valForms) { if (f.has(x)) return true; }
+      return false;
+    });
+    let usedArt = artRows.length ? String(artRows[0].art) : "";
+    if (!artRows.length) {
+      // Фолбэк: артикул на стикере может идти с «мусором» (12345 → «12345 AG»).
+      // Разбираем стикер на блоки и ищем единственный совпавший артикул.
+      const res = resolveWaybillArtCandidates(val, waybillLocal.items);
+      if (res) {
+        usedArt = res;
+        artRows = (waybillLocal.items || []).filter((it) => waybillNormArt(it.art) === waybillNormArt(res));
+      }
+    }
+    // Комбинированная сборка: если сканированный код — партстикер (id_partstiker),
+    // принимаем сразу «зашитое» в него количество (partQty), без ввода количества.
+    let partScanQty = null;
+    if (!partScanQty) {
+      // «Числовое ядро» партисткера: убираем мусор сканера (пробелы, переводы строк,
+      // лишние символы) и ведущие нули — 000000000020217/1 и 20217/1 совпадают.
+      const psCore = (s) => {
+        const p = String(s == null ? "" : s).replace(/[^\d\/]/g, "");
+        const i = p.indexOf("/");
+        const head = (i > 0 ? p.slice(0, i) : p).replace(/^0+/, "");
+        return (i > 0 ? head + "/" + p.slice(i + 1) : head);
+      };
+      const psRows = (waybillLocal.items || []).filter(
+        (it) => it.partsticker && psCore(it.partsticker) === psCore(val)
+      );
+      if (psRows.length) {
+        artRows = psRows;
+        usedArt = String(psRows[0].partsticker || val); // канонический код — сервер найдёт точно
+        const pq = Number(psRows[0].partQty);
+        partScanQty = pq > 0 ? pq : null;
+      }
+    }
+    if (!artRows.length) {
+      setWaybillStatus("ПЛОХО · деталь " + val + " не найдена в накладной");
+      playScanFeedback(false, "Не найдено");
+      logBarcodeScan("detail", val, false, "деталь не найдена в накладной");
+      return;
+    }
+    // Строки с остатком: предпочитаем не помеченные «не найдено», но помеченные
+    // тоже можно сканировать — тогда пометка снимается и деталь зеленеет.
+    let it0 = artRows.find((it) => (Number(it.scanned) || 0) < (Number(it.qty) || 0) && !it.missing);
+    if (!it0) it0 = artRows.find((it) => (Number(it.scanned) || 0) < (Number(it.qty) || 0));
+    if (!it0) {
+      // Деталь УЖЕ собрана (например, привязана к Боксу А). Если выбран активный
+      // бокс (сканировали Бокс Б, голос «Бокс выбран») — перепривязываем деталь
+      // в новый бокс: серверная rebound-ветка перезаписывает it.box. Голос
+      // «Деталь перемещена». Без активного бокса — прежнее «Уже отсканировано».
+      if (artRows.length && waybillBox) {
+        const targetArt = String(artRows[0].art || val);
+        try {
+          const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
+            method: "POST",
+            body: JSON.stringify({ clientIndex: waybillClientIdx, art: targetArt, qty: 0, box: waybillBox }),
+          });
+          if (r && r.ok && r.rebound) {
+            const newBox = String((r.item && r.item.box) || waybillBox);
+            artRows.forEach((x) => { x.box = newBox; });
+            logBarcodeScan("detail", val, true, "перемещена");
+            setWaybillStatus(`Перемещена · ${usedArt || targetArt} · в ${waybillBoxName(newBox)}`);
+            playScanFeedback(true, "Деталь перемещена");
+            renderWaybill();
+            focusWaybillScan();
+            refreshWaybillFromServer();
+            return;
+          }
+        } catch (e) { /* сервер не ответил — ниже сообщение «уже отсканировано» */ }
+      }
+      setWaybillStatus("Уже отсканировано · " + val);
+      playScanFeedback(false, "Уже отсканировано");
+      return;
+    }
+    const remBefore = it0 ? Math.max(0, (Number(it0.qty) || 0) - (Number(it0.scanned) || 0)) : 0;
+    // Партстикер: подтверждаем количество (предзаполнен «зашитый» volume) — оператор
+    // может поправить, если по факту деталей меньше/больше. У разных партстикеров
+    // одного артикула — своё количество (каждому своя строка со своим partQty).
+    if (partScanQty && !qtyOverride) {
+      const defTake = Math.min(Number(partScanQty) || 1, remBefore);
+      if (remBefore > 1) {
+        const take = await askWaybillQty(remBefore, defTake);
+        if (take == null) {
+          setWaybillStatus("Отменено");
+          playScanFeedback(false, "Отменено");
+          focusWaybillScan();
+          renderWaybill();
+          return;
+        }
+        partScanQty = Math.max(1, take);
+      } else {
+        partScanQty = Math.max(1, defTake);
+      }
+    }
+    // Без активного бокса деталь НЕ засчитываем: оператор должен сначала отсканировать
+    // бокс (голосом «Бокс выбран»), затем деталь. Если бокс не выбран или «слетел» —
+    // жёстко не считаем сканирование и просим пересканировать бокс.
+    // Исключение: деталь УЖЕ была привязана к боксу ранней привязкой (it0.box задан,
+    // например, предыдущим сканом/вводом количества) — тогда активный бокс как бы
+    // «восстанавливается» из строки, и скан нельзя терять: деталь не должна
+    // «отвязываться» из-за случайного обнуления waybillBox (перерисовка/автообновление).
+    if (!waybillBox && !(it0 && it0.box)) {
+      setWaybillStatus("Не выбран бокс — отсканируйте бокс сначала");
+      playScanFeedback(false, "Не выбран бокс");
+      logBarcodeScan("detail", val, false, "не выбран бокс");
+      focusWaybillScan();
+      return;
+    }
+    const activeBox = waybillBox || (it0 && it0.box) || "";
+    // Количественная деталь (осталось больше 1 единицы): голосом просим «Введите
+    // количество» и открываем быструю модалку ввода. Если кол-во передано явно
+    // (кнопка «Собрать», повторный ввод) — спрашивать не нужно.
+    let scanQty = partScanQty && Number(partScanQty) > 0
+      ? Math.max(1, Number(partScanQty))
+      : (qtyOverride && Number(qtyOverride) > 0
+        ? Math.max(1, Number(qtyOverride))
+        : Math.max(1, Number(el.waybillQtyInput && el.waybillQtyInput.value) || 1));
+    // Если засчитываемое количество больше остатка к приёмке — не засчитываем:
+    // голосом «Фиаско», строка не зеленеет до ввода верного количества.
+    if (scanQty > remBefore) {
+      setWaybillStatus(`Больше, чем есть: осталось ${remBefore}`);
+      playScanFeedback(false, "Это Фиаско Братан ты ввел больше чем есть");
+      focusWaybillScan();
+      return;
+    }
+    if (it0) { it0.missing = false; it0.missingQty = 0; } // найденная деталь больше не «не найдена»
+    // НЕ прибавляем сканированную «1» заранее, если сейчас будет запрос количества
+    // (многоштучная деталь, осталось > 1): иначе введённое N превращалось бы в N+1 /
+    // «остаток N-1 → Фиаско». При запросе количества сервер засчитает ровно введённое
+    // число (qtyresolve), поэтому локально `scanned` не трогаем.
+    const willAskQty = !qtyOverride && !partScanQty && remBefore > 1;
+    if (it0 && !willAskQty) it0.scanned = Math.min(Number(it0.scanned || 0) + scanQty, Number(it0.qty) || 1);
+    const clamped = remBefore > 0 && scanQty > remBefore;
+    if (it0 && activeBox) it0.box = activeBox;
+    // Деталь с количеством (осталось собрать > 1 ед.) и без явного кол-ва → общий
+    // (мультидевайсный) запрос ввода количества: модалка появится на всех устройствах
+    // с этой сборкой, ответить может любой; засчитывается на сервере.
+    if (willAskQty) {
+      waybillSharedPendingArt = usedArt;
+      waybillSharedPendingBox = activeBox || "";
+      try {
+        const rr = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/qtyrequest", {
+          method: "POST",
+          body: JSON.stringify({ clientIndex: waybillClientIdx, art: usedArt, box: activeBox || "" }),
+        });
+        // Сразу кладём подтверждённый запрос в локальное состояние и открываем общую
+        // модалку ввода количества — БЕЗ ожидания следующего опроса/SSE (раньше на
+        // ТСД при скане детали с остатком появлялась задержка «сканируешь → введи
+        // количество», т.к. окно открывалось только из refreshWaybillFromServer).
+        if (rr && rr.pending && waybillLocal) waybillLocal.pending = rr.pending;
+      } catch { /* если запрос не прошёл — деталь просто не засчитана */ }
+      setWaybillStatus(`Введите количество: деталь ${usedArt} (осталось до ${remBefore})`);
+      playScanFeedback(true, "Введите количество");
+      if (waybillLocal) syncPendingQty();
+      if (!(el.waybillSharedQtyModal && el.waybillSharedQtyModal.open)) focusWaybillScan();
+      renderWaybill();
+      return;
+    }
+    waybillPendingArt = "";
+    renderWaybill();
+    playScanFeedback(true, activeBox ? "Перемещена" : "Хорошо");
+    setWaybillStatus(activeBox
+      ? `Перемещена · ${usedArt} · в ${waybillBoxName(activeBox)}`
+      : (clamped
+          ? `ХОРОШО · ${usedArt} · оставалось ${remBefore} — засчитано ${remBefore}`
+          : `ХОРОШО · ${usedArt}`));
+    try {
+      const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/scan", {
+        method: "POST",
+        body: JSON.stringify({ clientIndex: waybillClientIdx, art: usedArt, qty: scanQty, box: activeBox || undefined }),
+      });
+      if (r && r.ok) {
+        // Обновляем ИМЕННО ту строку, которую засчитали (it0), а не первую строку
+        // с таким артикулом — иначе при нескольких строках одного артикула прогресс
+        // и статус «уже отсканировано» вычислялись по неверной строке.
+        if (it0 && r.item) {
+          it0.scanned = (r.item.scanned != null) ? r.item.scanned : it0.scanned;
+          it0.box = (r.item && r.item.box != null) ? r.item.box : it0.box;
+        }
+        const done = (waybillLocal.items || []).filter((it) => Number(it.scanned) >= Number(it.qty)).length;
+        const tail = clamped
+          ? ` · оставалось ${remBefore} — засчитано ${remBefore}`
+          : ` · осталось ${r.left} · готово ${done}/${waybillLocal.items.length}`;
+        setWaybillStatus(`ХОРОШО · ${val}${tail}`);
+        logBarcodeScan("detail", val, true, clamped ? "засчитано полностью" : "успешно", it0 && it0.partsticker, it0 && it0.art);
+        renderWaybill();
+        loadShipments();
+        // Перечитываем накладную с сервера — чтобы при нескольких строках одного
+        // артикула локальный остаток и выбор следующей (недособранной) строки были
+        // всегда точными, а не считались по устаревшей копии первой строки.
+        refreshWaybillFromServer();
+      } else {
+        if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
+        setWaybillStatus("ПЛОХО · " + ((r && r.error) || "Деталь не принята"));
+        playScanFeedback(false, "Плохо");
+        logBarcodeScan("detail", val, false, (r && r.error) ? String(r.error) : "деталь не принята", it0 && it0.partsticker, it0 && it0.art);
+        renderWaybill();
+      }
+    } catch (e) {
+      if (it0) it0.scanned = Math.max(0, Number(it0.scanned || 0) - scanQty);
+      setWaybillStatus("ПЛОХО · " + ((e && e.message) || "Ошибка приёмки детали"));
+      playScanFeedback(false, "Плохо");
+      logBarcodeScan("detail", val, false, (e && e.message) ? String(e.message) : "ошибка приёмки детали", it0 && it0.partsticker, it0 && it0.art);
+      renderWaybill();
+    }
+  }
+
+  // Кириллические «двойники» латиницы (А/А, В/В, С/С и т.п.) — из-за раскладки
+  // сканер/ручной ввод дают русские буквы, а артикул в накладной — латиница (или
+  // наоборот). Сводим их к латинице при сравнении.
+  const RU_LOOK = {
+    "А": "A", "а": "a", "В": "B", "в": "b", "С": "C", "с": "c",
+    "Е": "E", "е": "e", "К": "K", "к": "k", "М": "M", "м": "m",
+    "Н": "H", "н": "h", "О": "O", "о": "o", "Р": "P", "р": "p",
+    "Т": "T", "т": "t", "У": "Y", "у": "y", "Х": "X", "х": "x",
+    "І": "I", "і": "i"
+  };
+  // Кириллица → латинская клавиша по раскладке QWERTY (для случая «артикул на
+  // русском, а раскладка английская»: «АРК1234» вводится как «FHR1234»).
+  const CYR_TO_LAT = {
+    "Й": "Q", "Ц": "W", "У": "E", "К": "R", "Е": "T", "Н": "Y", "Г": "U", "Ш": "I", "Щ": "O", "З": "P",
+    "Ф": "A", "Ы": "S", "В": "D", "А": "F", "П": "G", "Р": "H", "О": "J", "Л": "K", "Д": "L",
+    "Я": "Z", "Ч": "X", "С": "C", "М": "V", "И": "B", "Т": "N", "Ь": "M"
+  };
+  // Латиница → кириллица по раскладке QWERTY (обратный случай).
+  const LAT_TO_CYR = {
+    "Q": "Й", "W": "Ц", "E": "У", "R": "К", "T": "Е", "Y": "Н", "U": "Г", "I": "Ш", "O": "Щ", "P": "З",
+    "A": "Ф", "S": "Ы", "D": "В", "F": "А", "G": "П", "H": "Р", "J": "О", "K": "Л", "L": "Д",
+    "Z": "Я", "X": "Ч", "C": "С", "V": "М", "B": "И", "N": "Т", "M": "Ь"
+  };
+  // Возвращает набор «форм» артикула: исходная, по двойникам (А→A), по раскладке
+  // (А→F), а также латиница→кириллица. Два артикула считаются равными, если у них
+  // пересекается хоть одна форма — это ловит и кириллицу/латиницу-двойники, и
+  // несовпадение раскладки.
+  function waybillArtForms(s) {
+    const base = String(s == null ? "" : s).toUpperCase().replace(/[\s_.\-,:/;\\]/g, "");
+    if (!base) return new Set();
+    const forms = new Set([base]);
+    forms.add(base.split("").map((c) => RU_LOOK[c] || c).join(""));
+    forms.add(base.split("").map((c) => CYR_TO_LAT[c] || c).join(""));
+    forms.add(base.split("").map((c) => LAT_TO_CYR[c] || c).join(""));
+    return forms;
+  }
+  // Приводит артикул к каноническому виду для сравнения: убирает разделители
+  // («мусор») и сводит кириллических «двойников» латиницы. Применяется одинаково
+  // и к стикеру, и к артикулам накладной.
+  function waybillNormArt(s) {
+    const t = String(s == null ? "" : s);
+    const tr = t.replace(/[АаВвСсЕеКкМмНнОоРрТтУуХхІі]/g, (c) => RU_LOOK[c] || c);
+    return tr.replace(/[\s_.\-,:/;\\]/g, "");
+  }
+  // Сокращённая форма партстикера/артикула: 000000000020217/4 -> 20217/4.
+  function shortPs(s) {
+    const p = String(s == null ? "" : s);
+    const i = p.indexOf("/");
+    const head = (i > 0 ? p.slice(0, i) : p).replace(/^0+/, "");
+    return (i > 0 ? head + p.slice(i) : head);
+  }
+  // Возвращает артикул накладной, который содержится в очищенном стикере КАК ЕДИНАЯ
+  // строка (артикул не разбиваем — ищем его целиком, а мусор вокруг отбрасываем).
+  // Пример: стикер «12345AG» содержит артикул «12345» → возвращаем «12345».
+  // Если содержатся несколько разных артикулов, берём самый длинный (наиболее полный);
+  // если совпадений нет — пустая строка.
+  function resolveWaybillArtCandidates(sticker, items) {
+    if (!Array.isArray(items)) return "";
+    const clean = waybillNormArt(sticker);
+    if (!clean) return "";
+    const seen = new Set();
+    const matched = [];
+    for (const it of items) {
+      const a = waybillNormArt(it.art);
+      if (!a || seen.has(a)) continue;
+      seen.add(a);
+      if (clean.includes(a)) matched.push({ norm: a, orig: String(it.art) });
+    }
+    if (!matched.length) return "";
+    matched.sort((x, y) => y.norm.length - x.norm.length); // предпочитаем самый полный
+    return matched[0].orig;
+  }
+
+  // Быстрая модалка ввода количества при скане детали с кол-вом >1.
+  // Голосом озвучивает «Введите количество», открывает окно, возвращает Promise
+  // с введённым числом (или null при отмене). Максимум — оставшееся количество.
+  let waybillQtyAskResolve = null;
+  function askWaybillQty(maxQty, defVal) {
+    return new Promise((resolve) => {
+      if (!el.waybillQtyAskModal || !el.waybillQtyAsk) { resolve(null); return; }
+      waybillQtyAskResolve = resolve;
+      const safeMax = Math.max(1, Number(maxQty) || 1);
+      // Осталось всего 1 шт — незачем открывать модалку и спрашивать: сразу берём 1.
+      // Это заметно ускоряет «Собрать вручную» и «Не найдено» на ТСД (раньше окно
+      // ввода количества прыгало перед каждым единичным остатком).
+      if (safeMax <= 1) { resolve(1); return; }
+      el.waybillQtyAsk.max = String(safeMax);
+      // По умолчанию предлагаем «зашитое» значение (для партстикера) или максимум.
+      const init = defVal != null ? Math.max(1, Number(defVal)) : safeMax;
+      el.waybillQtyAsk.value = String(Math.min(init, safeMax));
+      setWaybillStatus(`Введите количество (макс ${safeMax})`);
+      playScanFeedback(true, "Введите количество");
+      try { el.waybillQtyAskModal.showModal(); } catch { /* уже открыта */ }
+      try { el.waybillQtyAsk.focus(); el.waybillQtyAsk.select(); } catch { /* ok */ }
+    });
+  }
+  function finishWaybillQtyAsk(isCancel) {
+    const m = el.waybillQtyAskModal;
+    const resolve = waybillQtyAskResolve;
+    if (isCancel || !el.waybillQtyAsk) {
+      waybillQtyAskResolve = null;
+      if (m && m.open) { try { m.close(); } catch { /* ignore */ } }
+      if (resolve) resolve(null);
+      return;
+    }
+    const v = Math.max(1, Number(el.waybillQtyAsk.value) || 1);
+    const max = Math.max(1, Number(el.waybillQtyAsk.max) || v);
+    if (v > max) {
+      // Ввели больше, чем осталось к приёмке: не засчитываем, не закрываем окно,
+      // голосом указываем на ошибку — пока не введено верное количество.
+      setWaybillStatus(`Больше, чем есть: осталось ${max}`);
+      playScanFeedback(false, "Это Фиаско Братан ты ввел больше чем есть");
+      el.waybillQtyAsk.value = "";
+      try { el.waybillQtyAsk.focus(); } catch { /* ok */ }
+      return;
+    }
+    waybillQtyAskResolve = null;
+    if (m && m.open) { try { m.close(); } catch { /* ignore */ } }
+    if (resolve) resolve(v);
     focusWaybillScan();
   }
 
@@ -4508,19 +5802,19 @@
     const cl = (r.clients || [])[idx];
     if (!cl) return;
     const qty = Math.max(1, Math.min(200, Number(el.printPlacesQty.value) || 1));
-    // Номер, с которого начинается допечатка дополнительных мест. При обычной
-    // печати start = 0 (места 1..qty). При «Допечатать места» стартуем со следующего
-    // свободного номера: если у выбранного клиента уже создано N мест, новые будут
-    // N+1..N+qty, а старые (в т.ч. уже отсканированные) не трогаем.
-    // Накопительная печать: каждое нажатие добавляет qty новых мест СВЕРХ уже
-    // созданных (начиная со следующего номера). Если указано 1 — каждый клик даёт
-    // ровно один новый стикер. Места не пересоздаются с первого номера.
-    let start;
-    try {
-      const cur = await api(`/api/labels?routeId=${encodeURIComponent(printRouteId)}&clientIndex=${idx}`);
-      start = cur && Array.isArray(cur.labels) ? cur.labels.length : (Array.isArray(scanLabels) ? scanLabels.length : 0);
-    } catch {
-      start = Array.isArray(scanLabels) ? scanLabels.length : 0;
+    // Номер, с которого начинается печать. Обычная «Печать этикеток» (отгрузка) —
+    // replace: start = 0, места 1..qty, прежние этикетки пары пересоздаются заново.
+    // Печать бокса из «Сборки» («Новый бокс») — накопительная append: стартуем со
+    // следующего свободного номера (N+1..N+qty), уже созданные/отсканированные
+    // места не трогаем.
+    let start = 0;
+    if (waybillPrinting) {
+      try {
+        const cur = await api(`/api/labels?routeId=${encodeURIComponent(printRouteId)}&clientIndex=${idx}`);
+        start = cur && Array.isArray(cur.labels) ? cur.labels.length : (Array.isArray(scanLabels) ? scanLabels.length : 0);
+      } catch {
+        start = Array.isArray(scanLabels) ? scanLabels.length : 0;
+      }
     }
     const total = start + qty;
     // Дата отгрузки на стикере — в формате ДД.ММ.ГГГГ (r.date/день приходят как
@@ -4548,7 +5842,7 @@
       card.innerHTML =
         logoHtml +
         `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
-        `<div class="label-name" style="margin-top:1mm">${append ? (start + i) + " из " + total : i + " из " + qty}</div>` +
+        `` +
         (() => {
           // QR на этикетке — крупный и читаемый (~70px ≈ 18.5 мм): стикер
           // квадратный 58×58 мм, высоты с запасом хватает. Раньше драйвер
@@ -4558,7 +5852,9 @@
           const px = (q && q.size) ? 70 : 0;
           return `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>`;
         })() +
-        `<div class="label-code">${escapeHtml(code)}</div>`;
+        // На стикере вместо «кракозябистого» кода показываем «Бокс N»; сам код
+        // остаётся в QR (создаётся выше через buildQrImage(code)).
+        `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
       area.appendChild(card);
     }
     // Синхронизируем напечатанные места с серверным хранилищем этикеток (Шаг 2):
@@ -4567,30 +5863,20 @@
     try {
       api("/api/labels", {
         method: "POST",
-        body: JSON.stringify({ routeId: printRouteId, clientIndex: idx, qty, mode: "append" }),
+        body: JSON.stringify({ routeId: printRouteId, clientIndex: idx, qty, mode: waybillPrinting ? "append" : "replace" }),
       }).then((r) => {
         if (r && Array.isArray(r.labels)) {
-          toast(`Допечатано мест: ${qty}. Всего у клиента: ${r.labels.length}`);
+          if (waybillPrinting) {
+            toast(`Новый бокс: всего мест ${r.labels.length}`);
+          } else {
+            toast(`Создано мест: ${r.labels.length} — можно сканировать при погрузке/выгрузке`);
+          }
           refreshPrintLabels();
         }
       }).catch(() => {});
     } catch { /* ignore */ }
-    // Модалку печати НЕ закрываем: после печати она остаётся открытой, список
-    // этикеток уже обновлён (refreshPrintLabels выше), и можно сразу печатать
-    // следующих клиентов без выхода из окна. Раньше здесь был
-    // el.printModal.close() — из-за него после печати пользователь «вылетал»
-    // на главный список отгрузок и был вынужден заново открывать печать.
-    // Для веба стикеры печатаются через скрытый iframe, который не перезагружает
-    // основной документ; страховка ensurePrintModalRestored дополнительно
-    // возвращает модалку, если просмотрщик Коворка всё же сбросит её окно.
-    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
-      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
-    } else {
-      // Печать бокса из окна СБОРКИ: не открываем модалку печати отгрузки и не
-      // перекидываемся на вкладку «Отгрузка» — стикер печатается и окно сборки
-      // остаётся на месте.
-      printStickersViaIframe(waybillPrinting ? (function () {}) : ensurePrintModalRestored);
-    }
+    // Единый запуск печати (отгрузка/допечатка/бокс — одна точка).
+    dispatchStickerPrint(waybillPrinting ? (function () {}) : ensurePrintModalRestored);
     // Печать бокса из «Сборки» завершена — флаг больше не нужен (callback уже
     // выбран на момент вызова печати, поэтому сброс безопасен).
     waybillPrinting = false;
@@ -4629,6 +5915,48 @@
   // сдвинутым далеко за пределы видимой области (off-screen): он не виден
   // глазу, но браузер печатает именно его содержимое (58×58 мм), а не главный
   // документ. Фолбэка на window.print() нет — он и вызывал «вылет».
+  // Настольная сборка (Electron): window.print() на главной странице перехватывается
+  // в electron/main.js и печатает молча (#printArea, без окна). Возвращает true,
+  // если приложение запущено внутри настольной оболочки.
+  function isElectronDesktop() {
+    try {
+      if (typeof navigator !== "undefined" && /electron\//i.test(String(navigator.userAgent || ""))) return true;
+      // Запасные признаки Electron (если userAgent переопределён/иная обёртка).
+      if (typeof window !== "undefined" && window.process && window.process.versions && window.process.versions.electron) return true;
+      if (typeof process !== "undefined" && process.versions && process.versions.electron) return true;
+      return false;
+    } catch { return false; }
+  }
+  // Может ли эта точка печатать стикер прямо здесь: Electron — да (тихо), браузер —
+  // да (через диалог peчати), Android/ТСД — нет (WebView не печатает; стикер с ПК).
+  function canPrintHere() {
+    if (isElectronDesktop()) return true;
+    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") return false;
+    return true;
+  }
+  // Единый запуск печати стикеров для всех мест (отгрузка, допечатка, бокс).
+  //  - Наш десктоп-шелл (Electron): печатаем через нативный мост printStickerBridge
+  //    (IPC → main-процесс → webContents.print). Ему песочница не мешает.
+  //  - ТСД/Android WebView: печать не делаем (WebView не печатает; стикер с ПК).
+  //  - Обычный браузер И любой чужой Electron-браузер (напр. встроенный браузер
+  //    Коворка, который тоже отдаёт 'electron' в userAgent): печатаем через скрытый
+  //    iframe. НЕ вызываем window.print() на главном документе по одному лишь
+  //    признаку 'electron' в UA — такие браузеры держат документ в песочнице без
+  //    allow-modals, и window.print() молча игнорируется («document is sandboxed»).
+  function dispatchStickerPrint(restoreModal) {
+    // Наш десктоп-шелл: нативный мост уже отдаёт странице printStickerBridge.
+    if (typeof window.printStickerBridge !== "undefined" && window.printStickerBridge
+        && typeof window.printStickerBridge.print === "function") {
+      const html = (el.printArea && el.printArea.innerHTML) || "";
+      if (html) { try { window.printStickerBridge.print(html); } catch (_) { /* ignore */ } }
+      return;
+    }
+    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
+      return; // Android/ТСД — WebView не печатает.
+    }
+    // Браузер и чужие Electron-браузеры: скрытый iframe (проверенный способ).
+    printStickersViaIframe(typeof restoreModal === "function" ? restoreModal : (function () {}));
+  }
   function printStickersViaIframe(restoreModal) {
     const area = el.printArea;
     if (!area) return;
@@ -4653,17 +5981,30 @@
     // Ждём, пока QR-картинки (data-url) и внешние логотипы отрисуются, потом печатаем.
     const imgs = Array.prototype.slice.call(doc.querySelectorAll("img"));
     let pending = imgs.length || 0;
+    // Страховка: печать ВСЕГДА срабатывает, даже если события load/error у QR-картинки
+    // не придут (бывает на некоторых устройствах — без этого окно печати «молчит»).
+    let fired = false;
     const removed = () => { setTimeout(() => { try { document.body.removeChild(iframe); } catch { /* ignore */ } }, 1000); };
     const go = () => {
+      if (fired) return;
+      fired = true;
+      let printed = false;
       try {
         iframe.contentWindow.focus();
         iframe.contentWindow.print();
+        printed = true;
       } catch {
-        // Печать из iframe заблокирована средой — НЕ печатаем главный документ
-        // (это сбросит состояние и «выкинет» из Отгрузки), просто подскажем.
-        toast("Печать этикеток недоступна в этом просмотрщике. Откройте приложение в обычном браузере.");
+        printed = false;
       }
       removed();
+      if (!printed) {
+        // Печать из iframe заблокирована средой (часто на складских/встроенных
+        // браузерах). Открываем системный диалог печати на главном документе —
+        // благодаря @media print напечатается только #printArea (стикер).
+        try {
+          window.print();
+        } catch (_) { /* окна печати нет вообще */ }
+      }
       // Страховка для Коворка: встроенный просмотрщик после print() может сбросить
       // модальное окно. Если передан колбэк восстановления — вызываем его с
       // небольшой задержкой, чтобы печать успела отпустить диалог.
@@ -4679,6 +6020,9 @@
       im.addEventListener("error", onImg);
     });
     if (pending <= 0) setTimeout(go, 200);
+    // Принудительно запускаем печать через фиксированное время, если картинки так
+    // и не «прогрузились» (иначе окно печати может не появиться на части устройств).
+    setTimeout(go, 900);
   }
 
   // Страховка: возвращает модалку печати, если печать (в просмотрщике Коворка)
@@ -4838,12 +6182,12 @@
       card.innerHTML =
         logoHtml +
         `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
-        `<div class="label-name" style="margin-top:1mm">${place} из ${total}</div>` +
+        `` +
         `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>` +
-        `<div class="label-code">${escapeHtml(code)}</div>`;
+        `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
       area.appendChild(card);
     });
-    printStickersViaIframe(ensureAppendModalRestored);
+    dispatchStickerPrint(ensureAppendModalRestored);
   }
 
   // ---- Сканирование этикеток (погрузка/выгрузка) — Шаг 3 ----
@@ -4945,23 +6289,39 @@
     }
     try {
       // Новая сигнатура: scanQR(callback, action, done, need, client)
-      window.AndroidBridge.scanQR(
+      logApp("info", "invokeNativeScan call " + action + " done=" + done + " need=" + need + " client=" + client);
+      const res = window.AndroidBridge.scanQR(
         callback,
         action,
         Number(done) || 0,
         Number(need) || 0,
         String(client || "")
       );
+      logApp("info", "invokeNativeScan returned " + String(res));
       return true;
     } catch (e) {
+      logApp("error", "invokeNativeScan new-signature failed: " + (e && e.message ? e.message : String(e)));
       // Старый мост не принимает 5 аргументов — пробуем усечённую сигнатуру.
       try {
         window.AndroidBridge.scanQR(callback, action);
         return true;
       } catch (_) {
+        logApp("error", "invokeNativeScan legacy failed too");
         return false;
       }
     }
+  }
+
+  // Закрыть открытый нативный сканер из веба. Вызывается, когда все места
+  // отсканированы (погрузка: prog.remaining <= 0; выгрузка: клиент unloadReady),
+  // чтобы нельзя было просканировать бокс повторно или сверх нормы — иначе камера
+  // оставалась бы открытой и счётчик рос дальше положенного, плодя лишние дубли.
+  function closeNativeScan() {
+    try {
+      if (window.AndroidBridge && typeof window.AndroidBridge.closeScan === "function") {
+        window.AndroidBridge.closeScan();
+      }
+    } catch (_) { /* моста нет/старый APK — камера закроется сама по крестику */ }
   }
 
   // Текущий режим сканирования мест (load/unload) и актуальный список этикеток
@@ -5009,7 +6369,14 @@
       isTcdDevice = !!window.AndroidBridge.isTCD();
     }
   } catch (_) { /* нативного моста нет — устройство не ТСД */ }
-  if (isTcdDevice) scanSource = "external";
+  if (isTcdDevice) {
+    scanSource = "external";
+    waybillTcd = true; // на ТСД список деталей — в модальном окне через кнопку
+    document.body.classList.add("tcd");
+    // Поле штрих/артикула на ТСД делаем read-only: клик по нему не открывает
+    // экранную клавиатуру, а код по-прежнему заносится аппаратным сканером.
+    try { if (el.waybillArtInput) el.waybillArtInput.readOnly = true; } catch { /* ignore */ }
+  }
   function applyScanSourceUI() {
     try {
       const ext = scanSource === "external";
@@ -5127,16 +6494,12 @@
     card.innerHTML =
       logoHtml +
       `<div class="label-order">Отгрузка ${escapeHtml(dateStr)}</div>` +
-      `<div class="label-name" style="margin-top:1mm">${Number(l.place) || ""} из ${scanLabels.length}</div>` +
+      `` +
       `<div class="label-qr">${px && q.src ? `<img alt="QR" width="${px}" height="${px}" src="${q.src}" />` : ""}</div>` +
-      `<div class="label-code">${escapeHtml(code)}</div>`;
+      `<div class="label-code">${escapeHtml(waybillBoxName(code))}</div>`;
     const area = el.printArea;
     if (area) { area.innerHTML = ""; area.appendChild(card); }
-    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
-      setTimeout(() => { try { window.print(); } catch { /* ignore */ } }, 60);
-    } else {
-      printStickersViaIframe(function restoreAfterSinglePrint() {});
-    }
+    dispatchStickerPrint(function restoreAfterSinglePrint() {});
   }
 
   // Плитки клиентов окна «Отгрузка»: вместо выпадающего списка клиентов —
@@ -5574,6 +6937,9 @@
     // Показываем компактный статус в окне печати (не оверлей поверх камеры).
     if (!ok) setPrintScanStatus(note, "warn");
     else setPrintScanStatus(note, prog.remaining <= 0 ? "ok" : "");
+    // Все места отсканированы — закрываем камеру, чтобы нельзя было просканировать
+    // бокс повторно или сверх нормы (счётчик на нативе иначе рос бы и дальше).
+    if (prog.remaining <= 0) closeNativeScan();
   }
 
   // ---- Сканирование выгрузки мест из «Моих маршрутов» водителя ----
@@ -5586,22 +6952,50 @@
   let driverUnloadClientIdx = null;
 
   function startDriverUnloadScan(routeId, clientIdx) {
-    driverUnloadRouteId = routeId;
-    driverUnloadClientIdx = Number(clientIdx) || 0;
-    if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
-      if (typeof window.driverUnloadCallback !== "function") window.driverUnloadCallback = driverUnloadCallback;
-      const cur = findDriverUnloadClient();
-      const d = cur ? Number(cur.unloadDone) || 0 : 0;
-      const n = cur ? Number(cur.unloadTotal) || 0 : 0;
-      const cl = cur ? (cur.client || "—") : "—";
-      invokeNativeScan("driverUnloadCallback", "unload", d, n, cl);
-      return;
+    try {
+      driverUnloadRouteId = routeId;
+      driverUnloadClientIdx = Number(clientIdx) || 0;
+      logApp("info", "startDriverUnloadScan route=" + String(routeId) + " idx=" + String(clientIdx));
+      if (window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function") {
+        if (typeof window.driverUnloadCallback !== "function") window.driverUnloadCallback = driverUnloadCallback;
+        const cur = findDriverUnloadClient();
+        const d = cur ? Number(cur.unloadDone) || 0 : 0;
+        const n = cur ? Number(cur.unloadTotal) || 0 : 0;
+        const cl = cur ? (cur.client || "—") : "—";
+        // Точек совсем нет (need=0): нативная камера открывается и мгновенно
+        // закрывается (счётчик 0 из 0), что со стороны выглядит как «кнопка
+        // нажимается, но ничего не происходит». Не открываем камеру впустую —
+        // явно сообщаем водителю и сразу открываем ручной ввод кода.
+        if ((Number(n) || 0) === 0) {
+          logApp("info", "Нет мест для выгрузки (need=0) — открываем ручной ввод");
+          try { setDriverManualScan(routeId, driverUnloadClientIdx); } catch (e2) {
+            logApp("error", "setDriverManualScan error: " + (e2 && e2.message ? e2.message : String(e2)));
+          }
+          try { toast("Мест для выгрузки нет (0). Если боксы есть — введите код вручную"); } catch (_) { /* ignore */ }
+          return;
+        }
+        // Результат проверяем: если нативный скан НЕ открылся (мост есть, но scanQR
+        // бросил исключение / камера не стартовала), не молчим — открываем ручную
+        // модалку ввода кода, чтобы кнопка всегда давала результат водителю.
+        const opened = invokeNativeScan("driverUnloadCallback", "unload", d, n, cl);
+        logApp("info", "invokeNativeScan opened=" + String(opened) + " done=" + d + " need=" + n);
+        if (opened) return;
+        logApp("info", "native scan не открылся — открываем ручную модалку");
+        openDriverScanModal();
+        return;
+      }
+      // Fallback без камеры: ручной ввод кода этикетки. Используем НЕБЛОКИРУЮЩУЮ
+      // модалку вместо нативного prompt(): синхронный prompt() в Android WebView
+      // (без обработчика WebChromeClient) вешает UI — кнопки перестают нажиматься
+      // до перезапуска приложения «на каждой точке».
+      openDriverScanModal();
+    } catch (err) {
+      logApp("error", "startDriverUnloadScan error: " + (err && err.message ? err.message : String(err)));
+      // Никогда не молчим: при любой ошибке показываем водителю модалку ручного
+      // ввода, чтобы кнопка всегда давала результат (иначе «кликается, но ничего»).
+      try { openDriverScanModal(); } catch (_) { /* даже это не вышло — тост ниже */ }
+      try { toast("Не удалось открыть сканер: " + (err && err.message ? err.message : "ошибка")); } catch (_) { /* ignore */ }
     }
-    // Fallback без камеры: ручной ввод кода этикетки. Используем НЕБЛОКИРУЮЩУЮ
-    // модалку вместо нативного prompt(): синхронный prompt() в Android WebView
-    // (без обработчика WebChromeClient) вешает UI — кнопки перестают нажиматься
-    // до перезапуска приложения «на каждой точке».
-    openDriverScanModal();
   }
 
   function openDriverScanModal() {
@@ -5690,6 +7084,12 @@
     // код через колбэк (webSignal), оставаясь открытым до конца выгрузки, поэтому
     // invokeNativeScan на этом шаге лишь наслоил бы вторую камеру поверх.
     await loadMyRoutes();
+    // Все места клиента выгружены — закрываем камеру, чтобы водитель не мог
+    // пересканировать бокс и не получал «плохо» на уже выгруженных местах.
+    const unloadDoneCl = findDriverUnloadClient();
+    if (unloadDoneCl && (unloadDoneCl.unloadReady === true || (Number(unloadDoneCl.unloadTotal) > 0 && Number(unloadDoneCl.unloadDone) >= Number(unloadDoneCl.unloadTotal)))) {
+      closeNativeScan();
+    }
   }
 
   // Проверяет, есть ли в офлайн-очереди ещё не доставленный скан с таким кодом.
@@ -5934,7 +7334,13 @@
         // «Сканировать выгрузку» активна и подсвечена, ПОКА не всё выгружено.
         // Когда все места отсканированы (unReady) либо выгрузка уже завершена
         // (unFinished) — кнопка сканирования гаснет, активируется «Завершить выгрузку».
-        const scanDisabled = unReady || unFinished;
+        // «Сканировать выгрузку» активна, пока выгрузка НЕ завершена водителем
+        // (unFinished). Раньше кнопка гасла и от unReady, а unReady=true при
+        // unloadTotal===0 (склад не погрузил боксы / механические боксы без
+        // этикеток) — из-за этого водитель на телефоне не мог открыть сканер
+        // («кнопка нажимается, ничего не происходит»). Теперь сканер доступен
+        // всегда, пока водитель сам не нажал «Завершить выгрузку».
+        const scanDisabled = unFinished;
         const scanHint = unReady
           ? "Все места уже выгружены — сканирование не требуется"
           : "";
@@ -5950,9 +7356,34 @@
         // выгрузку они не влияют (счётчик «Выгружено N из M» их не учитывает), но
         // показываем их отдельной пометкой, чтобы было видно «недогруз склада».
         const createdNoteHtml = unCreated > 0
-          ? `<div class="rms-unload-note">⚠ ${unCreated} место не погружено складом — выгрузка счёрчена без него</div>`
+          ? `<div class="rms-unload-note">⚠ ${unCreated} место не погружено складом — выгрузка пройдёт без него</div>`
           : "";
+        // Содержимое боксов этой точки для водителя: сгруппировано по коду бокса —
+        // водитель видит, какие детали лежат в каждом боксе (из накладной сборки).
+        const wbBoxesHtml = (() => {
+          const wbi = r.waybills && r.waybills[i];
+          const items = wbi && Array.isArray(wbi.items) ? wbi.items : [];
+          const byBox = {};
+          const order = [];
+          items.forEach((it) => {
+            if (!it.box || (Number(it.scanned) || 0) <= 0) return;
+            if (!byBox[it.box]) { byBox[it.box] = []; order.push(it.box); }
+            byBox[it.box].push(it);
+          });
+          if (!order.length) return "";
+          // Боксы по порядку номеров (не по порядку строк накладной).
+          order.sort((a, b) => {
+            const na = parseInt(waybillBoxNumber(a), 10) || 0;
+            const nb = parseInt(waybillBoxNumber(b), 10) || 0;
+            return na !== nb ? na - nb : String(a).localeCompare(String(b));
+          });
+          // Водителю показываем только коды боксов, без собранных деталей внутри.
+          return `<div class="rms-waybill-boxes">` + order.map((b) =>
+            `<div class="rms-waybill-box"><span class="rms-waybill-box-code">${escapeHtml(waybillBoxName(b))}</span></div>`
+          ).join("") + `</div>`;
+        })();
         let unloadBlock = `<div class="rms-unload">
+          ${wbBoxesHtml}
           ${unloadCountHtml}
           ${createdNoteHtml}
           <div class="rms-stop-actions">
@@ -5962,7 +7393,7 @@
         </div>`;
         btnHtml = `${unloadBlock}
           <div class="rms-stop-actions">
-            <button type="button" class="rms-stop-btn primary" data-route-action="deliver" data-route-id="${escapeHtml(r.id)}" ${!unFinished ? "disabled" : ""} title="${!unFinished ? "Сначала завершите выгрузку" : ""}">Завершить сдачу</button>
+            <button type="button" class="rms-stop-btn primary" data-route-action="deliver" data-route-id="${escapeHtml(r.id)}" ${(!unFinished && !allowIncomplete) ? "disabled" : ""} title="${(!unFinished && !allowIncomplete) ? "Сначала завершите выгрузку или включите «завершать при неполном скане»" : ""}">Завершить сдачу</button>
             <button type="button" class="rms-stop-btn ghost" data-route-action="postpone" data-route-id="${escapeHtml(r.id)}">Перенос</button>
           </div>`;
         // Живой счётчик времени на точке: идёт от siteStart до нажатия
@@ -6118,6 +7549,23 @@
     const collapseBtn = active
       ? `<button type="button" class="route-collapse is-locked" disabled title="Активный маршрут нельзя свернуть">▾</button>`
       : `<button type="button" class="route-collapse" data-route-collapse title="Свернуть/развернуть">${myCollapsed ? "▸" : "▾"}</button>`;
+    // Панель шагов водителя: показывает текущий этап маршрута (без изменения логики).
+    let stepsStrip = "";
+    if (p.status === "active" || p.status === "done") {
+      const STEPS = ["В путь", "На точке", "Выгрузка", "Сдача", "Готово"];
+      let stepIdx = 1; // активный маршрут — минимум «В путь»
+      if (p.status === "done") stepIdx = 4;
+      else {
+        const scx = clients.find((c) => c.state === "in_transit" || c.state === "on_site");
+        if (scx && scx.state === "on_site") stepIdx = scx.unloadFinished ? 3 : 2;
+      }
+      stepsStrip = `<div class="rms-steps">`
+        + STEPS.map((s, idx) =>
+          `<div class="rms-step${idx === stepIdx ? " active" : ""}${idx < stepIdx ? " done" : ""}">
+             <span class="rms-step-dot"></span><span class="rms-step-lbl">${s}</span>
+           </div>`).join("")
+        + `</div>`;
+    }
     return `
       <div class="admin-row driver-route-card${myCollapsed ? " route-collapsed" : ""} ${p.status === "done" ? " is-done" : ""}" data-route-id="${escapeHtml(String(r.id))}" data-myroute="">
         <div class="admin-row-main">
@@ -6128,6 +7576,7 @@
             ${collapseBtn}
           </div>
           <div class="route-collapsible"${myCollapsed ? " hidden" : ""}>
+            ${stepsStrip}
             ${startBtn}
             <div class="rms-stops">${stopsHtml}</div>
             ${baseBtn}
@@ -6291,6 +7740,69 @@
   // мостов и передаётся на сервер при сохранении, чтобы карточка списка
   // показывала ровно то же число, что и построение маршрута.
   let routeBuildKm = null;
+  // ---- Черновик «Маршрут на день»: автосохраняем набранное, чтобы оно не
+  // «слетало» при перезагрузке/перерисовке, пока админ набивает маршрут. ----
+  const ROUTE_DRAFT_KEY = "biotime.routeDraft";
+  function saveRouteDraft() {
+    try {
+      const d = {
+        date: (el.driverRouteDate && el.driverRouteDate.value) || "",
+        driverId: (el.driverRouteDriver && el.driverRouteDriver.value) || "",
+        name: (el.driverRouteName && el.driverRouteName.value) || "",
+        selfPickup: !!(el.selfPickupChk && el.selfPickupChk.checked),
+        order: routeOrderIds.slice(),
+        // Загруженные расходные накладные (по ключу адреса) — чтобы они тоже
+        // восстанавливались при возврате на вкладку, а не «всё пропадало».
+        waybills: Array.from(routeWaybills.entries()).map(([k, v]) => [k, {
+          buyer: v && v.buyer || "",
+          items: (v && Array.isArray(v.items)) ? v.items.map((it) => ({ art: it.art, name: it.name, qty: it.qty })) : [],
+        }]),
+        at: Date.now(),
+      };
+      localStorage.setItem(ROUTE_DRAFT_KEY, JSON.stringify(d));
+    } catch { /* приватный режим */ }
+  }
+  function clearRouteDraft() {
+    try { localStorage.removeItem(ROUTE_DRAFT_KEY); } catch { /* ignore */ }
+  }
+  function restoreRouteDraft() {
+    let d = null;
+    try { const raw = localStorage.getItem(ROUTE_DRAFT_KEY); if (raw) d = JSON.parse(raw); } catch { /* ignore */ }
+    if (!d) return;
+    try {
+      if (el.driverRouteDate && d.date) el.driverRouteDate.value = d.date;
+      if (el.driverRouteDriver && d.driverId && !el.driverRouteDriver.value) el.driverRouteDriver.value = d.driverId;
+      if (el.driverRouteName && !el.driverRouteName.value && d.name) el.driverRouteName.value = d.name;
+      if (el.selfPickupChk && d.selfPickup) el.selfPickupChk.checked = true;
+      if (Array.isArray(d.order) && d.order.length) {
+        selectedRouteClientIds.clear();
+        routeOrderIds = [];
+        d.order.forEach((id) => {
+          const sid = String(id);
+          if (driverClientsCache.some((c) => String(c.id) === sid)) {
+            selectedRouteClientIds.add(sid);
+            routeOrderIds.push(sid);
+          }
+        });
+        renderRouteClientOptions();
+        renderRouteClientSelected();
+      }
+      // Восстанавливаем загруженные накладные.
+      if (Array.isArray(d.waybills) && d.waybills.length) {
+        routeWaybills.clear();
+        d.waybills.forEach(([k, v]) => {
+          if (!k) return;
+          routeWaybills.set(String(k), {
+            buyer: (v && v.buyer) || "",
+            items: (v && Array.isArray(v.items)) ? v.items.map((it) => Object.assign({ art: it.art || "", name: it.name || "", qty: it.qty || 0 }, it)) : [],
+          });
+        });
+        renderRouteWaybillsBlock();
+      }
+      if (el.selfPickupChk && typeof applySelfPickupUI === "function") { try { applySelfPickupUI(); } catch { /* ignore */ } }
+      if (typeof updateRouteStepCount === "function") { try { updateRouteStepCount(); } catch { /* ignore */ } }
+    } catch { /* ignore */ }
+  }
   function syncOrderFromSet() {
     routeOrderIds = routeOrderIds.filter((id) => selectedRouteClientIds.has(String(id)));
     selectedRouteClientIds.forEach((id) => {
@@ -6338,14 +7850,17 @@
   }
   function addToRouteOrder(id) {
     if (!routeOrderIds.some((x) => String(x) === String(id))) routeOrderIds.push(id);
+    saveRouteDraft();
   }
   function removeFromRouteOrder(id) {
     routeOrderIds = routeOrderIds.filter((x) => String(x) !== String(id));
+    saveRouteDraft();
   }
 
   function fillDriverRouteClientChecks() {
     renderRouteClientOptions();
     renderRouteClientSelected();
+    saveRouteDraft();
   }
 
   function filteredRouteClients() {
@@ -6516,6 +8031,9 @@
     for (const id of routeOrderIds) {
       const c = driverClientsCache.find((x) => String(x.id) === String(id));
       if (!c) continue;
+      // Накладную храним ПО КЛИЕНТУ (id), а не по адресу: у объединённых клиентов
+      // на одном адресе каждая накладная идёт своему клиенту, иначе накладные
+      // дублировались бы в каждую точку (позиций ×N на число клиентов адреса).
       stops.push({ key: String(c.id), label: (c.client || c.bundleName || c.bundleAddress || c.address || "Клиент") });
     }
     const rows = stops.map((s) => {
@@ -6528,7 +8046,7 @@
         <span class="route-waybill-label">${escapeHtml(s.label)}</span>
         <span class="route-waybill-state">${st ? `загружено: ${st.count} поз.` : "не загружено"}</span>
         ${delBtn}
-        <label class="ctrl ctrl-soft route-waybill-upload"> Загрузить .xlsx
+        <label class="ctrl ctrl-soft route-waybill-upload"> ${st ? "Добавить .xlsx" : "Загрузить .xlsx"}
           <input type="file" accept=".xlsx" data-waybill-key="${escapeHtml(s.key)}" hidden />
         </label>
       </div>`;
@@ -6541,6 +8059,7 @@
     el.routeWaybillsList.querySelectorAll("[data-waybill-del-key]").forEach((b) => {
       b.addEventListener("click", () => {
         routeWaybills.delete(b.dataset.waybillDelKey);
+        saveRouteDraft();
         toast("Накладная удалена");
         renderRouteWaybillsBlock();
       });
@@ -6556,13 +8075,19 @@
       try {
         const r = await api("/api/waybill/parse", { method: "POST", body: JSON.stringify({ fileB64: b64 }) });
         const items = (r && r.items) || [];
-        routeWaybills.set(key, { items, buyer: (r && r.buyer) || "" });
-        toast(items.length ? `Накладная загружена: ${items.length} поз.` : "В накладной нет позиций");
+        // Несколько накладных на одного клиента ДОПОЛНЯЮТ единый список сборки,
+        // а не заменяют предыдущие (одинаковые артикулы остаются отдельными строками).
+        const existing = routeWaybills.get(key);
+        const prev = existing && Array.isArray(existing.items) ? existing.items : [];
+        const combined = prev.concat(items);
+        routeWaybills.set(key, { items: combined, buyer: (r && r.buyer) || (existing && existing.buyer) || "" });
+        toast(items.length ? `Накладная добавлена: ${items.length} поз. · всего ${combined.length}` : "В накладной нет позиций");
       } catch (e) {
         routeWaybills.set(key, { items: [], buyer: "" });
         toast((e && e.message) || "Не удалось разобрать накладную");
       }
       renderRouteWaybillsBlock();
+      saveRouteDraft();
     };
     r2.readAsDataURL(file);
   }
@@ -6934,7 +8459,7 @@
               : `<div class="drv-client-avatar">${escapeHtml(String(c.client).trim().charAt(0).toUpperCase())}</div>`}
           <div class="drv-client-main">
             <div class="drv-client-name">${escapeHtml(c.client)}</div>
-            <div class="drv-client-address">${escapeHtml(c.address)}</div>
+            <div class="drv-client-address">${escapeHtml(c.address)}${c.inn ? `<span class="drv-client-inn">ИНН ${escapeHtml(c.inn)}</span>` : ""}</div>
             ${c.bundleId ? `<div class="drv-client-bundle"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l-4 4 4 4M15 11l4 4-4 4M12 3l-2 18"/></svg>в связке · ${escapeHtml(c.bundleAddress || c.address)}</div>` : ""}
           </div>
           <div class="drv-client-side">
@@ -6969,6 +8494,8 @@
   async function addDriverClient() {
     const client = (el.driverClientName.value || "").trim();
     const address = (el.driverClientAddress.value || "").trim();
+    const inn = (el.driverClientInn ? el.driverClientInn.value : "").trim().replace(/\s+/g, "");
+    const login = (el.driverClientLogin ? el.driverClientLogin.value : "").trim();
     if (!client || !address) {
       toast("Укажите и клиента, и адрес");
       return;
@@ -6976,11 +8503,13 @@
     try {
       const r = await api("/api/drivers/clients", {
         method: "POST",
-        body: JSON.stringify({ client, address }),
+        body: JSON.stringify({ client, address, inn, login }),
       });
       if (r && Array.isArray(r.clients)) renderDriverClients(r.clients);
       if (el.driverClientName) el.driverClientName.value = "";
       if (el.driverClientAddress) el.driverClientAddress.value = "";
+      if (el.driverClientInn) el.driverClientInn.value = "";
+      if (el.driverClientLogin) el.driverClientLogin.value = "";
       toast("Клиент добавлен");
     } catch (e) {
       toast(e.message);
@@ -6998,6 +8527,8 @@
       <div class="drv-client-main drv-client-edit-form">
         <input class="text-input" id="editClientName-${escapeHtml(id)}" value="${escapeHtml(c.client)}" />
         <input class="text-input" id="editClientAddr-${escapeHtml(id)}" value="${escapeHtml(c.address)}" />
+        <input class="text-input" id="editClientInn-${escapeHtml(id)}" value="${escapeHtml(c.inn || "")}" placeholder="ИНН" autocomplete="off" />
+        <input class="text-input" id="editClientLogin-${escapeHtml(id)}" value="${escapeHtml(c.login || "")}" placeholder="Логин (буквенный)" autocomplete="off" />
         <div class="driver-edit-actions">
           <button type="button" class="drv-mini-btn drv-mini-primary" id="saveEdit-${escapeHtml(id)}">Сохранить</button>
           <button type="button" class="drv-mini-btn" id="cancelEdit-${escapeHtml(id)}">Отмена</button>
@@ -7007,11 +8538,13 @@
     document.getElementById(`saveEdit-${id}`).addEventListener("click", async () => {
       const client = document.getElementById(`editClientName-${id}`).value.trim();
       const address = document.getElementById(`editClientAddr-${id}`).value.trim();
+      const inn = document.getElementById(`editClientInn-${id}`).value.trim().replace(/\s+/g, "");
+      const login = document.getElementById(`editClientLogin-${id}`).value.trim();
       if (!client || !address) { toast("Укажите имя и адрес"); return; }
       try {
         const r = await api("/api/drivers/clients", {
           method: "POST",
-          body: JSON.stringify({ action: "update", id, client, address }),
+          body: JSON.stringify({ action: "update", id, client, address, inn, login }),
         });
         if (r && Array.isArray(r.clients)) renderDriverClients(r.clients);
         toast("Клиент обновлён");
@@ -7151,8 +8684,11 @@
       const collapseBtn = routeActive
         ? `<button type="button" class="drv-ico-btn route-collapse is-locked" disabled title="Активный маршрут нельзя свернуть">▾</button>`
         : `<button type="button" class="drv-ico-btn route-collapse" data-route-collapse title="Свернуть/развернуть">▸</button>`;
-      // По умолчанию маршруты показываются свёрнутыми (активные — раскрытыми).
-      const drvCollapsed = routeActive ? "" : " route-collapsed";
+      // По умолчанию маршруты показываются свёрнутыми (активные — раскрытыми);
+      // вручную раскрытые пользователем (expandedDriverRouteCards) остаются раскрытыми
+      // и после автообновления раздела (иначе карточка «разворачивается и сворачивается»).
+      const drvCollapsedNow = routeActive ? false : !expandedDriverRouteCards.has(String(r.id));
+      const drvCollapsed = drvCollapsedNow ? " route-collapsed" : "";
       // Кнопки управления маршрутом.
       //  • Завершённый (done) — удаляется только по коду из «Параметры»:
       //    рисуем замок, по клику открывается ввод кода. Разблокировке done не
@@ -7195,24 +8731,24 @@
 </button>`;
       }
       return `
-        <div class="drv-route-card${drvCollapsed}">
+        <div class="drv-route-card${drvCollapsed}" data-route-id="${escapeHtml(String(r.id))}">
           <div class="drv-route-card-head">
             <div class="drv-route-card-meta">
               <span class="drv-route-name" title="Название маршрута">${escapeHtml(r.routeName || "Маршрут")}</span>
               <span class="drv-route-date">${escapeHtml(dateStr)}</span>
-              <span class="drv-route-driver">
+              ${r.selfPickup ? "" : `<span class="drv-route-driver">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.6-3.4 3.3-5.5 7-5.5s6.4 2.1 7 5.5"/></svg>
                 ${escapeHtml(r.driverName || "—")}
-              </span>
+              </span>`}
               <span class="drv-stop-count">${n}</span>
-              ${Number.isFinite(Number(r.km))
+              ${(!r.selfPickup && Number.isFinite(Number(r.km)))
                 ? `<span class="drv-route-km" title="Протяжённость маршрута (база → точки → база)">${Number(r.km)} км</span>`
                 : ""}
             </div>
             ${collapseBtn}
             ${editDelBtns}
           </div>
-          <div class="route-collapsible"${routeActive ? "" : " hidden"}>
+          <div class="route-collapsible"${drvCollapsedNow ? " hidden" : ""}>
             <ol class="drv-stops">${clientsHtml}</ol>
           </div>
         </div>
@@ -7288,17 +8824,29 @@
   }
 
   async function saveDriverRoute() {
-    const date = (el.driverRouteDate.value || "").trim();
+    let date = (el.driverRouteDate.value || "").trim();
     const driverId = el.driverRouteDriver ? el.driverRouteDriver.value : "";
     const driverName = driverId ? (staffById(driverId) ? staffById(driverId).name : driverId) : "";
+    // Самовывоз: дату ставим сами (сегодня — если не указана), водитель не нужен,
+    // обязателен только выбор хотя бы одного клиента.
+    const selfPickup = !!(el.selfPickupChk && el.selfPickupChk.checked);
+    if (selfPickup && !date) {
+      date = dayKeyOf(Date.now());
+      if (el.driverRouteDate) el.driverRouteDate.value = date;
+    }
     // Название маршрута обязательное: берём ровно то, что диспетчер ввёл в поле
     // «Название маршрута». Поле при открытии страницы пустое, поэтому без явного
     // ввода сохранить маршрут нельзя — маршрут не должен получать случайное имя.
-    const routeName = (el.driverRouteName ? el.driverRouteName.value.trim() : "");
+    let routeName = (el.driverRouteName ? el.driverRouteName.value.trim() : "");
     if (!routeName) {
-      toast("Укажите название маршрута");
-      if (el.driverRouteName) el.driverRouteName.focus();
-      return;
+      if (selfPickup) {
+        // Самовывозу имя не нужно — подставляем автоматически.
+        routeName = `Самовывоз ${date || dayKeyOf(Date.now())}`;
+      } else {
+        toast("Укажите название маршрута");
+        if (el.driverRouteName) el.driverRouteName.focus();
+        return;
+      }
     }
     // Собираем остановки маршрута. Контрагентов связки (несколько на один
     // адрес — общий bundleAddress/address) схлопываем в ОДНУ остановку: в
@@ -7348,35 +8896,49 @@
       }
       chosen.push(stop);
     }
-    if (!date || !driverId || chosen.length === 0) {
-      toast("Укажите дату, водителя и выберите хотя бы одного клиента");
+    const needDate = selfPickup ? false : !date;
+    const needDriver = selfPickup ? false : !driverId;
+    if (needDate || needDriver || chosen.length === 0) {
+      toast(selfPickup
+        ? "Выберите хотя бы одного клиента"
+        : "Укажите дату, водителя и выберите хотя бы одного клиента");
       return;
     }
-    // Накладные обязательны перед созданием маршрута (если включены): у каждой
-    // точки должен быть загружен .xlsx. Накладную принимает диспетчер.
+    // Маршрут можно создать и без загруженной накладной (если накладные включены):
+    // передаём лишь те, что уже загружены; остальные добавляют позже в «Отгрузке»
+    // или подтянет из 1С при создании маршрута.
     const waybillOn2 = !!state.params.allowWaybill;
     const waybills = [];
     if (waybillOn2) {
-      let missingName = "";
-      for (let i = 0; i < chosen.length; i++) {
-        const s = chosen[i];
-        // Накладные каждого клиента связки (одного адреса) складываем в одну.
-        const key = String((s.address || s.bundleName || s.client) || "").trim().toLowerCase();
+      // Накладные собираем по КЛИЕНТАМ каждой остановки, а не по адресу: у
+      // объединённых клиентов на одном адресе каждая накладная идёт только своему
+      // клиенту, а в остановку попадают накладные лишь её клиентов. Иначе накладные
+      // дублировались бы в каждую точку (позиций ×N = число клиентов адреса).
+      const dedupeItems = (arr) => {
+        // Объединяем одинаковые позиции (артикул + партстикер) СУММОЙ количества.
+        // Раньше дубль просто отбрасывался по ключу art|partsticker|qty — если 1С
+        // отдаёт артикул без партстикера (прочерк) несколькими строками по 1 шт
+        // (итого 2), вторая строка терялась и в сборку попадало 1 вместо 2.
+        const byKey = new Map();
+        for (const it of arr) {
+          const k = String((it && it.art) || "") + "|" + String((it && it.partsticker) || "");
+          if (byKey.has(k)) {
+            const e = byKey.get(k);
+            e.qty = (Number(e.qty) || 0) + (Number(it.qty) || 0);
+          } else {
+            byKey.set(k, Object.assign({}, it));
+          }
+        }
+        return [...byKey.values()];
+      };
+      for (let i = 0; i < stopGroups.length; i++) {
+        const g = stopGroups[i];
         const items = [];
-        for (const id of routeOrderIds) {
-          const c = driverClientsCache.find((x) => String(x.id) === String(id));
-          if (!c) continue;
-          if (stopKeyOf2(c) !== key) continue;
+        for (const c of g.items) {
           const e = routeWaybills.get(String(c.id));
           if (e && Array.isArray(e.items) && e.items.length) items.push(...e.items);
         }
-        if (!items.length) { missingName = (s.client || s.bundleName || s.address || `Точка ${i + 1}`); break; }
-        waybills.push({ clientIndex: i, items });
-      }
-      if (missingName) {
-        toast(`Загрузите расходную накладную на «${missingName}» перед созданием маршрута`);
-        renderRouteWaybillsBlock();
-        return;
+        if (items.length) waybills.push({ clientIndex: i, items: dedupeItems(items) });
       }
     }
     try {
@@ -7393,29 +8955,34 @@
           allClientNames.push(s.client);
         }
       });
-      const check = await api("/api/drivers/routes/check", {
-        method: "POST",
-        body: JSON.stringify({
-          date,
-          driverId,
-          clientNames: allClientNames,
-          excludeRouteId: editingRouteId || "",
-        }),
-      });
-      const inter = (check && Array.isArray(check.intersections)) ? check.intersections : [];
-      if (inter.length > 0) {
-        const list = [...new Set(inter.map((i) => `Клиент «${i.clientName}» уже в маршруте «${i.routeName}»`))];
-        const ok = await confirmRouteIntersection(list);
-        if (!ok) return;
+      // Проверку пересечений делаем только для маршрутов с водителем: при
+      // самовывозе водителя нет, поэтому пересечений по водителю быть не может.
+      if (!selfPickup) {
+        const check = await api("/api/drivers/routes/check", {
+          method: "POST",
+          body: JSON.stringify({
+            date,
+            driverId,
+            clientNames: allClientNames,
+            excludeRouteId: editingRouteId || "",
+          }),
+        });
+        const inter = (check && Array.isArray(check.intersections)) ? check.intersections : [];
+        if (inter.length > 0) {
+          const list = [...new Set(inter.map((i) => `Клиент «${i.clientName}» уже в маршруте «${i.routeName}»`))];
+          const ok = await confirmRouteIntersection(list);
+          if (!ok) return;
+        }
       }
       const r = await api("/api/drivers/routes", {
         method: "POST",
         body: JSON.stringify(
           Object.assign(
-            { routeName },
+            { routeName, selfPickup: !!(el.selfPickupChk && el.selfPickupChk.checked) },
             // Километраж построения маршрута (сумма мостов) — сохраняем, чтобы
             // карточка списка показывала то же число, что и построение.
-            (Number.isFinite(Number(routeBuildKm)) ? { km: routeBuildKm } : {}),
+            // Для самовывоза расстояние до точки не считаем и не сохраняем.
+            ((!(el.selfPickupChk && el.selfPickupChk.checked) && Number.isFinite(Number(routeBuildKm))) ? { km: routeBuildKm } : {}),
             editingRouteId
               ? { action: "update", id: editingRouteId, date, driverId, driverName, clients: chosen, waybills }
               : { date, driverId, driverName, clients: chosen, waybills }
@@ -7432,6 +8999,7 @@
       renderRouteClientOptions();
       renderRouteClientSelected();
       routeWaybills.clear();
+      clearRouteDraft();
       toast("Маршрут сохранён");
     } catch (e) {
       toast(e.message);
@@ -7572,6 +9140,8 @@
     if (el.driverRouteDate) el.driverRouteDate.value = r.date || "";
     if (el.driverRouteDriver && r.driverId) el.driverRouteDriver.value = r.driverId;
     if (el.driverRouteName) el.driverRouteName.value = r.routeName || "";
+  if (el.selfPickupChk) el.selfPickupChk.checked = !!r.selfPickup;
+  applySelfPickupUI();
     selectedRouteClientIds.clear();
     routeOrderIds = [];
     (r.clients || []).forEach((rc) => {
@@ -7602,7 +9172,9 @@
       if (!wb || !Array.isArray(wb.items) || !wb.items.length) return;
       const cid = routeOrderIds[i];
       const c = driverClientsCache.find((x) => String(x.id) === String(cid));
-      const key = c ? (stopKeyOf2(c) || "id:" + String(cid)) : "id:" + String(cid);
+      // Ключ — по id КЛИЕНТА (единообразно с сохранением/загрузкой). Раньше брали
+      // адрес (stopKeyOf2) — при сохранении накладные не находились, сборка пуста.
+      const key = c ? String(c.id) : "id:" + String(cid);
       routeWaybills.set(key, {
         items: wb.items.map((x) => Object.assign({}, x)),
         buyer: String((wb && wb.buyer) || ""),
@@ -7612,6 +9184,15 @@
     switchRouteSubtab("route");
     toast("Редактирование маршрута: меняйте точки и нажмите «Сохранить маршрут»");
   }
+  // При самовывозе скрываем поле «Водитель» и сбрасываем его (водителя нет).
+  function applySelfPickupUI() {
+    const on = !!(el.selfPickupChk && el.selfPickupChk.checked);
+    const dv = el.driverRouteDriver;
+    const wrap = dv && dv.closest && dv.closest(".drv-route-driver-field");
+    if (wrap) wrap.classList.toggle("is-selfpickup-hidden", on);
+    if (dv) { if (on) dv.value = ""; dv.disabled = on; }
+  }
+  if (el.selfPickupChk) el.selfPickupChk.addEventListener("change", applySelfPickupUI);
 
   function startLivePolling() {
     if (liveTimer) return;
@@ -7664,40 +9245,161 @@
     else if (name === "groups") renderGroups();
     else if (name === "salaries") renderSalaries();
     else if (name === "log") renderLog();
+    else if (name === "scans") renderScansLog();
     else if (name === "settings") renderParams();
     else if (name === "multiplier") renderMultRules();
     else if (name === "admins") renderAdmins();
+    else if (name === "access") renderAccess();
+    else if (name === "backup") renderBackup();
+  }
+  function renderBackup() {
+    if (el.backupAutoList) loadAutoBackups();
   }
 
-  function renderStaff() {
+  // Раздел «Доступ к разделам»: чекбоксы сотрудников для Проблем/Логов/Отчётов.
+  function renderAccess() {
+    if (el.notfoundUsersGroups) renderNotfoundUsersChecks(el.notfoundUsersGroups);
+    if (el.logUsersGroups) renderLogUsersChecks(el.logUsersGroups);
+    if (el.reportsUsersGroups) renderReportsUsersChecks(el.reportsUsersGroups);
+    if (el.sverkiUsersGroups) renderSverkiUsersChecks(el.sverkiUsersGroups);
+    if (el.procenkaUsersGroups) renderProcenkaUsersChecks(el.procenkaUsersGroups);
+    if (el.parserUsersGroups) renderParserUsersChecks(el.parserUsersGroups);
+  }
+
+  let _adminUsersMap = null;
+  async function loadAdminUsersMap() {
+    if (_adminUsersMap) return _adminUsersMap;
+    try {
+      const r = await api("/api/admin/users");
+      const m = new Map();
+      ((r && (r.users || r.list)) || []).forEach((u) => m.set(String(u.id), u));
+      _adminUsersMap = m;
+    } catch (_e) {
+      _adminUsersMap = new Map();
+    }
+    return _adminUsersMap;
+  }
+  async function renderStaff() {
     const meName = staffById(state.me.id) ? staffById(state.me.id).name : state.me.name;
     el.staffCountNote.textContent = `${state.staff.length} ${plural(state.staff.length, "сотрудник", "сотрудника", "сотрудников")} · вы — «${escapeHtml(meName)}»`;
     el.staffList.innerHTML = "";
-    state.staff.forEach((s) => {
+    const aMap = await loadAdminUsersMap();
+    // Разбивка по существующим группам: каждый сотрудник попадает в свою группу,
+    // без группы — в «Без группы». Одна строка на сотрудника, без дублей.
+    const byGroup = new Map();
+    const ungrouped = [];
+    (state.staff || []).forEach((s) => {
+      const gr = (state.groups || []).find((g) => (g.memberIds || []).includes(s.id));
+      if (gr) {
+        const name = gr.name || "Группа";
+        if (!byGroup.has(name)) byGroup.set(name, []);
+        byGroup.get(name).push(s);
+      } else {
+        ungrouped.push(s);
+      }
+    });
+    const renderRow = (s) => {
       const row = document.createElement("div");
       row.className = "admin-row";
       const isMe = s.id === state.me.id;
       const isAdminUser = state.admins.includes(s.id) || (s.id === state.me.id && state.isAdmin);
+      const ownerCanToggle = !isMe; // владельца нельзя снять с роли
+      const acct = aMap.get(String(s.id));
       const letter = (s.name || "?").trim().charAt(0).toUpperCase();
-      const sub = [];
-      if (isMe) sub.push('<span class="badge">вы</span>');
-      if (isAdminUser) sub.push('<span class="badge">админ</span>');
       row.innerHTML = `
         <div class="avatar">${letter}</div>
         <div class="admin-row-main">
-          <div class="admin-row-name">${escapeHtml(s.name)}</div>
-          <div class="admin-row-sub">${sub.join(" ") || "сотрудник"}</div>
+          <div class="admin-row-name">${escapeHtml(s.name)}${isMe ? ' <span class="badge">вы</span>' : ""}</div>
+          <div class="admin-row-sub"></div>
         </div>
         <div class="row-action">
-          ${isMe
-            ? '<span class="disabled-note">это вы</span>'
-            : `<button class="mini-btn on" data-id="${s.id}">Удалить</button>`}
+          ${isAdminUser ? '<span class="badge">админ</span>' : ""}
+          ${ownerCanToggle
+            ? `<button class="mini-btn ${isAdminUser ? "on" : ""}" data-admin="${s.id}" data-on="${isAdminUser}">${isAdminUser ? "Снять админа" : "Сделать админом"}</button>`
+            : '<span class="disabled-note">это вы</span>'}
+          ${!isMe ? `<button class="mini-btn on" data-id="${s.id}">Удалить</button>` : ""}
         </div>
+        ${state.isAdmin ? `
+        <div class="row-acct">
+          <input class="text-input acct-login" data-login-for="${s.id}" value="${acct && acct.login ? escapeHtml(acct.login) : ""}" placeholder="логин" autocomplete="off" />
+          <input class="text-input acct-pass" data-pass-for="${s.id}" type="password" placeholder="пароль" autocomplete="new-password" />
+          <button class="mini-btn" data-masq="${s.id}" title="Войти под этим пользователем">Войти</button>
+        </div>` : ""}
       `;
-      el.staffList.appendChild(row);
+      return row;
+    };
+    // Сначала блоки с группами, затем «Без группы».
+    for (const [title, items] of byGroup) {
+      const t = document.createElement("div");
+      t.className = "block-title";
+      t.textContent = title;
+      el.staffList.appendChild(t);
+      items.forEach((s) => el.staffList.appendChild(renderRow(s)));
+    }
+    if (ungrouped.length) {
+      const t = document.createElement("div");
+      t.className = "block-title";
+      t.textContent = "Без группы";
+      el.staffList.appendChild(t);
+      ungrouped.forEach((s) => el.staffList.appendChild(renderRow(s)));
+    }
+    // Назначение/снятие роли администратора (без дублей в db.admins).
+    el.staffList.querySelectorAll("[data-admin]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        const on = btn.dataset.on === "true";
+        try {
+          await api("/api/admins", { method: "POST", body: JSON.stringify({ id, on: !on }) });
+          if (on) state.admins = state.admins.filter((a) => a !== id);
+          else state.admins = state.admins.concat(id);
+          renderStaff();
+          toast(on ? "Роль администратора снята" : "Назначен администратором");
+        } catch (e) {
+          toast(e.message);
+        }
+      });
     });
     el.staffList.querySelectorAll(".mini-btn[data-id]").forEach((btn) => {
       btn.addEventListener("click", () => removeStaff(btn.dataset.id));
+    });
+    // Учётные записи: автосохранение логина/пароля при вводе (без кнопки «Сохранить»).
+    const debounceCreds = {};
+    el.staffList.querySelectorAll("input[data-login-for], input[data-pass-for]").forEach((inp) => {
+      inp.addEventListener("change", () => {
+        const id = inp.getAttribute("data-login-for") || inp.getAttribute("data-pass-for");
+        if (!id) return;
+        clearTimeout(debounceCreds[id]);
+        debounceCreds[id] = setTimeout(async () => {
+          const loginInp = el.staffList.querySelector(`[data-login-for="${id}"]`);
+          const passInp = el.staffList.querySelector(`[data-pass-for="${id}"]`);
+          const login = loginInp ? String(loginInp.value).trim() : "";
+          const pass = passInp ? String(passInp.value) : "";
+          try {
+            await apiAuth("POST", "/api/admin/users/credentials", { userId: id, login, password: pass });
+            _adminUsersMap = null;
+            toast("Учётная запись сохранена");
+          } catch (e) {
+            toast((e && e.message) || "Не удалось сохранить учётную запись");
+          }
+        }, 600);
+      });
+    });
+    // Вход под пользователем (имперсонация) — только админ.
+    el.staffList.querySelectorAll("[data-masq]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          await apiAuth("POST", "/api/auth/masquerade", { userId: btn.dataset.masq });
+          // Имперсонация: сбрасываем личный кэш прежнего пользователя, чтобы
+          // в новом сеансе таймер/день соответствовали тому, под кем вошли,
+          // а не времени администратора.
+          try { localStorage.clear(); } catch (_e) {}
+          try { sessionStorage.clear(); } catch (_e) {}
+          toast("Вошли под пользователем");
+          location.reload();
+        } catch (e) {
+          toast((e && e.message) || "Не удалось войти под пользователем");
+        }
+      });
     });
 
     // Blocked employees (access closed). Admin can restore access.
@@ -7778,48 +9480,81 @@
     dayKeys.reverse();
 
     const frag = document.createDocumentFragment();
+    // Группируем дни по месяцам: {"YYYY-MM": [dayKeys...]} (порядок — как в dayKeys,
+    // т.е. месяцы от новых к старым).
+    const monthsRu = ["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+    const byMonth = new Map();
     dayKeys.forEach((key) => {
-      const isToday = key === today;
-      const colKey = "day:" + key;
-      const openedKey = colKey + "+"; // явно раскрытая папка (кроме «сегодня» по умолчанию)
-      // Явный выбор важнее дефолта: «+» = раскрыта, «без суффикса» = свёрнута.
-      let open;
-      if (state.collapsed.has(openedKey)) open = true;
-      else if (state.collapsed.has(colKey)) open = false;
-      else open = isToday; // дефолт: сегодня раскрыта, прошлые дни свёрнуты
-      const folder = document.createElement("div");
-      folder.className = "day-folder" + (open ? " open" : "") + (isToday ? " is-today" : "");
-      const head = document.createElement("div");
-      head.className = "today-day-head";
-      head.innerHTML = `
+      const m = key.slice(0, 7);
+      if (!byMonth.has(m)) byMonth.set(m, []);
+      byMonth.get(m).push(key);
+    });
+    const curYM = todayKey.slice(0, 7);
+    byMonth.forEach((keys, m) => {
+      const mf = document.createElement("div");
+      const monthKey = "month:" + m;
+      // Текущий месяц по умолчанию раскрыт, прошлые свёрнуты. Ручное сворачивание
+      // месяца сохраняем в state.collapsed (как у дней), чтобы автообновление
+      // списка не «разворачивало» месяц обратно — иначе его невозможно свернуть.
+      const openMonth = state.collapsed.has(monthKey) ? false : m === curYM;
+      mf.className = "month-folder" + (openMonth ? " open" : "");
+      const mHead = document.createElement("div");
+      mHead.className = "month-folder-head";
+      const mo = Number(m.slice(5, 7)) - 1;
+      const label = (monthsRu[mo] || "") + " " + Number(m.slice(0, 4));
+      mHead.innerHTML = `
         <span class="folder-caret"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
-        <span class="today-day-label">${fmtDateReadable(key)}${isToday ? ` <span class="badge">сегодня</span>` : ""}</span>
-      `;
-      const body = document.createElement("div");
-      body.className = "today-day-body";
-      const list = document.createElement("div");
-      list.className = "today-day-inner";
-      body.appendChild(list);
-      folder.appendChild(head);
-      folder.appendChild(body);
-      // Collapse / expand this day folder. Explicit user choice is remembered in
-      // localStorage so the "today open / past collapsed" default is overridable.
-      head.addEventListener("click", () => {
-        state.collapsed.delete(colKey);
-        state.collapsed.delete(openedKey);
-        const nowOpen = !folder.classList.contains("open");
-        state.collapsed.add(nowOpen ? openedKey : colKey);
-        saveCollapsed(state.collapsed);
-        folder.classList.toggle("open", nowOpen);
-        // Ленивое построение: строки дня создаются в момент первого раскрытия,
-        // а не только на этапе рендера. Так свёрнутый прошедший день открывается
-        // сразу (с актуальными данными), без ручного «Обновить».
-        if (nowOpen && list.childElementCount === 0) {
-          buildTodayRows(list, key, canEdit);
-        }
+        <span class="month-label">${label}</span>
+        <span class="month-count">${keys.length} дн.</span>`;
+      const mBody = document.createElement("div");
+      mBody.className = "month-folder-body";
+      keys.forEach((key) => {
+        const isToday = key === today;
+        const colKey = "day:" + key;
+        const openedKey = colKey + "+"; // явно раскрытая папка (кроме «сегодня» по умолчанию)
+        let open;
+        if (state.collapsed.has(openedKey)) open = true;
+        else if (state.collapsed.has(colKey)) open = false;
+        else open = isToday; // дефолт: сегодня раскрыта, прошлые дни свёрнуты
+        const folder = document.createElement("div");
+        folder.className = "day-folder" + (open ? " open" : "") + (isToday ? " is-today" : "");
+        const head = document.createElement("div");
+        head.className = "today-day-head";
+        head.innerHTML = `
+          <span class="folder-caret"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></span>
+          <span class="today-day-label">${fmtDateReadable(key)}${isToday ? ` <span class="badge">сегодня</span>` : ""}</span>
+        `;
+        const body = document.createElement("div");
+        body.className = "today-day-body";
+        const list = document.createElement("div");
+        list.className = "today-day-inner";
+        body.appendChild(list);
+        folder.appendChild(head);
+        folder.appendChild(body);
+        head.addEventListener("click", () => {
+          state.collapsed.delete(colKey);
+          state.collapsed.delete(openedKey);
+          const nowOpen = !folder.classList.contains("open");
+          state.collapsed.add(nowOpen ? openedKey : colKey);
+          saveCollapsed(state.collapsed);
+          folder.classList.toggle("open", nowOpen);
+          if (nowOpen && list.childElementCount === 0) {
+            buildTodayRows(list, key, canEdit);
+          }
+        });
+        if (open) buildTodayRows(list, key, canEdit);
+        mBody.appendChild(folder);
       });
-      if (open) buildTodayRows(list, key, canEdit);
-      frag.appendChild(folder);
+      mHead.addEventListener("click", () => {
+        const willOpen = !mf.classList.contains("open");
+        mf.classList.toggle("open", willOpen);
+        if (willOpen) state.collapsed.delete(monthKey);
+        else state.collapsed.add(monthKey);
+        saveCollapsed(state.collapsed);
+      });
+      mf.appendChild(mHead);
+      mf.appendChild(mBody);
+      frag.appendChild(mf);
     });
     el.todayList.innerHTML = "";
     el.todayList.appendChild(frag);
@@ -8019,17 +9754,54 @@
     }
   }
 
+  function openAddStaffModal() {
+    if (!el.addStaffModal) return;
+    const sel = el.asGroup;
+    if (sel) {
+      sel.innerHTML = '<option value="">Без группы</option>'
+        + (state.groups || []).map((g) => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.name)}</option>`).join("");
+    }
+    if (el.asName) el.asName.value = "";
+    if (el.asLogin) el.asLogin.value = "";
+    if (el.asPass) el.asPass.value = "";
+    if (el.asGroup) el.asGroup.value = "";
+    if (el.addStaffModal.showModal) el.addStaffModal.showModal();
+  }
+  function closeAddStaffModal() {
+    if (el.addStaffModal && el.addStaffModal.close) el.addStaffModal.close();
+  }
   async function addStaff() {
-    const name = el.newStaffName.value.trim();
+    const name = String((el.asName && el.asName.value || "")).trim();
     if (!name) { toast("Введите ФИО сотрудника"); return; }
+    const groupId = String((el.asGroup && el.asGroup.value) || "");
+    const login = String((el.asLogin && el.asLogin.value) || "").trim();
+    const pass = String((el.asPass && el.asPass.value) || "");
     try {
       const r = await api("/api/staff", { method: "POST", body: JSON.stringify({ name }) });
       state.staff = r.staff;
-      el.newStaffName.value = "";
+      const created = (r.staff || []).find((s) => s.name === name);
+      // Привязка к группе (если выбрана).
+      if (groupId && created) {
+        const g = (state.groups || []).find((x) => String(x.id) === String(groupId));
+        if (g) {
+          const memberIds = Array.from(new Set([...(g.memberIds || []), created.id]));
+          await api("/api/groups/" + encodeURIComponent(g.id), {
+            method: "PUT",
+            body: JSON.stringify({ moderatorId: g.moderatorId || null, memberIds }),
+          });
+        }
+      }
+      // Учётная запись (логин/пароль).
+      if (created && login) {
+        await apiAuth("POST", "/api/admin/users/credentials", { userId: created.id, login, password: pass });
+      }
+      closeAddStaffModal();
+      await loadState();
+      render();
       renderAdminSub("staff");
       toast("Сотрудник добавлен");
     } catch (e) {
-      toast(e.message);
+      toast((e && e.message) || "Не удалось добавить сотрудника");
     }
   }
 
@@ -8152,19 +9924,26 @@
   }
 
   function renderSalaries() {
-    const now = new Date();
-    const bizDays = businessDaysInMonth(now.getFullYear(), now.getMonth());
+    // Месяц, за который показываем/правим оклад, премию, надбавку. По умолчанию —
+    // текущий; значения за конкретный месяц берутся из state.salaryMonth (не из
+    // «текущего» st.*), поэтому правка одного месяца не трогает другие.
+    let salaryMonthKey = el.salMonth ? String(el.salMonth.value || "") : "";
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(salaryMonthKey)) salaryMonthKey = currentMonthKey();
+    const yp = Number(salaryMonthKey.slice(0, 4));
+    const mp = Number(salaryMonthKey.slice(5, 7)) - 1;
+    const bizDays = businessDaysInMonth(yp, mp);
     const normDay = state.norm;
-    const monthLabel = new Date(now.getFullYear(), now.getMonth(), 1)
+    const monthLabel = new Date(yp, mp, 1)
       .toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
     let html;
     if (state.staff.length === 0) {
       html = `<tr><td colspan="6" class="num" style="color:var(--ink-faint)">Добавьте сотрудников</td></tr>`;
     } else {
       html = state.staff.map((s) => {
-        const salary = s.salary != null ? s.salary : 50000;
-        const bonus = s.bonus != null ? s.bonus : 0;
-        const extraBonus = s.extraBonus != null ? s.extraBonus : 0;
+        const pay = staffPayForMonth(s, salaryMonthKey);
+        const salary = pay.salary != null ? pay.salary : 50000;
+        const bonus = pay.bonus != null ? pay.bonus : 0;
+        const extraBonus = pay.extraBonus != null ? pay.extraBonus : 0;
         const hoursNorm = bizDays * RATE_BASE_HOURS;
         const rate = hoursNorm > 0 ? salary / hoursNorm : 0;
         return `
@@ -8197,7 +9976,7 @@
         if (!Number.isFinite(v) || v < 0) v = 0;
         st.salary = Math.round(v);
         try {
-          await api("/api/staff/salary", { method: "POST", body: JSON.stringify({ id, salary: st.salary }) });
+          await api("/api/staff/salary", { method: "POST", body: JSON.stringify({ id, salary: st.salary, month: salaryMonthKey }) });
           toast(`Оклад обновлён: ${st.name} — ${fmtMoney(st.salary)}`);
         } catch (e) {
           toast(e.message);
@@ -8213,7 +9992,7 @@
         if (!Number.isFinite(v) || v < 0) v = 0;
         st.bonus = Math.round(v);
         try {
-          await api("/api/staff/bonus", { method: "POST", body: JSON.stringify({ id, bonus: st.bonus }) });
+          await api("/api/staff/bonus", { method: "POST", body: JSON.stringify({ id, bonus: st.bonus, month: salaryMonthKey }) });
           toast(`Премия обновлена: ${st.name} — ${fmtMoney(st.bonus)}`);
         } catch (e) {
           toast(e.message);
@@ -8229,14 +10008,163 @@
         if (!Number.isFinite(v) || v < 0) v = 0;
         st.extraBonus = Math.round(v);
         try {
-          await api("/api/staff/extra-bonus", { method: "POST", body: JSON.stringify({ id, extraBonus: st.extraBonus }) });
+          await api("/api/staff/extra-bonus", { method: "POST", body: JSON.stringify({ id, extraBonus: st.extraBonus, month: salaryMonthKey }) });
           toast(`Надбавка обновлена: ${st.name} — ${fmtMoney(st.extraBonus)}`);
         } catch (e) {
           toast(e.message);
         }
       });
     });
+    if (el.salMonth) {
+      // После рендера перерисовываем табель/ЗП, чтобы он совпал с выбранным месяцем.
+      el.salMonth.dataset.lastYear = String(yp);
+      el.salMonth.dataset.lastMonth = String(mp);
+    }
   }
+  if (el.salMonth) {
+    el.salMonth.value = el.salMonth.value || currentMonthKey();
+    el.salMonth.addEventListener("change", () => {
+      renderSalaries();
+      if (el.reportMonth && el.salMonth.value) {
+        try { el.reportMonth.value = el.salMonth.value; } catch { /* ignore */ }
+        state.reportMonthKey = el.salMonth.value;
+        renderReport();
+      }
+    });
+  }
+
+  // ---- Логи сканов деталей при сборке (вкладка «Логи», только админ) ----
+  // Раскрытые клиенты в журнале сканов («Логи»): состояние живёт между
+  // перерисовками (фильтр/обновление), чтобы раскрытая вкладка клиента сама
+  // не закрывалась.
+  let scansOpen = new Set();
+  async function renderScansLog() {
+    const list = el.scansLogList;
+    if (!list) return;
+    const onlyFailed = !!(el.scansOnlyFailed && el.scansOnlyFailed.checked);
+    // Фильтр «календарь по дням»: пустая дата = показать ВСЕ дни (не теряем список
+    // и не выглядит так, будто логи «пропали»), выбранная дата = только этот день.
+    const day = (el.scansDate && el.scansDate.value) || "";
+    const dayOk = /^\d{4}-\d{2}-\d{2}$/.test(day);
+    try {
+      const parts = [];
+      if (dayOk) {
+        parts.push("from=" + encodeURIComponent(day + "T00:00:00"), "to=" + encodeURIComponent(day + "T23:59:59.999"));
+      }
+      if (onlyFailed) parts.push("ok=false");
+      const q = parts.length ? "?" + parts.join("&") : "";
+      const r = await api("/api/logs/barcode" + q);
+      const rows = (r && r.rows) || [];
+      if (!rows.length) {
+        renderScansSummary(0, 0, 0);
+        list.innerHTML = `<tr><td colspan="9" class="num" style="color:var(--ink-faint)">${
+          onlyFailed ? "Неуспешных сканов нет" : "Сканов нет"
+        }</td></tr>`;
+        return;
+      }
+      renderScansSummary(rows.length, rows.filter((x) => x.ok === true).length, rows.filter((x) => x.ok !== true).length);
+      // Группируем строки по клиентам в раскрываемые вкладки (Клиент → его сканы).
+      const groups = new Map();
+      for (const x of rows) {
+        const c = String(x.client || "Без клиента");
+        if (!groups.has(c)) groups.set(c, []);
+        groups.get(c).push(x);
+      }
+      const frag = [];
+      for (const [client, items] of groups) {
+        const open = scansOpen.has(client);
+        frag.push(`<div class="scans-client" data-scans-client="${escapeHtml(client)}">
+          <div class="scans-client-head" title="Нажмите, чтобы раскрыть/свернуть сканы клиента">
+            <span class="scans-arrow">${open ? "▾" : "▸"}</span>
+            <span class="scans-client-name">${escapeHtml(client)}</span>
+            <span class="scans-client-count">(${items.length})</span>
+          </div>
+          <div class="scans-client-body"${open ? "" : " hidden"}>
+            <table>
+              <thead><tr>
+                <th>ВРЕМЯ</th><th>СОТРУДНИК</th><th>ПАРТСТИКЕР</th><th>КОД</th><th>БОКС</th>
+                <th>АРТИКУЛ В НАКЛАДНОЙ</th><th>СТАТУС</th><th>ПРИЧИНА</th>
+              </tr></thead>
+              <tbody>${items.map((x) => {
+                const ok = x.ok === true;
+                return `<tr class="${ok ? "scan-ok" : "scan-fail"}">
+                  <td>${escapeHtml(x.ts ? fmtDateTimeSec(x.ts) : "")}</td>
+                  <td>${escapeHtml(x.userName || "—")}</td>
+                  <td>${x.partsticker ? escapeHtml(shortPs(x.partsticker)) : "—"}</td>
+                  <td><span class="scan-code">${escapeHtml(x.art || x.code || "—")}</span></td>
+                  <td>${escapeHtml(x.box ? waybillBoxName(x.box) : "—")}</td>
+                  <td>${x.ok === true ? "Да" : "Нет"}</td>
+                  <td>${ok ? "успешно" : "неуспешно"}</td>
+                  <td>${escapeHtml(x.reason || "")}</td>
+                </tr>`;
+              }).join("")}</tbody>
+            </table>
+          </div>
+        </div>`);
+      }
+      list.innerHTML = frag.join("");
+      // Клик по заголовку клиента раскрывает/сворачивает его сканы; состояние
+      // сохраняем, чтобы раскрытая вкладка не закрывалась при повторных рендерах.
+      list.querySelectorAll("[data-scans-client]").forEach((block) => {
+        const head = block.querySelector(".scans-client-head");
+        if (!head) return;
+        head.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const client = block.getAttribute("data-scans-client") || "";
+          const body = block.querySelector(".scans-client-body");
+          const arrow = block.querySelector(".scans-arrow");
+          if (!body) return;
+          const nowOpen = body.hidden;
+          body.hidden = !nowOpen;
+          if (arrow) arrow.textContent = nowOpen ? "▾" : "▸";
+          if (nowOpen) scansOpen.add(client); else scansOpen.delete(client);
+        });
+      });
+    } catch (e) {
+      list.innerHTML = `<tr><td colspan="9" class="num">Ошибка загрузки: ${escapeHtml((e && e.message) || String(e))}</td></tr>`;
+    }
+  }
+  function renderScansSummary(total, okN, failN) {
+    const box = el.scansSummary;
+    if (!box) return;
+    box.innerHTML = `<span>За день: <b>${total}</b></span>` +
+      `<span class="scan-sum-ok">успешных: <b>${okN}</b></span>` +
+      `<span class="scan-sum-fail">неуспешных: <b>${failN}</b></span>`;
+  }
+  if (el.scansOnlyFailed) {
+    // Запоминаем галочку «Только неуспешные» и восстанавливаем после перезагрузки.
+    try { el.scansOnlyFailed.checked = localStorage.getItem("biotime.scansOnlyFailed") === "1"; } catch { /* ignore */ }
+    el.scansOnlyFailed.addEventListener("change", () => {
+      try { localStorage.setItem("biotime.scansOnlyFailed", el.scansOnlyFailed.checked ? "1" : "0"); } catch { /* ignore */ }
+      renderScansLog();
+    });
+  }
+  if (el.scansLogRefresh) el.scansLogRefresh.addEventListener("click", renderScansLog);
+  if (el.scansDate) {
+    // Дата по умолчанию — пусто (показываем ВСЕ дни: полный список, ничего не «пропадает»).
+    el.scansDate.addEventListener("change", renderScansLog);
+  }
+  if (el.scansAllDays) el.scansAllDays.addEventListener("click", () => {
+    if (el.scansDate) el.scansDate.value = "";
+    renderScansLog();
+  });
+  if (el.scansLogClear) {
+    el.scansLogClear.addEventListener("click", async () => {
+      if (!confirm("Очистить логи сканирования? Текущие будут сохранены в архив (не удаляются безвозвратно).")) return;
+      try {
+        const r = await api("/api/logs/barcode/clear", { method: "POST", body: JSON.stringify({}) });
+        if (r && r.ok) toast("Логи очищены");
+        else toast((r && r.error) || "Не удалось очистить");
+      } catch (e) { toast((e && e.message) || "Ошибка очистки"); }
+      renderScansLog();
+    });
+  }
+  // Автообновление «Логов» по мере сканирования складом: опрашиваем каждые ~5 с,
+  // но реально перезапрашиваем, ТОЛЬКО когда вкладка «Логи» открыта (иначе зря дёргаем сервер).
+  setInterval(() => {
+    const list = el.scansLogList;
+    if (list && list.offsetParent !== null) renderScansLog();
+  }, 5000);
 
   // Convert ms timestamp -> "HH:MM" (local time).
   // Единый опорный часовой пояс — смещение от UTC в минутах, присланное сервером.
@@ -8368,6 +10296,185 @@
     if (!container) return [];
     return [...container.querySelectorAll('input[type="checkbox"]:checked')].map((c) => c.value);
   }
+  // Собрать матрицу доступа к разделам «Отчётов»: { раздел: [userId, ...] }.
+  function collectReportsSections() {
+    const out = {};
+    const root = el.reportsUsersGroups || el.reportsSectionsWrap;
+    if (root) root.querySelectorAll('input[type="checkbox"]:checked').forEach((cb) => {
+      const key = cb.getAttribute("data-rs-key");
+      if (!key) return;
+      (out[key] = out[key] || []).push(cb.getAttribute("data-rs-user"));
+    });
+    return out;
+  }
+  // Чекбоксы сотрудников для доступа к «Отчёту не найдено» (кто видит вкладку).
+  function renderNotfoundUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.notfoundUsers || [];
+    if (el.notfoundUsersCount) el.notfoundUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.notfoundUsersSearch ? el.notfoundUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) {
+      container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`;
+      return;
+    }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check">
+        <input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} />
+        <span>${escapeHtml(s.name)}</span>
+      </label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => applyParams());
+    });
+  }
+  if (el.notfoundUsersSearch) {
+    el.notfoundUsersSearch.addEventListener("input", () =>
+      el.notfoundUsersGroups && renderNotfoundUsersChecks(el.notfoundUsersGroups));
+  }
+
+  // Чекбоксы сотрудников для доступа к вкладке «Логи» (кто видит «Логи»).
+  function renderLogUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.logUsers || [];
+    if (el.logUsersCount) el.logUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.logUsersSearch ? el.logUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) {
+      container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`;
+      return;
+    }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check">
+        <input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} />
+        <span>${escapeHtml(s.name)}</span>
+      </label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => applyParams());
+    });
+  }
+  if (el.logUsersSearch) {
+    el.logUsersSearch.addEventListener("input", () =>
+      el.logUsersGroups && renderLogUsersChecks(el.logUsersGroups));
+  }
+  function renderReportsUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.reportsUsers || [];
+    if (el.reportsUsersCount) el.reportsUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.reportsUsersSearch ? el.reportsUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) {
+      container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`;
+      return;
+    }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check">
+        <input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} />
+        <span>${escapeHtml(s.name)}</span>
+      </label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.addEventListener("change", () => applyParams());
+    });
+  }
+  if (el.reportsUsersSearch) {
+    el.reportsUsersSearch.addEventListener("input", () =>
+      el.reportsUsersGroups && renderReportsUsersChecks(el.reportsUsersGroups));
+  }
+  // Внутренние разделы «Отчётов» (ключ вкладки модуля → русское название).
+  const REPORTS_SECTIONS = [
+    ["dashboard", "Дашборд"],
+    ["terms", "Сроки по поставщикам"],
+    ["pricing", "Проценка"],
+    ["report", "Отчет"],
+    ["rejections", "Отказы поставщики"],
+    ["client-rejections", "Отказ клиенты"],
+    ["client-analysis", "Анализ заказов клиентов"],
+    ["europe", "Отчет Европа"],
+    ["client-config", "Конфигуратор сроков"],
+    ["manual-automat", "Ручной автомат"],
+    ["supplier-emails", "Почты поставщиков"],
+    ["logs", "Логи"],
+    ["settings", "Настройки"],
+  ];
+  function renderReportsSections() {
+    const wrap = el.reportsSectionsWrap;
+    if (!wrap) return;
+    const staff = state.staff || [];
+    const sec = state.params && state.params.reportsSections || {};
+    // Список сотрудников; напротив каждого — чекбоксы доступных разделов «Отчётов».
+    const rows = staff.map((s) => {
+      const checks = REPORTS_SECTIONS.map(([key, name]) => {
+        const on = (sec[key] || []).some((x) => String(x) === String(s.id));
+        const t = String(name).slice(0, 4) + "."; // компактная подпись (полное в title)
+        return `<label class="rs-check" title="${escapeHtml(name)}"><input type="checkbox" data-rs-user="${escapeHtml(String(s.id))}" data-rs-key="${key}" ${on ? "checked" : ""} /><span>${escapeHtml(t)}</span></label>`;
+      }).join("");
+      return `<div class="rs-row"><span class="rs-name">${escapeHtml(s.name)}</span><div class="rs-checks">${checks}</div></div>`;
+    }).join("");
+    wrap.innerHTML = rows || `<div class="empty-hint">Сотрудники не заданы.</div>`;
+    wrap.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.addEventListener("change", () => applyParams()));
+  }
+  function renderSverkiUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.sverkiUsers || [];
+    if (el.sverkiUsersCount) el.sverkiUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.sverkiUsersSearch ? el.sverkiUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) { container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`; return; }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check"><input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} /><span>${escapeHtml(s.name)}</span></label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.addEventListener("change", () => applyParams()));
+  }
+  if (el.sverkiUsersSearch) {
+    el.sverkiUsersSearch.addEventListener("input", () =>
+      el.sverkiUsersGroups && renderSverkiUsersChecks(el.sverkiUsersGroups));
+  }
+  function renderProcenkaUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.procenkaUsers || [];
+    if (el.procenkaUsersCount) el.procenkaUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.procenkaUsersSearch ? el.procenkaUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) { container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`; return; }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check"><input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} /><span>${escapeHtml(s.name)}</span></label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.addEventListener("change", () => applyParams()));
+  }
+  if (el.procenkaUsersSearch) {
+    el.procenkaUsersSearch.addEventListener("input", () =>
+      el.procenkaUsersGroups && renderProcenkaUsersChecks(el.procenkaUsersGroups));
+  }
+  function renderParserUsersChecks(container) {
+    if (!container) return;
+    const staff = state.staff || [];
+    const sel = state.params.parserUsers || [];
+    if (el.parserUsersCount) el.parserUsersCount.textContent = sel.length ? `· выбрано: ${sel.length}` : "";
+    const q = (el.parserUsersSearch ? el.parserUsersSearch.value : "").toLowerCase().trim();
+    const filtered = staff.filter((s) => !q || String(s.name || "").toLowerCase().includes(q));
+    if (!filtered.length) { container.innerHTML = `<span class="group-scope-empty">Сотрудники не найдены.</span>`; return; }
+    container.innerHTML = filtered.map((s) => {
+      const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      return `<label class="group-check"><input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} /><span>${escapeHtml(s.name)}</span></label>`;
+    }).join("");
+    container.querySelectorAll('input[type="checkbox"]').forEach((cb) => cb.addEventListener("change", () => applyParams()));
+  }
+  if (el.parserUsersSearch) {
+    el.parserUsersSearch.addEventListener("input", () =>
+      el.parserUsersGroups && renderParserUsersChecks(el.parserUsersGroups));
+  }
 
   // Client-side replica of the server's group-scoped overtime visibility, used to
   // refresh the "me"/staff flags right after an admin saves the params.
@@ -8395,6 +10502,168 @@
     if (ids.length === 0) return false; // никого не отмечено — раздел скрыт у всех
     return state.me && staffInGroup(state.me.id, ids);
   }
+  // Доступ к вкладке «Отчёт не найдено»: админ — всегда; остальные — только те,
+  // кто отмечен в «Параметры → Доступ к “Отчёту не найдено”».
+  function canSeeNotfound() {
+    if (state.isAdmin) return true;
+    // Источник истины — серверный флаг (как canSeeShipment): сервер считает доступ
+    // по полному списку notfoundUsers и пускает в /api/notfound именно этих людей.
+    if (typeof state.canSeeNotfound === "boolean") return state.canSeeNotfound;
+    const ids = state.params.notfoundUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
+  // Кто видит вкладку «Логи»: админ, модератор или сотрудник из logUsers
+  // (серверный флаг canSeeLogs — источник истины, как canSeeNotfound).
+  function canSeeLogs() {
+    if (state.isAdmin || state.isModerator) return true;
+    if (typeof state.canSeeLogs === "boolean") return state.canSeeLogs;
+    const ids = state.params.logUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
+  function canSeeReports() {
+    // Вкладку «Отчёты» всегда видит только администратор; остальные — только если
+    // отмечены в «Параметры → Доступ к “Отчёты”» (модератор права не имеет).
+    if (state.isAdmin) return true;
+    if (typeof state.canSeeReports === "boolean") return state.canSeeReports;
+    const ids = state.params.reportsUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
+  function canSeeSverki() {
+    if (state.isAdmin) return true;
+    if (typeof state.canSeeSverki === "boolean") return state.canSeeSverki;
+    const ids = state.params.sverkiUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
+  function canSeeProcenka() {
+    if (state.isAdmin) return true;
+    if (typeof state.canSeeProcenka === "boolean") return state.canSeeProcenka;
+    const ids = state.params.procenkaUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
+  function canSeeParser() {
+    if (state.isAdmin) return true;
+    if (typeof state.canSeeParser === "boolean") return state.canSeeParser;
+    const ids = state.params.parserUsers || [];
+    if (ids.length === 0) return false;
+    return state.me && state.me.id != null && ids.some((x) => String(x) === String(state.me.id));
+  }
+  // Отрисовка вкладки «Отчёты». Пока модуль АБЦП не перенесён — заглушка; после
+  // интеграции здесь монтируется его интерфейс (вариант 2 — прямая встройка).
+  function renderReports() {
+    const host = el.reportsHost;
+    if (!host) return;
+    if (host.dataset.ready) return;
+    host.dataset.ready = "1";
+    host.classList.add("reports-embed");
+    host.innerHTML = `<iframe src="/reports/" style="width:100%;height:calc(100vh - 150px);min-height:480px;border:0;border-radius:12px;background:#101010;" title="Отчёты"></iframe>`;
+  }
+  // Полноэкранное модальное окно «Отчёты».
+  function openReportsModal() {
+    if (!canSeeReports()) return;
+    if (!el.reportsModal || !el.reportsModalFrame) return;
+    if (!el.reportsModalFrame.querySelector("iframe")) {
+      const ifr = document.createElement("iframe");
+      ifr.src = "/reports/";
+      ifr.setAttribute("title", "Отчеты ПрофМаркет");
+      el.reportsModalFrame.appendChild(ifr);
+    }
+    if (el.reportsModal.showModal) el.reportsModal.showModal();
+  }
+  function closeReportsModal() {
+    if (el.reportsModal && el.reportsModal.close) el.reportsModal.close();
+    if (el.reportsModalFrame) el.reportsModalFrame.innerHTML = "";
+  }
+  if (el.reportsModalClose) el.reportsModalClose.addEventListener("click", closeReportsModal);
+  // Полноэкранное модальное окно «Сверки».
+  function openSverkiModal() {
+    if (!canSeeSverki()) return;
+    if (!el.sverkiModal || !el.sverkiModalFrame) return;
+    if (!el.sverkiModalFrame.querySelector("iframe")) {
+      const ifr = document.createElement("iframe");
+      ifr.src = "/sverki/";
+      ifr.setAttribute("title", "Сверки");
+      el.sverkiModalFrame.appendChild(ifr);
+    }
+    if (el.sverkiModal.showModal) el.sverkiModal.showModal();
+  }
+  function closeSverkiModal() {
+    if (el.sverkiModal && el.sverkiModal.close) el.sverkiModal.close();
+    if (el.sverkiModalFrame) el.sverkiModalFrame.innerHTML = "";
+  }
+  if (el.sverkiModalClose) el.sverkiModalClose.addEventListener("click", closeSverkiModal);
+  // Полноэкранное модальное окно «Проценка».
+  function openProcenkaModal() {
+    if (!canSeeProcenka()) return;
+    if (!el.procenkaModal || !el.procenkaModalFrame) return;
+    if (!el.procenkaModalFrame.querySelector("iframe")) {
+      const ifr = document.createElement("iframe");
+      ifr.src = "/procenka/";
+      ifr.setAttribute("title", "Проценка");
+      el.procenkaModalFrame.appendChild(ifr);
+    }
+    if (el.procenkaModal.showModal) el.procenkaModal.showModal();
+  }
+  function closeProcenkaModal() {
+    if (el.procenkaModal && el.procenkaModal.close) el.procenkaModal.close();
+    if (el.procenkaModalFrame) el.procenkaModalFrame.innerHTML = "";
+  }
+  if (el.procenkaModalClose) el.procenkaModalClose.addEventListener("click", closeProcenkaModal);
+  // Полноэкранное модальное окно «Парсер почты».
+  function openParserModal() {
+    if (!canSeeParser()) return;
+    if (!el.parserModal || !el.parserModalFrame) return;
+    if (!el.parserModalFrame.querySelector("iframe")) {
+      const ifr = document.createElement("iframe");
+      ifr.src = "/parser/";
+      ifr.setAttribute("title", "Парсер почты");
+      el.parserModalFrame.appendChild(ifr);
+    }
+    if (el.parserModal.showModal) el.parserModal.showModal();
+  }
+  function closeParserModal() {
+    if (el.parserModal && el.parserModal.close) el.parserModal.close();
+    if (el.parserModalFrame) el.parserModalFrame.innerHTML = "";
+  }
+  if (el.parserModalClose) el.parserModalClose.addEventListener("click", closeParserModal);
+  // Проблемы со склада — полноэкранное модальное окно (переносим содержимое раздела).
+  function openNotfoundModal() {
+    if (!el.notfoundModal || !el.notfoundModalBody) return;
+    while (el.pageNotfound && el.pageNotfound.firstChild) {
+      el.notfoundModalBody.appendChild(el.pageNotfound.firstChild);
+    }
+    if (el.notfoundModal.showModal) el.notfoundModal.showModal();
+    renderNotfound();
+  }
+  function closeNotfoundModal() {
+    if (el.notfoundModal && el.notfoundModal.close) el.notfoundModal.close();
+    if (el.pageNotfound && el.notfoundModalBody) {
+      while (el.notfoundModalBody.firstChild) {
+        el.pageNotfound.appendChild(el.notfoundModalBody.firstChild);
+      }
+    }
+  }
+  if (el.notfoundModalClose) el.notfoundModalClose.addEventListener("click", closeNotfoundModal);
+  // Зарплата — полноэкранное модальное окно.
+  function openSalaryModal() {
+    const page = el.pageCalendar || document.getElementById("page-calendar");
+    if (!el.salaryModal || !el.salaryModalBody || !page) return;
+    while (page.firstChild) el.salaryModalBody.appendChild(page.firstChild);
+    if (el.salaryModal.showModal) el.salaryModal.showModal();
+    if (typeof renderCalendar === "function") renderCalendar();
+  }
+  function closeSalaryModal() {
+    if (el.salaryModal && el.salaryModal.close) el.salaryModal.close();
+    const page = el.pageCalendar || document.getElementById("page-calendar");
+    if (page && el.salaryModalBody) {
+      while (el.salaryModalBody.firstChild) page.appendChild(el.salaryModalBody.firstChild);
+    }
+  }
+  if (el.salaryModalClose) el.salaryModalClose.addEventListener("click", closeSalaryModal);
   function recomputeOverVisibility() {
     const pH = state.params.showOverHoursGroups || [];
     const pS = state.params.showOverSumGroups || [];
@@ -8425,6 +10694,9 @@
     renderGroupChecks(el.showOverHoursGroups, state.params.showOverHoursGroups || []);
     renderGroupChecks(el.showOverSumGroups, state.params.showOverSumGroups || []);
     renderGroupChecks(el.shipmentGroups, state.params.shipmentGroups || []);
+    renderNotfoundUsersChecks(el.notfoundUsersGroups);
+    renderLogUsersChecks(el.logUsersGroups);
+    renderReportsUsersChecks(el.reportsUsersGroups);
     if (el.normVal) el.normVal.value = state.norm;
     if (el.updateVersionCode) el.updateVersionCode.value = state.params.updateVersionCode != null ? state.params.updateVersionCode : "";
     if (el.updateVersionName) el.updateVersionName.value = state.params.updateVersionName || "";
@@ -8662,12 +10934,20 @@
       allowDriverStartWithoutShipment: !!el.allowDriverStartWithoutShipment.checked,
       allowFinishUnloadIncomplete: !!el.allowFinishUnloadIncomplete.checked,
       allowDriverReorderPoints: !!el.allowDriverReorderPoints.checked,
-      allowWaybill: !!el.allowWaybill.checked,
+      allowWaybill: true, // сборка всегда включена, опции нет
+      authRequired: true, // собственный вход (логин/пароль) всегда включён, опции нет
       routeDeleteCode: el.routeDeleteCode ? el.routeDeleteCode.value.trim() : "",
       scanLogLimit: el.scanLogLimit ? (Number(el.scanLogLimit.value) || 30000) : 30000,
       showOverHoursGroups: collectGroupChecks(el.showOverHoursGroups),
       showOverSumGroups: collectGroupChecks(el.showOverSumGroups),
       shipmentGroups: collectGroupChecks(el.shipmentGroups),
+      notfoundUsers: collectGroupChecks(el.notfoundUsersGroups),
+      logUsers: collectGroupChecks(el.logUsersGroups),
+      reportsUsers: collectGroupChecks(el.reportsUsersGroups),
+      reportsSections: collectReportsSections(),
+      sverkiUsers: collectGroupChecks(el.sverkiUsersGroups),
+      procenkaUsers: collectGroupChecks(el.procenkaUsersGroups),
+      parserUsers: collectGroupChecks(el.parserUsersGroups),
     };
     // Множитель теперь управляется только через вкладку «Множитель» (multRules):
     // старые поля params.multiplier/multFrom/multTo не редактируются здесь и
@@ -8732,7 +11012,10 @@
 
   el.settingsBtn.addEventListener("click", openSettings);
   el.adminClose.addEventListener("click", closeSettings);
-  el.addStaffBtn.addEventListener("click", addStaff);
+  el.addStaffBtn.addEventListener("click", openAddStaffModal);
+  el.addStaffSubmit && el.addStaffSubmit.addEventListener("click", addStaff);
+  el.addStaffClose && el.addStaffClose.addEventListener("click", closeAddStaffModal);
+  el.addStaffCancel && el.addStaffCancel.addEventListener("click", closeAddStaffModal);
   el.addGroupBtn.addEventListener("click", addGroup);
   el.newGroupName.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -8762,7 +11045,9 @@
         document.body.appendChild(a);
         a.click();
         a.remove();
-        URL.revokeObjectURL(url);
+        // Отзываем ссылку не сразу: сразу после click() браузер может ещё не начать
+        // запись файла, и revoke отменяет скачивание «без ничего». Даём запас.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
         if (el.backupStatus) {
           el.backupStatus.textContent = "Бэкап скачан. Храните файл в надёжном месте — он содержит все данные приложения.";
           el.backupStatus.className = "backup-status ok";
@@ -8818,17 +11103,61 @@
         return;
       }
       try {
-        const text = await file.text();
+        // file.text() отсутствует в части WebView/встроенных браузеров и молча
+        // ронял восстановление («нажимаю Да — ничего не происходит»). Читаем
+        // через FileReader — тот же паттерн, что уже работает в app.js для
+        // накладных, и он доступен везде.
+        const text = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
+          try {
+            reader.readAsText(file, "utf-8");
+          } catch (e) {
+            reject(new Error("Файл не читается в этом браузере"));
+          }
+        });
         let parsed;
         try { parsed = JSON.parse(text); } catch { throw new Error("Файл не является корректным JSON-бэкапом"); }
-        const res = await fetch("/api/admin/backup/restore", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(parsed),
-        });
+        // Standalone Black Hole обрезает тело запроса (лимит шлюза), поэтому
+        // большой бэкап не уходит одним POST («Ошибка сервера: bad json»).
+        // Отправляем JSON кусками по ~500 тыс. символов (~0.6 МБ в utf-8) —
+        // каждая часть проходит даже лимит 1 МиБ, — и собираем на сервере
+        // вызовом /restore-complete.
+        const CHUNK_CHARS = 500000;
+        const token = "b" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+        const bodyStr = JSON.stringify(parsed);
+        const total = Math.max(1, Math.ceil(bodyStr.length / CHUNK_CHARS));
+        let restoreRes;
+        if (total === 1) {
+          restoreRes = await fetch("/api/admin/backup/restore", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: bodyStr,
+          });
+        } else {
+          for (let i = 0; i < total; i++) {
+            const chunk = bodyStr.slice(i * CHUNK_CHARS, (i + 1) * CHUNK_CHARS);
+            const pr = await fetch("/api/admin/backup/restore-part", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token, index: i, total, data: chunk }),
+            });
+            const pj = await pr.json().catch(() => ({}));
+            if (!pr.ok) throw new Error((pj && pj.error) || `Не удалось загрузить часть ${i + 1}/${total}`);
+          }
+          restoreRes = await fetch("/api/admin/backup/restore-complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, total }),
+          });
+        }
+        const res = restoreRes;
         const j = await res.json().catch(() => ({}));
         if (!res.ok) {
-          toast((j && j.error) || "Не удалось восстановить базу");
+          const msg = (j && j.error) || `Не удалось восстановить базу (HTTP ${res.status})`;
+          toast(msg);
+          if (el.backupStatus) { el.backupStatus.textContent = msg; el.backupStatus.className = "backup-status err"; }
           return;
         }
         if (el.backupStatus) {
@@ -8839,7 +11168,9 @@
         toast("База восстановлена");
         setTimeout(() => location.reload(), 1200);
       } catch (e) {
-        toast(e.message || "Не удалось восстановить базу");
+        const msg = (e && e.message) || "Не удалось восстановить базу";
+        toast(msg);
+        if (el.backupStatus) { el.backupStatus.textContent = msg; el.backupStatus.className = "backup-status err"; }
       } finally {
         el.backupImportFile.value = "";
       }
@@ -8968,6 +11299,95 @@
   if (el.saveDriverRouteBtn) {
     el.saveDriverRouteBtn.addEventListener("click", saveDriverRoute);
   }
+  // Заполнить расходные накладные из 1С для ВСЕХ выбранных на форме клиентов —
+  // ДО сохранения маршрута. Накладные складываются в routeWaybills и уедут
+  // вместе с маршрутом при «Сохранить маршрут».
+  if (el.fillFrom1CBtn) {
+    el.fillFrom1CBtn.addEventListener("click", async () => {
+      // Раскрываем объединённого клиента (связку, несколько контрагентов на один
+      // адрес) на всех его членов: у каждого внутреннего клиента свой ИНН и логин,
+      // и каждый должен уйти в 1С со своими данными и появиться в «Логи 1C»
+      // отдельной строкой — иначе в логе виден только общий (STP) и непонятно,
+      // кто из внутренних получил данные, а кто нет.
+      const picked = routeOrderIds.length ? routeOrderIds.slice() : [...selectedRouteClientIds];
+      const ids = new Set();
+      for (const id of picked) {
+        const s = String(id);
+        ids.add(s);
+        const c = driverClientsCache.find((x) => String(x.id) === s);
+        // Раскрываем связку по ОБЩЕМУ АДРЕСУ (bundleAddress || address) — так связка
+        // схлопывается в одну остановку маршрута. На одном адресе может быть
+        // несколько контрагентов, у каждого свой ИНН и логин — каждый должен уйти
+        // в 1С со своими данными и появиться в «Логи 1C» отдельной строкой (ИНН и
+        // логин контрагента, по которому взят документ), а не общим STP.
+        const addrKey = String((c && (c.bundleAddress || c.address)) || "").trim().toLowerCase();
+        if (addrKey) {
+          driverClientsCache.forEach((m) => {
+            const mk = String((m && (m.bundleAddress || m.address)) || "").trim().toLowerCase();
+            if (mk && mk === addrKey) ids.add(String(m.id));
+          });
+        }
+      }
+      const chosen = [...ids].map((id) => driverClientsCache.find((x) => String(x.id) === id)).filter(Boolean);
+      if (!chosen.length) { toast("Сначала выберите клиентов"); return; }
+      const payload = chosen.map((c) => ({ inn: (c && c.inn) || "", login: (c && c.login) || "" }));
+      try {
+        const r = await api("/api/waybills/from-1c", {
+          method: "POST",
+          body: JSON.stringify({ clients: payload }),
+        });
+        const rr = r && r.waybills;
+        if (!Array.isArray(rr)) {
+          toast((r && r.error) || "Ошибка заполнения из 1С");
+          return;
+        }
+        let filled = 0, totalItems = 0, totalQty = 0;
+        rr.forEach((res, i) => {
+          const c = chosen[i];
+          if (!c) return;
+          if (res && res.ok && Array.isArray(res.items) && res.items.length) {
+            // Ключ — по id КЛИЕНТА (единообразно с загрузкой .xlsx и с чтением при
+            // сохранении). Иначе (по адресу) накладные из «Заполнить из 1С» терялись
+            // бы при сохранении — в сборке оставалось пусто.
+            routeWaybills.set(String(c.id), { items: res.items, buyer: (res.buyer || "") });
+            filled++;
+            totalItems += res.items.length;
+            res.items.forEach((it) => { totalQty += (Number(it && it.qty) || 0); });
+          }
+        });
+        renderRouteWaybillsBlock();
+        let msg = filled
+          ? ("Успешно добавлено: " + totalItems + " поз. / " + totalQty + " шт")
+          : "Не удалось получить накладные";
+        if (r && r.noInn) msg += " · без ИНН/логина: " + r.noInn;
+        toast(msg);
+        // Для уже существующего маршрута сразу сохраняем накладные на сервер
+        // в route.waybills — тогда партисткеры и позиции сразу видны в сборке,
+        // а не только после «Сохранить маршрут».
+        if (editingRouteId) {
+          try {
+            await api("/api/routes/" + encodeURIComponent(editingRouteId) + "/fill-from-1c", { method: "POST" });
+          } catch { /* ignore */ }
+          try { loadDriverRoutes(); } catch { /* ignore */ }
+          try { refreshWaybillFromServer(); } catch { /* ignore */ }
+        }
+      } catch (e) {
+        toast((e && e.message) || "Ошибка заполнения из 1С");
+      }
+    });
+  }
+  // Поправка времени устройства: сохраняем при изменении.
+  if (el.acctTzOffset) {
+    el.acctTzOffset.addEventListener("change", () => {
+      try { localStorage.setItem("biotime_time_offset_min", String(el.acctTzOffset.value || "0")); } catch { /* ignore */ }
+    });
+  }
+  // Черновик «Маршрут на день»: сохраняем при любом изменении полей/выбора.
+  ["driverRouteDate", "driverRouteDriver", "driverRouteName"].forEach((ref) => {
+    const n = el[ref];
+    if (n) n.addEventListener(n.type === "text" ? "input" : "change", saveRouteDraft);
+  });
+  if (el.selfPickupChk) el.selfPickupChk.addEventListener("change", saveRouteDraft);
   if (el.autoRouteBtn) {
     el.autoRouteBtn.addEventListener("click", autoBuildRoute);
   }
@@ -8985,6 +11405,8 @@
   bindSubtab(el.subtabRoute, "route");
   bindSubtab(el.subtabRoutes, "routes");
   bindSubtab(el.subtabReport, "report");
+  bindSubtab(el.subtabLocation, "location");
+  bindSubtab(el.subtab1cLog, "1clog");
   bindSubtab(el.subtabTracking, "tracking");
   // Подвкладки раздела «Отгрузка»: «В работе» и «Завершённые отгрузки».
   const setShipmentSubtab = (tab) => {
@@ -9001,6 +11423,20 @@
   };
   if (el.shipmentSubtabActive) el.shipmentSubtabActive.addEventListener("click", () => setShipmentSubtab("active"));
   if (el.shipmentSubtabDone) el.shipmentSubtabDone.addEventListener("click", () => setShipmentSubtab("done"));
+  // Календарь дат в разделе «Отгрузка»: фильтр по дате маршрута.
+  if (el.shipmentDateFilter) {
+    el.shipmentDateFilter.addEventListener("change", () => {
+      state.shipmentDateFilter = el.shipmentDateFilter.value || "";
+      renderShipments();
+    });
+  }
+  if (el.shipmentDateClear) {
+    el.shipmentDateClear.addEventListener("click", () => {
+      state.shipmentDateFilter = "";
+      if (el.shipmentDateFilter) el.shipmentDateFilter.value = "";
+      renderShipments();
+    });
+  }
   // Сворачивание/разворачивание карточки маршрута во всех разделах (Мои маршруты,
   // Маршруты у админа, Доставка, Отгрузка). Делегированный обработчик: активный
   // маршрут (и идущую отгрузку) свернуть нельзя — кнопка не имеет
@@ -9025,12 +11461,17 @@
       if (card.hasAttribute("data-myroute")) {
         if (collapsedNow) expandedMyRouteCards.delete(idStr);
         else expandedMyRouteCards.add(idStr);
+        saveCollapsedSet("biotime_expanded_myroutes", expandedMyRouteCards);
       } else if (card.classList.contains("shipment-card")) {
         if (collapsedNow) collapsedShipmentCards.add(idStr);
         else collapsedShipmentCards.delete(idStr);
+        saveShipCollapsed();
       } else if (card.classList.contains("delivery-card")) {
         if (collapsedNow) expandedShipmentCards.delete(idStr);
         else expandedShipmentCards.add(idStr);
+      } else if (card.classList.contains("drv-route-card")) {
+        if (collapsedNow) expandedDriverRouteCards.delete(idStr);
+        else expandedDriverRouteCards.add(idStr);
       }
     }
   });
@@ -9168,6 +11609,20 @@
     bumpScanCount();
     doScanLabel("load", code);
   };
+  // Единая точка приёма кода с нативного сканера ТСД (AndroidBridge.onBarcode /
+  // onScan и глобальные window-колбэки). Если открыто окно СБОРКИ — уводим код в
+  // поле сборки и запускаем скан (деталь→«МЕСТО», бокс→«ХОРОШО»). Если открыта
+  // «Отгрузка» — это погрузка/выгрузка мест (handleExternalScanCode выше).
+  const routeExternalScanCode = (raw) => {
+    const code = String(raw == null ? "" : raw).trim();
+    if (!code) return;
+    if (el.waybillModal && el.waybillModal.open) {
+      if (el.waybillArtInput) el.waybillArtInput.value = code;
+      try { scanWaybill(); } catch (_) { /* не критично */ }
+      return;
+    }
+    handleExternalScanCode(code);
+  };
   // (A) Клавиатурный перехват (capture-фаза). Срабатывает всегда при открытом
   // окне «Отгрузка», независимо от фокуса (только избегаем дубля с полем).
   if (scanSource === "external" || !(window.AndroidBridge && typeof window.AndroidBridge.scanQR === "function")) {
@@ -9223,7 +11678,7 @@
         if (typeof window[name] !== "function") {
           window[name] = (data) => {
             const code = (data && (data.code !== undefined ? data.code : data.text !== undefined ? data.text : data)) || "";
-            handleExternalScanCode(String(code).trim());
+            routeExternalScanCode(String(code).trim());
           };
         }
       } catch (_) {}
@@ -9233,14 +11688,14 @@
       if (window.AndroidBridge && typeof window.AndroidBridge.onScan === "function") {
         const orig = window.AndroidBridge.onScan;
         window.AndroidBridge.onScan = function() {
-          handleExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
+          routeExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
           try { return orig.apply(this, arguments); } catch (_) { return undefined; }
         };
       }
       if (window.AndroidBridge && typeof window.AndroidBridge.onBarcode === "function") {
         const orig = window.AndroidBridge.onBarcode;
         window.AndroidBridge.onBarcode = function() {
-          handleExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
+          routeExternalScanCode(String(arguments.length ? arguments[0] : "").trim());
           try { return orig.apply(this, arguments); } catch (_) { return undefined; }
         };
       }
@@ -9282,6 +11737,53 @@
   // периодический таймер в switchRouteSubtab, см. sectionAutoRefresh).
   if (el.motionDateFilter) {
     el.motionDateFilter.addEventListener("change", loadMotionReport);
+  }
+  // Отчёт «Местоположение»: кнопка «Показать» и смена даты перезагружают данные.
+  if (el.locationGoBtn) {
+    el.locationGoBtn.addEventListener("click", () => { populateLocationDrivers(); loadLocationReport(); });
+  }
+  if (el.locationDateFilter) {
+    el.locationDateFilter.addEventListener("change", loadLocationReport);
+  }
+  if (el.locationDriverSelect) {
+    el.locationDriverSelect.addEventListener("change", loadLocationReport);
+  }
+  // Интервал сетки: сохраняем автоматически и сразу перезагружаем отчёт.
+  if (el.locationInterval) {
+    el.locationInterval.addEventListener("change", () => {
+      try { localStorage.setItem("biotime_location_interval", String(el.locationInterval.value)); } catch { /* ignore */ }
+      loadLocationReport();
+    });
+  }
+  // Диагностика связи с 1С (только админ): стучится в 1С с IP приложения.
+  if (el.onecPingBtn) {
+    el.onecPingBtn.addEventListener("click", async () => {
+      if (!el.onecPingRes) return;
+      el.onecPingRes.textContent = "Проверка…";
+      try {
+        const resp = await fetch("/api/1c/ping", {
+          headers: { "Accept": "application/json" },
+          cache: "no-store",
+        });
+        let body = null;
+        try { body = await resp.json(); } catch (_) { /* не JSON */ }
+        if (resp.status === 401 || resp.status === 403) {
+          el.onecPingRes.textContent = "Отказ: HTTP " + resp.status + " (сервер не видит админа)";
+        } else if (!resp.ok) {
+          el.onecPingRes.textContent = "HTTP " + resp.status + ((body && body.error) ? " · " + body.error : "");
+        } else if (body && body.error) {
+          el.onecPingRes.textContent = "Ошибка: " + body.error;
+        } else if (body && body.summary) {
+          const s = String(body.summary).replace(/\s+/g, " ");
+          el.onecPingRes.textContent = s.length > 600 ? s.slice(0, 600) + "…" : s;
+        } else {
+          el.onecPingRes.textContent = "HTTP " + (body ? body.http : "?")
+            + ((body && body.snippet) ? " · " + body.snippet : "");
+        }
+      } catch (e) {
+        el.onecPingRes.textContent = "Сбой запроса: " + e.message;
+      }
+    });
   }
   // Доставка: смена даты перезагружает данные (автообновление — периодический
   // таймер в switchTab, см. sectionAutoRefresh).
@@ -9414,12 +11916,6 @@
       t.addEventListener("click", () => switchLogKind(t.dataset.jkind));
     });
   }
-  el.newStaffName.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      addStaff();
-    }
-  });
   el.reportMonth.addEventListener("change", () => { state.reportMonthKey = el.reportMonth.value; renderReport(); });
   el.reportShowOver.addEventListener("change", renderReport);
   // Переключение разделов вкладки «Отчёт» (Табель / Расчёты ЗП).
@@ -9473,30 +11969,11 @@
   el.reportExportBtn.addEventListener("click", async () => {
     const month = el.reportMonth.value;
     if (!month) return;
-    const btn = el.reportExportBtn;
-    const original = btn.innerHTML;
-    btn.disabled = true;
-    btn.classList.add("busy");
-    try {
-      const res = await fetch(`/api/report/export?month=${encodeURIComponent(month)}`);
-      if (!res.ok) throw new Error("Не удалось выгрузить табель");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `Табель_${month}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      toast("Табель выгружен в Excel");
-    } catch (e) {
-      toast(e.message || "Не удалось выгрузить табель");
-    } finally {
-      btn.disabled = false;
-      btn.classList.remove("busy");
-      btn.innerHTML = original;
-    }
+    // Просто переходим на адрес выгрузки: сервер отдаёт .xlsx с
+    // Content-Disposition: attachment, и браузер/Electron скачивает файл,
+    // а не открывает BLOB-поток.
+    try { window.location.href = `/api/report/export?month=${encodeURIComponent(month)}`; } catch { /* ignore */ }
+    toast("Табель выгружается…");
   });
   // Clicking a day cell in the timesheet (admin only) opens the status picker.
   el.reportTable.addEventListener("click", (e) => {
@@ -9519,6 +11996,25 @@
     setDayStatus(key, ownerId, "");
   });
   el.statusClose.addEventListener("click", () => el.statusModal.close());
+  // «Открыть день» / «Сбросить время и открыть»: админ нажимает на ячейку дня в
+  // табеле → в модалке статуса. Сервер POST /api/day/<key>/reopen точечно убирает
+  // «завершён» (и при необходимости время) у этого сотрудника, не трогая других.
+  async function reopenDay(clearTime) {
+    if (!statusCtx) return;
+    const { key, ownerId } = statusCtx;
+    try {
+      const r = await api(`/api/day/${encodeURIComponent(key)}/reopen`, {
+        method: "POST",
+        body: JSON.stringify({ staffId: ownerId, clearTime }),
+      });
+      if (r && r.ok) toast(clearTime ? "Время сброшено, день открыт" : "День открыт");
+      else toast((r && r.error) || "Не удалось открыть день");
+      if (el.statusModal && el.statusModal.open) { try { el.statusModal.close(); } catch { /* ignore */ } }
+      loadState();
+    } catch (e) { toast((e && e.message) || "Ошибка"); }
+  }
+  if (el.statusReopen) el.statusReopen.addEventListener("click", () => reopenDay(false));
+  if (el.statusReopenClear) el.statusReopenClear.addEventListener("click", () => reopenDay(true));
   // ----- Предупреждение о пересечении клиентов в маршрутах -----
   // Модалка подтверждения с кнопками «Продолжить»/«Отменить» вместо нативного
   // confirm(). Возвращает Promise<boolean>: true — продолжить (разрешить дубль).
@@ -9646,35 +12142,578 @@
     openWaybill(parts[0], Number(parts[1] || 0));
   });
   if (el.waybillClose) el.waybillClose.addEventListener("click", closeWaybill);
+  if (el.waybillRemoveMissing) {
+    el.waybillRemoveMissing.addEventListener("click", async () => {
+      const wbL = waybillLocal;
+      const arr = wbL && Array.isArray(wbL.items) ? wbL.items : [];
+      const missArts = [...new Set(arr
+        .filter((it) => (Number(it.missingQty) || 0) > 0 || !!it.missing)
+        .map((it) => String(it.art || "")))];
+      if (!missArts.length) { toast("«Не найдено» в этой накладной нет"); return; }
+      if (!confirm(`Убрать пометку «не найдено» у ${missArts.length} деталей из накладной «${waybillClientName || waybillClientIdx + 1}»?`)) return;
+      let okN = 0, bad = 0;
+      for (const art of missArts) {
+        try {
+          await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill`, {
+            method: "POST",
+            body: JSON.stringify({ action: "remove-missing", clientIndex: waybillClientIdx, art }),
+          });
+          okN += 1;
+        } catch { bad += 1; }
+      }
+      toast(bad ? `Убрано ${okN}, ошибок ${bad}` : `Убрано «не найдено»: ${okN}`);
+      refreshWaybillFromServer();
+      renderWaybill();
+    });
+  }
+  if (el.waybillCleanBtn) {
+    el.waybillCleanBtn.addEventListener("click", async () => {
+      const wbL = waybillLocal;
+      const arr = wbL && Array.isArray(wbL.items) ? wbL.items : [];
+      const unscanned = arr.filter((it) => (Number(it && it.scanned) || 0) === 0).length;
+      if (!unscanned) { toast("Не собранных позиций нет"); return; }
+      const who = waybillClientName || (`Клиент ${waybillClientIdx + 1}`);
+      if (!confirm(`Удалить из накладной «${who}» ${unscanned} не собранных позиций (собрано 0 шт: дубли и «не найдено»)?`)) return;
+      try {
+        const r = await api(`/api/routes/${encodeURIComponent(waybillRouteId)}/waybill/delete-unscanned`, {
+          method: "POST",
+          body: JSON.stringify({ clientIndex: waybillClientIdx }),
+        });
+        if (r && r.ok) {
+          toast(`Удалено не собранных: ${r.removed}, осталось позиций: ${r.total}`);
+        } else {
+          toast((r && r.error) || "Ошибка удаления");
+        }
+      } catch (e) {
+        toast((e && e.message) || "Ошибка удаления");
+      }
+      refreshWaybillFromServer();
+      renderWaybill();
+    });
+  }
   if (el.waybillFile) el.waybillFile.addEventListener("change", uploadWaybill);
   if (el.waybillScanBtn) el.waybillScanBtn.addEventListener("click", scanWaybill);
   if (el.waybillNewBoxBtn) el.waybillNewBoxBtn.addEventListener("click", waybillNewBox);
   if (el.waybillDelBoxBtn) el.waybillDelBoxBtn.addEventListener("click", deleteWaybillBox);
+  if (el.boxDetailsClose) el.boxDetailsClose.addEventListener("click", () => { try { el.boxDetailsModal.close(); } catch {} });
+  if (el.boxDetailsModal) el.boxDetailsModal.addEventListener("click", (ev) => { if (ev.target === el.boxDetailsModal) { try { el.boxDetailsModal.close(); } catch {} } });
+
+  // ---- Своя авторизация: вход/первый вход (фронт) ----
+  let authPickId = null;
+  let authPickedName = "";
+  async function apiAuth(method, url, body) {
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      return res.json().catch(() => null);
+    } catch { return null; }
+  }
+  // Нативное хранение токена (APK): куки WebView могут очищаться системой,
+  // поэтому токен собственной авторизации дублируем в SharedPreferences.
+  function nativeGetToken() {
+    if (!window.AndroidBridge || typeof window.AndroidBridge.getAuthToken !== "function") return "";
+    try { return window.AndroidBridge.getAuthToken() || ""; } catch { return ""; }
+  }
+  function nativeSetToken(t) {
+    if (window.AndroidBridge && typeof window.AndroidBridge.setAuthToken === "function") {
+      try { window.AndroidBridge.setAuthToken(String(t || "")); } catch { /* ignore */ }
+    }
+  }
+  function nativeClearToken() {
+    if (window.AndroidBridge && typeof window.AndroidBridge.clearAuthToken === "function") {
+      try { window.AndroidBridge.clearAuthToken(); } catch { /* ignore */ }
+    }
+  }
+  function authCookieFromToken(t) {
+    if (!t || document.cookie.includes("btime_auth=")) return;
+    try { document.cookie = `btime_auth=${t}; Path=/; Max-Age=2592000;`; } catch { /* ignore */ }
+  }
+  function setAuthUserUI(u) {
+    if (el.authUserName) el.authUserName.textContent = u.name || "Пользователь";
+    if (el.authAvatar) el.authAvatar.textContent = (u.name || "П")[0];
+    if (el.authUserChip) el.authUserChip.hidden = false;
+    if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Выйти"; }
+    window.__isOwnLoggedIn = true;
+  }
+  async function initAuth() {
+    try {
+      const hideBoot = () => { const b = document.getElementById("bootCover"); if (b) b.hidden = true; };
+      // APK: если кука потерялась, восстанавливаем токен из нативного хранилища.
+      authCookieFromToken(nativeGetToken());
+      // Уже авторизовались в этой сессии страницы (даже если кука не дожила за
+      // шлюзом Вайбкода) — не перепроверяем и не открываем гейт повторно.
+      if (window.__ownAuthUser) {
+        setAuthUserUI(window.__ownAuthUser);
+        if (el.authGate) el.authGate.hidden = true;
+        hideBoot();
+        return;
+      }
+      const j = await apiAuth("GET", "/api/auth/me");
+      if (j && j.ok && j.user) {
+        setAuthUserUI(j.user);
+        renderMasqBanner(j.masquerade === true && j.user ? j.user.name : "");
+        if (el.authGate) el.authGate.hidden = true;
+        hideBoot();
+        return;
+      }
+      // Сессии нет — НЕавторизованный сразу видит окно «Логин/Пароль»
+      // (висит экраном входа, а не интерфейс с кнопкой «Войти»).
+      if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
+      openAuth(true);
+      hideBoot();
+    } catch { /* без UI не критично */ }
+  }
+  // Баннер «вход под пользователем»: виден, когда админ имперсонирует сотрудника.
+  function renderMasqBanner(name) {
+    let elBar = document.getElementById("masqBanner");
+    if (!name) { if (elBar) elBar.remove(); return; }
+    if (!elBar) {
+      elBar = document.createElement("div");
+      elBar.id = "masqBanner";
+      elBar.className = "masq-banner";
+      document.body.insertBefore(elBar, document.body.firstChild);
+    }
+    elBar.innerHTML = `Вы вошли под пользователем: <b>${escapeHtml(name)}</b>
+      <button type="button" class="masq-return" id="masqReturnBtn">Вернуться в свой аккаунт</button>`;
+    const b = document.getElementById("masqReturnBtn");
+    if (b) b.addEventListener("click", doLogout);
+  }
+  function showAuthView(view) {
+    const login = view === "login";
+    if (el.authLoginView) el.authLoginView.hidden = !login;
+    if (el.authFirstView) el.authFirstView.hidden = login;
+    if (el.authTitle) el.authTitle.textContent = login ? "Вход" : "Первый вход";
+    if (el.authHint) el.authHint.textContent = "";
+    if (el.authFirstHint) el.authFirstHint.textContent = "";
+    authPickId = null;
+    if (el.authResults) el.authResults.innerHTML = "";
+    if (el.authSetView) el.authSetView.hidden = true;
+    if (el.authLogin) el.authLogin.value = "";
+    if (el.authPassword) el.authPassword.value = "";
+    if (el.authName) el.authName.value = "";
+  }
+  function openAuth(forced) {
+    if (!el.authGate) return;
+    // Только логин/пароль (первый вход по ФИО убран).
+    showAuthView("login");
+    el.authGate.hidden = false;
+    if (el.authClose) el.authClose.hidden = !!forced;
+    if (el.authLogin) setTimeout(() => { try { el.authLogin.focus(); } catch {} }, 50);
+  }
+  async function doLogin() {
+    const login = el.authLogin ? el.authLogin.value.trim() : "";
+    const pass = el.authPassword ? el.authPassword.value : "";
+    if (!login || !pass) { if (el.authHint) el.authHint.textContent = "Введите логин и пароль"; return; }
+    let j = null;
+    try { j = await apiAuth("POST", "/api/auth/login", { login, password: pass }); }
+    catch (e) { console.error("[auth] login error:", e); }
+    console.log("[auth] login result:", j);
+    if (j && j.ok && j.user) {
+      toast("Вы вошли");
+      try { localStorage.setItem("biotime_firstlogin_done", "1"); } catch {}
+      nativeSetToken(j.token); authCookieFromToken(j.token);
+      window.__ownAuthUser = j.user;
+      setAuthUserUI(j.user);
+      if (el.authGate) el.authGate.hidden = true;
+      if (el.authClose) el.authClose.hidden = false;
+      // Применяем роль полностью: автоматическая перезагрузка страницы (без неё
+      // вкладки/разделы применяются только при ручном обновлении). Идём на reload,
+      // т.к. шлюз выключен и кука SameSite=None теперь переживает перезагрузку.
+      setTimeout(() => location.reload(), 350);
+        return;
+    }
+    const msg = (j && j.error) || "Не удалось войти (проверьте сеть)";
+    if (el.authHint) el.authHint.textContent = msg;
+    toast(msg);
+  }
+  async function firstLoginFind() {
+    const name = el.authName ? el.authName.value.trim() : "";
+    if (!name) { if (el.authFirstHint) el.authFirstHint.textContent = "Введите имя или фамилию"; return; }
+    const j = await apiAuth("POST", "/api/auth/find-by-name", { name });
+    const list = (j && j.users) || [];
+    if (!el.authResults) return;
+    if (!list.length) { el.authResults.innerHTML = '<div class="empty-hint">Не найдено — проверьте имя/фамилию.</div>'; return; }
+    el.authResults.innerHTML = list.map((u) => `
+      <button type="button" class="mini-btn route-confirm-ok auth-result" data-id="${escapeHtml(u.id)}"
+        data-name="${escapeHtml(u.name)}" data-has="${u.hasCreds ? "1" : "0"}" style="display:block;margin:4px 0;text-align:left">
+        ${escapeHtml(u.name)}${u.hasCreds ? " · уже есть вход" : ""}
+      </button>`).join("");
+    el.authResults.querySelectorAll(".auth-result").forEach((b) => {
+      b.addEventListener("click", () => pickAuthResult(b.dataset.id, b.dataset.name, b.dataset.has === "1"));
+    });
+  }
+  const authTranslit = { "а":"a","б":"b","в":"v","г":"g","д":"d","е":"e","ё":"e","ж":"zh","з":"z","и":"i","й":"y","к":"k","л":"l","м":"m","н":"n","о":"o","п":"p","р":"r","с":"s","т":"t","у":"u","ф":"f","х":"h","ц":"c","ч":"ch","ш":"sh","щ":"sch","ъ":"","ы":"y","ь":"","э":"e","ю":"yu","я":"ya" };
+  function translitLogin(name) {
+    const s = String(name || "").toLowerCase().replace(/[^a-zа-яё\s]/gi, " ");
+    return s.split("").map((ch) => authTranslit[ch] || (ch === " " ? "." : ch)).join("")
+      .replace(/\.+/g, ".").replace(/^\.|\.$/g, "").slice(0, 32) || "user";
+  }
+  function pickAuthResult(id, name, has) {
+    if (has) { if (el.authFirstHint) el.authFirstHint.textContent = "У этого пользователя уже есть вход — используйте «Вход» по логину/паролю."; return; }
+    authPickId = String(id);
+    authPickedName = String(name || "");
+    if (el.authNewLogin) { el.authNewLogin.value = translitLogin(name); }
+    if (el.authNewPass) el.authNewPass.value = "";
+    if (el.authSetView) el.authSetView.hidden = false;
+    if (el.authFirstHint) el.authFirstHint.textContent = "Выбрано: " + name + ". Придумайте логин и пароль (мин. 8 символов).";
+  }
+  async function doSetCreds() {
+    const login = el.authNewLogin ? el.authNewLogin.value.trim() : "";
+    const pass = el.authNewPass ? el.authNewPass.value : "";
+    if (!authPickId || !login || pass.length < 8) { if (el.authFirstHint) el.authFirstHint.textContent = "Укажите логин и пароль (мин. 8 символов)."; return; }
+    const j = await apiAuth("POST", "/api/auth/set-credentials", { userId: authPickId, login, password: pass });
+    if (j && j.ok) {
+      try { localStorage.setItem("biotime_firstlogin_done", "1"); } catch {}
+      nativeSetToken(j.token); authCookieFromToken(j.token);
+      window.__ownAuthUser = { id: authPickId, name: authPickedName || "Пользователь", role: "MEMBER" };
+      if (el.authGate) el.authGate.hidden = true;
+      toast("Учётные данные сохранены — вы вошли");
+      setAuthUserUI(window.__ownAuthUser);
+      if (el.authClose) el.authClose.hidden = false;
+      setTimeout(() => location.reload(), 350);
+      return;
+    }
+    if (el.authFirstHint) el.authFirstHint.textContent = (j && j.error) || "Не удалось сохранить";
+  }
+  async function doLogout() {
+    await apiAuth("POST", "/api/auth/logout");
+    nativeClearToken();
+    if (el.authGate) el.authGate.hidden = true;
+    window.__isOwnLoggedIn = false;
+    if (el.authUserChip) el.authUserChip.hidden = true;
+    if (el.authBtn) { el.authBtn.hidden = false; el.authBtn.textContent = "Войти"; }
+    location.reload();
+  }
+  if (el.authBtn) el.authBtn.addEventListener("click", () => { if (window.__isOwnLoggedIn) doLogout(); else openAuth(false); });
+  if (el.authClose) el.authClose.addEventListener("click", () => { if (el.authGate) el.authGate.hidden = true; });
+  if (el.authFirstLink) el.authFirstLink.addEventListener("click", () => showAuthView("first"));
+  if (el.authBackLogin) el.authBackLogin.addEventListener("click", () => showAuthView("login"));
+  if (el.authSubmitBtn) el.authSubmitBtn.addEventListener("click", doLogin);
+  if (el.authFindBtn) el.authFindBtn.addEventListener("click", firstLoginFind);
+  if (el.authSetBtn) el.authSetBtn.addEventListener("click", doSetCreds);
+  if (el.authPassword) el.authPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doLogin(); } });
+  if (el.authName) el.authName.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); firstLoginFind(); } });
+  initAuth();
+
+  // ---- Смена собственного пароля ----
+  async function changePassword() {
+    const cur = el.cpCurrent ? el.cpCurrent.value : "";
+    const nw = el.cpNew ? el.cpNew.value : "";
+    const hint = el.cpHint;
+    if (!cur || !nw) { if (hint) hint.textContent = "Введите текущий и новый пароль"; return; }
+    const j = await apiAuth("POST", "/api/auth/change-password", { currentPassword: cur, newPassword: nw });
+    if (j && j.ok) {
+      if (hint) { hint.textContent = "Пароль изменён"; hint.className = "auth-hint ok"; }
+      toast("Пароль изменён");
+      if (el.cpCurrent) el.cpCurrent.value = "";
+      if (el.cpNew) el.cpNew.value = "";
+      return;
+    }
+    if (hint) { hint.textContent = (j && j.error) || "Не удалось изменить пароль"; hint.className = "auth-hint"; }
+    toast((j && j.error) || "Не удалось изменить пароль");
+  }
+  if (el.cpSubmit) el.cpSubmit.addEventListener("click", changePassword);
+  if (el.cpNew) el.cpNew.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); changePassword(); } });
+
+  // ---- Админ: учётные записи сотрудников (логин/пароль) ----
+  function ensureAdminUsersUI() {
+    // Панель «Учётные записи» теперь — вкладка настроек (index.html),
+    // здесь просто подключаем кнопку загрузки списка.
+    const loadBtn = document.getElementById("adminUsersLoad");
+    if (loadBtn && !loadBtn.__wired) {
+      loadBtn.__wired = true;
+      loadBtn.addEventListener("click", loadAdminUsers);
+    }
+  }
+  function updateAdminUsersVisibility() {
+    // Вкладкой «Учётные записи» управляет стандартный switchAdminSub (админ-панель
+    // доступна только админам). Права пользователей не меняются.
+    return;
+  }
+  async function loadAdminUsers() {
+    const list = document.getElementById("adminUsersList");
+    if (!list) return;
+    const j = await apiAuth("GET", "/api/admin/users");
+    if (!j || !j.ok) { list.innerHTML = '<div class="empty-hint">Нет доступа к учётным записям (нужен админ).</div>'; return; }
+    const ownerId = j.ownerId;
+    // Главному админу менять учётку может только он сам.
+    const meRoot = window.__ownAuthUser && String(window.__ownAuthUser.id) === String(ownerId);
+    function rowHtml(u) {
+      const isOwner = String(u.id) === String(ownerId);
+      const canEdit = isOwner ? !!meRoot : true;
+      const name = escapeHtml(u.name) + (isOwner ? ' <span class="acct-owner-badge">главный админ</span>' : "");
+      return `<tr data-id="${escapeHtml(u.id)}"${isOwner ? ' class="acct-owner-row"' : ""}>
+        <td class="acct-name">${name}</td>
+        <td><input class="text-input au-login" value="${escapeHtml(u.login || "")}" placeholder="логин" ${canEdit ? "" : "disabled"} /></td>
+        <td><input class="text-input au-pass" type="password" value="" placeholder="${canEdit ? "новый пароль" : "только сам"}" autocomplete="new-password" ${canEdit ? "" : "disabled"} /></td>
+        <td><button type="button" class="mini-btn acct-masq" data-masq="${escapeHtml(u.id)}" title="Войти под этим пользователем" ${state.isAdmin ? "" : "hidden"}>→</button></td>
+        <td><button type="button" class="mini-btn" data-id="${escapeHtml(u.id)}" ${canEdit ? "" : "disabled"}>${isOwner && !canEdit ? "сам" : "Сохранить"}</button></td>
+      </tr>`;
+    }
+    // Группируем: по группам сотрудников + «Без группы».
+    const groups = (j.groups || []);
+    const ownedSet = new Set(groups.flatMap((g) => (g.memberIds || []).map(String)));
+    const userById = new Map((j.users || []).map((u) => [String(u.id), u]));
+    const byGroup = groups
+      .map((g) => ({ name: g.name || "Группа", members: (g.memberIds || []).map(String).map((id) => userById.get(id)).filter(Boolean) }))
+      .filter((g) => g.members.length);
+    const solo = (j.users || []).filter((u) => !ownedSet.has(String(u.id)));
+    const head = `<table class="acct-table"><thead><tr><th>Сотрудник</th><th>Логин</th><th>Пароль</th><th>Войти под</th><th></th></tr></thead><tbody>`;
+    const grp = (g) => `<tr class="acct-group"><td colspan="4">${escapeHtml(g.name)}<span class="acct-group-count">${g.members.length}</span></td></tr>` + g.members.map(rowHtml).join("");
+    const soloHtml = solo.length ? `<tr class="acct-group"><td colspan="4">Без группы<span class="acct-group-count">${solo.length}</span></td></tr>` + solo.map(rowHtml).join("") : "";
+    list.innerHTML = head + byGroup.map(grp).join("") + soloHtml + `</tbody></table>`;
+    (list.querySelectorAll("button[data-id]") || []).forEach((btn) => {
+      btn.addEventListener("click", saveAdminUser);
+    });
+    (list.querySelectorAll(".acct-masq") || []).forEach((btn) => {
+      btn.addEventListener("click", masqueradeUser);
+    });
+  }
+  async function masqueradeUser() {
+    if (!state.isAdmin) { toast("Только администратор"); return; }
+    const id = this.getAttribute("data-masq");
+    const j = await apiAuth("POST", "/api/auth/masquerade", { userId: id });
+    if (j && j.ok) { toast("Вошли под пользователем"); setTimeout(() => location.reload(), 400); }
+    else toast((j && j.error) || "Ошибка входа под пользователем");
+  }
+  async function saveAdminUser() {
+    if (this.disabled) return;
+    const row = this.closest && this.closest("tr");
+    const id = this.getAttribute("data-id");
+    const login = row ? row.querySelector(".au-login").value.trim() : "";
+    const pass = row ? row.querySelector(".au-pass").value : "";
+    if (!login) { toast("Укажите логин"); return; }
+    if (pass && pass.length < 8) { toast("Пароль не короче 8 символов"); return; }
+    const j = await apiAuth("POST", "/api/admin/users/credentials", { userId: id, login, password: pass });
+    toast((j && j.error) || "Сохранено");
+    if (j && j.ok) loadAdminUsers();
+  }
+  ensureAdminUsersUI();
   if (el.waybillFinishBtn) {
-    el.waybillFinishBtn.addEventListener("click", () => {
+    el.waybillFinishBtn.addEventListener("click", async () => {
+      // Фиксируем «Завершена» на сервере (видно и на других устройствах) и на кнопке.
+      waybillFinishedLocal = true;
+      try {
+        await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/finish", {
+          method: "POST",
+          body: JSON.stringify({ clientIndex: waybillClientIdx }),
+        });
+      } catch { /* даже если сеть упала — закрываем окно */ }
       closeWaybill();
+      document.querySelectorAll(`[data-waybill-open="${waybillRouteId}:${waybillClientIdx}"]`).forEach((b) => {
+        if (b) b.textContent = "Завершена";
+      });
+      loadShipments();
       toast("Сборка завершена — можно начать отгрузку");
     });
   }
-  if (el.waybillList) {
-    el.waybillList.addEventListener("click", (ev) => {
-      const row = ev.target.closest && ev.target.closest("[data-waybill-art]");
+  const bindWaybillListEvents = (container) => {
+    container.addEventListener("click", (ev) => {
+      const toggle = ev.target.closest && ev.target.closest("#waybillListToggle");
+      if (toggle) {
+        // Сначала мгновенно показываем окно с «Загрузка…», а тяжёлый список деталей
+        // собираем асинхронно — иначе ТСД ждёт построения всего списка в innerHTML
+        // и модалка открывается с задержкой.
+        waybillListModalHtml = "";
+        if (el.waybillListModalBody) el.waybillListModalBody.innerHTML = '<div class="empty-hint">Загрузка…</div>';
+        try { el.waybillListModal.showModal(); } catch { /* уже открыта */ }
+        const build = () => renderWaybill();
+        if (window.requestIdleCallback) { try { requestIdleCallback(build, { timeout: 200 }); } catch { setTimeout(build, 0); } }
+        else setTimeout(build, 0);
+        return;
+      }
+      const row = ev.target.closest && ev.target.closest("[data-waybill-index]");
       if (!row) return;
-      ev.preventDefault();
-      toggleMissingWaybill(Number(row.dataset.waybillIndex));
+      const i = Number(row.dataset.waybillIndex);
+      if (waybillSelected.has(i)) waybillSelected.delete(i); else waybillSelected.add(i);
+      renderWaybill();
+      focusWaybillScan();
     });
+    container.addEventListener("dblclick", (ev) => {
+      const row = ev.target.closest && ev.target.closest("[data-waybill-index]");
+      if (!row) return;
+      const art = String(row.dataset.waybillArt || "");
+      waybillSelected.add(Number(row.dataset.waybillIndex));
+      if (art) waybillScanDetail(art);
+    });
+  };
+  if (el.waybillList) bindWaybillListEvents(el.waybillList);
+  if (el.waybillListModalBody) bindWaybillListEvents(el.waybillListModalBody);
+  if (el.waybillListModalClose) {
+    el.waybillListModalClose.addEventListener("click", () => { try { el.waybillListModal.close(); } catch {} });
+  }
+  if (el.waybillListModal) {
+    el.waybillListModal.addEventListener("cancel", (e) => { e.preventDefault(); try { el.waybillListModal.close(); } catch {} });
+  }
+  if (el.waybillQtyAskOk) {
+    el.waybillQtyAskOk.addEventListener("click", () => finishWaybillQtyAsk(false));
+  }
+  if (el.waybillQtyAskCancel) {
+    el.waybillQtyAskCancel.addEventListener("click", () => finishWaybillQtyAsk(true));
+  }
+  if (el.waybillQtyAsk) {
+    el.waybillQtyAsk.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finishWaybillQtyAsk(false); }
+      else if (e.key === "Escape") { e.preventDefault(); finishWaybillQtyAsk(true); }
+    });
+  }
+  if (el.waybillQtyAskModal) {
+    el.waybillQtyAskModal.addEventListener("cancel", (e) => { e.preventDefault(); finishWaybillQtyAsk(true); });
+  }
+  const sharedQtyResolve = async (cancel) => {
+    const art = waybillSharedPendingArt;
+    const max = Math.max(1, Number(el.waybillSharedQty && el.waybillSharedQty.max) || 1);
+    const entered = Number(el.waybillSharedQty && el.waybillSharedQty.value) || 0;
+    if (!cancel && entered > max) {
+      // Больше, чем есть: голосом «Фиаско», ничего не засчитываем, ждём верное кол-во.
+      setWaybillStatus(`Больше, чем есть: осталось ${max}`);
+      playScanFeedback(false, "Это Фиаско Братан ты ввел больше чем есть");
+      if (el.waybillSharedQty) { el.waybillSharedQty.value = ""; try { el.waybillSharedQty.focus(); } catch { /* ignore */ } }
+      return;
+    }
+    const qty = Math.min(Math.max(1, entered || 1), max);
+    let ok = false;
+    try {
+      const r = await api("/api/routes/" + encodeURIComponent(waybillRouteId) + "/waybill/qtyresolve", {
+        method: "POST",
+        body: JSON.stringify({ clientIndex: waybillClientIdx, art, qty, cancel: !!cancel, box: waybillSharedPendingBox || undefined }),
+      });
+      ok = !!(r && r.ok);
+    } catch { /* ignore */ }
+    // Сообщаем по факту результата сервера: «Хорошо» только если засчитали; иначе —
+    // «Плохо», и окно не закрываем (можно повторить), чтобы не было рассинхрона вида.
+    if (!ok && !cancel) {
+      setWaybillStatus(`Не получилось засчитать ${art} — повторите количество`);
+      playScanFeedback(false, "Это Фиаско Братан не получилось засчитать");
+      if (el.waybillSharedQty) { el.waybillSharedQty.value = ""; try { el.waybillSharedQty.focus(); } catch { /* ignore */ } }
+      return;
+    }
+    if (el.waybillSharedQtyModal && el.waybillSharedQtyModal.open) { try { el.waybillSharedQtyModal.close(); } catch { /* ignore */ } }
+    waybillSharedPendingArt = "";
+    waybillSharedPendingBox = "";
+    wbScanBuf = ""; wbScanTs = 0; // сбрасываем буфер сканера от цифр, введённых в модалке
+    if (cancel) playScanFeedback(false, "Отменено");
+    else playScanFeedback(true, "Хорошо");
+    if (el.waybillArtInput) el.waybillArtInput.value = ""; // убираем остаточный код поля
+    refreshWaybillFromServer();
+    focusWaybillScan();
+  };
+  if (el.waybillSharedQtyOk) {
+    el.waybillSharedQtyOk.addEventListener("click", () => sharedQtyResolve(false));
+  }
+  if (el.waybillSharedQtyCancel) {
+    el.waybillSharedQtyCancel.addEventListener("click", () => sharedQtyResolve(true));
+  }
+  if (el.waybillSharedQty) {
+    el.waybillSharedQty.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); sharedQtyResolve(false); }
+      else if (e.key === "Escape") { e.preventDefault(); sharedQtyResolve(true); }
+    });
+  }
+  if (el.waybillSharedQtyModal) {
+    el.waybillSharedQtyModal.addEventListener("cancel", (e) => { e.preventDefault(); sharedQtyResolve(true); });
+  }
+  // «Собрать» в модалке: засчитать отмеченные позиции на указанное кол-во.
+  if (el.waybillModalAssembleBtn) {
+    el.waybillModalAssembleBtn.addEventListener("click", () => {
+      const qty = Math.max(1, Number(el.waybillModalQty && el.waybillModalQty.value) || 1);
+      const idxs = [...waybillSelected];
+      waybillSelected.clear();
+      (async () => {
+        for (const idx of idxs) {
+          const it = waybillLocal && waybillLocal.items[idx];
+          if (!it) continue;
+          const rem = Math.max(0, (Number(it.qty) || 0) - (Number(it.scanned) || 0));
+          if (rem > 0) await waybillScanDetail(String(it.art), Math.min(qty, rem));
+        }
+        if (el.waybillModalQty) el.waybillModalQty.value = "1";
+        renderWaybill();
+        focusWaybillScan();
+      })();
+    });
+  }
+  if (el.waybillModalMissBtn) {
+    el.waybillModalMissBtn.addEventListener("click", () => {
+      const idxs = [...waybillSelected];
+      waybillSelected.clear();
+      for (const idx of idxs) toggleMissingWaybill(idx);
+      renderWaybill();
+      focusWaybillScan();
+    });
+  }
+  if (el.waybillMissBtn) {
+    el.waybillMissBtn.addEventListener("click", () => {
+      const idxs = [...waybillSelected];
+      waybillSelected.clear();
+      for (const idx of idxs) toggleMissingWaybill(idx);
+      focusWaybillScan();
+    });
+  }
+  if (el.waybillManualBtn) {
+    el.waybillManualBtn.addEventListener("click", () => manualAssembleWaybill());
   }
   if (el.waybillArtInput) {
     el.waybillArtInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); scanWaybill(); }
     });
   }
+  // Скан на ТСД БЕЗ фокуса в поле: ловим ввод аппаратного сканера (клавиатурная
+  // инжекция) на уровне окна, пока открыта Сборка. Если фокус в поле — поле само
+  // обрабатывает Enter (не дублируем).
+  let wbScanBuf = "";
+  let wbScanTs = 0;
+  let wbScanTimer = null;
+  const wbSendScan = () => {
+    const code = String(wbScanBuf).trim();
+    wbScanBuf = ""; wbScanTs = 0;
+    if (wbScanTimer) { clearTimeout(wbScanTimer); wbScanTimer = null; }
+    if (code) {
+      if (el.waybillArtInput) el.waybillArtInput.value = code;
+      try { scanWaybill(); } catch (_) { /* не критично */ }
+    }
+  };
+  window.addEventListener("keydown", (ev) => {
+    if (!el.waybillModal || !el.waybillModal.open) return;
+    // Если открыта модалка ввода количества — цифры и Enter идут в неё, а не в
+    // буфер сканера (иначе на ТСД ввод кол-ва дублировался в скан).
+    if (el.waybillQtyAskModal && el.waybillQtyAskModal.open) return;
+    if (el.waybillSharedQtyModal && el.waybillSharedQtyModal.open) return;
+    // В поле (ручной ввод) — не дублируем, оно само вызывает скан по Enter.
+    const ae = document.activeElement;
+    if (ae && el.waybillArtInput && ae === el.waybillArtInput) return;
+    if (ev.ctrlKey || ev.altKey || ev.metaKey) return;
+    const t = Date.now();
+    if (wbScanTs && (t - wbScanTs) > 200) wbScanBuf = "";
+    const k = ev.key;
+    if (k === "Enter") {
+      if (wbScanBuf) { ev.preventDefault(); ev.stopPropagation(); wbSendScan(); }
+      else wbScanBuf = "";
+      return;
+    }
+    if (k && k.length === 1) {
+      wbScanBuf += k;
+      wbScanTs = t;
+      if (wbScanTimer) clearTimeout(wbScanTimer);
+      wbScanTimer = setTimeout(wbSendScan, 300);
+    } else {
+      wbScanBuf = "";
+    }
+  }, true);
   if (el.waybillModal) {
     el.waybillModal.addEventListener("cancel", (e) => { e.preventDefault(); closeWaybill(); });
   }
   // ----- Актная запись: показываем, кем сервер видит вошедшего -----
   function openAccountModal() {
     const d = (state.me && state.me.diag) || {};
+    // «Сменить пароль» всегда доступно в личном кабинете (сервер сам определит
+    // аккаунт по текущей личности и проверит, задана ли учётка).
+    if (el.cpBox) { el.cpBox.hidden = false; }
+    if (el.cpCurrent) el.cpCurrent.value = "";
+    if (el.cpNew) el.cpNew.value = "";
+    if (el.cpHint) el.cpHint.textContent = "";
     el.acctName.textContent = state.me ? (state.me.name || "—") : "—";
     el.acctId.textContent = d.id != null ? String(d.id) : "—";
     el.acctIdKind.textContent = d.idKind ? String(d.idKind) : "—";
@@ -9682,6 +12721,21 @@
     el.acctRole.textContent = roleLabel;
     el.acctAdmin.textContent = d.isAdmin ? "Да" : "Нет";
     el.acctAdmin.style.color = d.isAdmin ? "var(--ok, #16a34a)" : "var(--danger, #dc2626)";
+    // Технические данные (IP-адрес, адрес приложения) показываем только админу.
+    if (el.acctAdminRow) el.acctAdminRow.hidden = !d.isAdmin;
+    if (el.acctVersionRow) el.acctVersionRow.hidden = !d.isAdmin;
+    if (el.acctIpRow) el.acctIpRow.hidden = !d.isAdmin;
+    if (el.acctHostRow) el.acctHostRow.hidden = !d.isAdmin;
+    if (el.accountLogout) el.accountLogout.hidden = !d.isAdmin;
+    // Кнопка диагностики связи с 1С — только админу.
+    if (el.onecPingRow) el.onecPingRow.hidden = !d.isAdmin;
+    // Поправка времени устройства (компенсация рассинхрона часов ТСД/сканера).
+    if (el.acctTzRow && el.acctTzOffset) {
+      el.acctTzRow.hidden = !d.isAdmin;
+      try { el.acctTzOffset.value = localStorage.getItem("biotime_time_offset_min") || "0"; } catch { /* ignore */ }
+    }
+    // Диагностические «Логи» — только админу.
+    if (el.accountLogBtn) el.accountLogBtn.hidden = !d.isAdmin;
     if (el.acctVersion) {
       // Показываем актуальную версию приложения (единый источник — version.json,
       // отдаёт /api/app/update-info). Если ещё не получена — дозапрашиваем.
@@ -9697,7 +12751,21 @@
           .catch(() => { /* нет сети — версию не показываем */ });
       }
     }
-    if (d.reason) {
+    // Реальный публичный IP сервера. Сервер определяет его через внешний echo-сервис
+    // (/api/ip); пока IP не получен (или он недоступен за шлюзом), показываем адрес
+    // приложения — host, под которым пользователь открыл его. Так поле никогда не
+    // остаётся пустым/прочерком, у пользователя всегда есть полезное значение.
+    if (el.acctIp) {
+      el.acctIp.textContent = window.location.host || "—";
+      api("/api/ip")
+        .then((r) => {
+          if (el.acctIp && r && r.ip) el.acctIp.textContent = String(r.ip);
+        })
+        .catch(() => { /* IP недоступен — остаётся адрес приложения */ });
+    }
+    // Строку «Роль не совпала с администратором портала» и прочие причины фильтрации
+    // тоже показывает только админ — обычному пользователю она не нужна.
+    if (d.reason && d.isAdmin) {
       el.acctReason.hidden = false;
       el.acctReason.textContent = d.reason;
     } else {
@@ -9727,27 +12795,78 @@
     document.querySelectorAll("dialog[open]").forEach((d) => {
       try { d.close(); } catch { /* ignore */ }
     });
-    // Сбрасываем локальное состояние вошедшего пользователя.
-    state.me = null;
-    state.isAdmin = false;
-    state.isModerator = false;
-    state.isDriver = false;
-    // Прячем чип пользователя и шестерёнку настроек.
-    if (el.userChip) el.userChip.hidden = true;
-    if (el.settingsBtn) el.settingsBtn.classList.add("hidden");
-    // Очищаем чувствительные привязки локального хранилища (персональные настройки
-    // пользователя), чтобы на «чужой» учётке не подтянулись данные этого водителя.
-    try {
-      localStorage.removeItem("biotime_active_tab");
-      localStorage.removeItem("biotime.todayDraft");
-      localStorage.removeItem("biotime_collapsed");
-    } catch { /* ignore */ }
-    showAuthScreen();
+    (async () => {
+      let restored = false;
+      try {
+        const j = await apiAuth("POST", "/api/auth/logout");
+        restored = !!(j && j.ok && j.restoredAdmin);
+      } catch { /* ignore */ }
+      if (restored) {
+        // Выход «из-под» пользователя: возвращаемся в свой аккаунт администратора.
+        toast("Вернулись в свой аккаунт");
+        setTimeout(() => location.reload(), 300);
+        return;
+      }
+      // Своя авторизация: выходим из сессии и просим ввести логин/пароль.
+      window.__ownAuthUser = null;
+      if (typeof nativeClearToken === "function") nativeClearToken();
+      state.me = null;
+      state.isAdmin = false;
+      state.isModerator = false;
+      state.isDriver = false;
+      if (el.userChip) el.userChip.hidden = true;
+      if (el.settingsBtn) el.settingsBtn.classList.add("hidden");
+      try {
+        localStorage.removeItem("biotime_active_tab");
+        localStorage.removeItem("biotime.todayDraft");
+        localStorage.removeItem("biotime_collapsed");
+      } catch { /* ignore */ }
+      if (typeof openAuth === "function") openAuth();
+      if (typeof showAuthView === "function") showAuthView("login");
+    })();
   }
 
   if (el.accountLogout) {
     el.accountLogout.addEventListener("click", doLogout);
   }
+  if (el.accountReloadBtn) {
+    el.accountReloadBtn.addEventListener("click", () => {
+      // На ТСД вызываем нативный мост: снимает закреплённый режим и перезагружает
+      // WebView. Вне APK — обычная перезагрузка страницы.
+      let unfrozen = false;
+      if (window.AndroidBridge && typeof window.AndroidBridge.unfreezeApp === "function") {
+        try { window.AndroidBridge.unfreezeApp(); unfrozen = true; } catch { /* ignore */ }
+      }
+      if (el.accountModal && el.accountModal.open) { try { el.accountModal.close(); } catch { /* ignore */ } }
+      if (!unfrozen) { try { location.reload(); } catch { /* ignore */ } }
+    });
+  }
+  if (el.accountLogBtn) {
+    el.accountLogBtn.addEventListener("click", openAppLogModal);
+  }
+  if (el.appLogClose) {
+    el.appLogClose.addEventListener("click", closeAppLogModal);
+  }
+  if (el.appLogModal) {
+    el.appLogModal.addEventListener("cancel", (e) => { e.preventDefault(); closeAppLogModal(); });
+  }
+  if (el.appLogCopy) {
+    el.appLogCopy.addEventListener("click", copyAppLog);
+  }
+  if (el.appLogClear) {
+    el.appLogClear.addEventListener("click", clearAppLog);
+  }
+  // Любые непойманные ошибки/отклонённые промисы тоже пишем в журнал — тогда
+  // «кнопка молчит» всегда оставляет след на устройстве.
+  try {
+    window.addEventListener("error", (ev) => {
+      logApp("error", "onerror: " + (ev && ev.message ? ev.message : String(ev && ev.error || "?")));
+    });
+    window.addEventListener("unhandledrejection", (ev) => {
+      const r = ev && ev.reason;
+      logApp("error", "unhandledrejection: " + (r && r.message ? r.message : String(r)));
+    });
+  } catch { /* ignore */ }
   if (el.authLoginBtn) {
     // «Войти» — возвращаемся в рабочее состояние. Шлюз сам подтвердит сессию,
     // приложение перечитает данные с сервера (обычная перезагрузка страницы).
@@ -9757,7 +12876,16 @@
     t.addEventListener("click", () => switchAdminSub(t.dataset.sub));
   });
   el.tabs.querySelectorAll(".tab").forEach((t) => {
-    t.addEventListener("click", () => switchTab(t.dataset.tab));
+    t.addEventListener("click", () => {
+      // Вкладка «Отчёты» открывает полноэкранное модальное окно вместо страницы.
+      if (t.dataset.tab === "reports") { openReportsModal(); return; }
+      if (t.dataset.tab === "sverki") { openSverkiModal(); return; }
+      if (t.dataset.tab === "procenka") { openProcenkaModal(); return; }
+      if (t.dataset.tab === "parser") { openParserModal(); return; }
+      if (t.dataset.tab === "notfound") { openNotfoundModal(); return; }
+      if (t.dataset.tab === "calendar") { openSalaryModal(); return; }
+      switchTab(t.dataset.tab);
+    });
   });
   if (el.scanlogFilters) {
     el.scanlogFilters.querySelectorAll(".scanlog-filter").forEach((btn) => {
@@ -9767,14 +12895,274 @@
         // Вкладка «Сборка» (waybill) показывает только сканы деталей накладной —
         // в неё НЕ попадают погрузка (load) и выгрузка (unload).
         const act = btn.dataset.action;
-        scanlogFilterAction = (act === "unload" || act === "waybill") ? act : "load";
+        // «Не найдено» — отдельная вкладка: та же сборка, но фильтр только по
+        // помеченным «не найдено» позициям.
+        if (act === "waybill-missing") {
+          scanlogFilterAction = "waybill";
+          scanlogMissingOnly = true;
+        } else {
+          scanlogFilterAction = (act === "unload" || act === "waybill") ? act : "load";
+          scanlogMissingOnly = false;
+        }
         // Показываем дату, соответствующую активной вкладке: «Отгрузка за дату» —
         // во вкладке «Погрузка», «Выгрузка за дату» — во вкладке «Выгрузка».
         if (el.scanlogLoadDateField) el.scanlogLoadDateField.hidden = scanlogFilterAction !== "load";
         if (el.scanlogUnloadDateField) el.scanlogUnloadDateField.hidden = scanlogFilterAction !== "unload";
+        if (el.scanlogWaybillDateField) el.scanlogWaybillDateField.hidden = scanlogFilterAction !== "waybill";
         loadScanLog();
       });
     });
+  }
+
+  // ---- Отчёт по «не найдено»: детали сборки с изменяемым статусом/комментарием ----
+  // Выбранные (галочками) записи «Проблемы склада» для массового удаления (админ).
+  let nfSelected = new Set();
+  async function renderNotfound() {
+    const wrap = el.notfoundTable;
+    if (!wrap) return;
+    try { window.scrollTo({ top: 0, left: 0, behavior: "auto" }); } catch { /* ignore */ }
+    let rows = [];
+    let err = "";
+    let statusSummary = {};
+    try {
+      const r = await api("/api/notfound");
+      rows = (r && r.rows) || [];
+      statusSummary = (r && r.statusSummary) || {};
+    } catch (e) { err = (e && e.message) || String(e); }
+    // Диагностическая сводка под вкладками: сколько заявок в каждом статусе.
+    if (el.nfSummary) {
+      const cnt = (labels) => labels.reduce((n, L) => n + (Number(statusSummary[L]) || 0), 0);
+      el.nfSummary.innerHTML = "Статусы: " +
+        `Новая проблема — ${Number(statusSummary["Новая проблема"]) || 0} · ` +
+        `Выполняется — ${Number(statusSummary["Выполняется"]) || 0} · ` +
+        `Выполнено — ${Number(statusSummary["Выполнено"]) || 0} · ` +
+        `Возвращено — ${Number(statusSummary["Возвращено"]) || 0} · ` +
+        `Завершено — ${Number(statusSummary["Завершено"]) || 0}`;
+    }
+    const q = (el.nfSearch && el.nfSearch.value || "").toLowerCase().trim();
+    if (q) rows = rows.filter((x) =>
+      String(x.client || "").toLowerCase().includes(q) || String(x.art || "").toLowerCase().includes(q)
+    );
+    // Статусы: Новая проблема → Выполняется → (Отправить на проверку) Выполнено →
+    // (Завершить) Завершено; возврат из проверки/завершения → Возвращено.
+    const nfLabel = (s) => (s === "В работе" ? "Выполняется" : (s || "Новая проблема"));
+    const nfCls = (s) => ({ "Новая проблема": "new", "Выполняется": "work", "Выполнено": "review", "Завершено": "done", "Возвращено": "ret" }[nfLabel(s)] || "new");
+    const nfNextAction = (s) => ({ "Выполняется": "Отправить на проверку", "Выполнено": "Завершить", "Завершено": "Вернуть в работу" }[nfLabel(s)] || "Взять в работу");
+    const nfActionResult = (s) => ({ "Выполняется": "Выполнено", "Выполнено": "Завершено", "Завершено": "Возвращено" }[nfLabel(s)] || "Выполняется");
+    // Вкладки: «Проблемы» (не Выполнено и не Завершено), «На проверке» (Выполнено), «Завершённые» (Завершено).
+    const notfoundView = (typeof state.notfoundView === "string" && state.notfoundView) ? state.notfoundView : "problems";
+    if (el.nfTabs) {
+      el.nfTabs.querySelectorAll(".nf-tab").forEach((b) => b.classList.toggle("active", b.dataset.nfView === notfoundView));
+    }
+    rows = rows.filter((x) => {
+      const s = nfLabel(x.status);
+      if (notfoundView === "review") return s === "Выполнено";
+      if (notfoundView === "done") return s === "Завершено";
+      return s !== "Выполнено" && s !== "Завершено";
+    });
+    if (!rows.length) {
+      wrap.innerHTML = `<div class="empty-hint">Нет заявок в этом разделе.</div>
+        <div class="nf-diag" style="margin-top:6px;font-size:12px;opacity:.7;">Диагностика: сервер вернул ${rows.length} строк${err ? " · ошибка: " + escapeHtml(err) : ""}. Если данные есть в журнале «Сборка → Не найдено», а тут 0 — проверьте доступ/эндпоинт (/api/notfound).</div>`;
+      return;
+    }
+    const rowsByKey = new Map(rows.map((r) => [r.key, r]));
+    // Ищет накладную маршрута, где у клиента с именем `client` есть артикул `art`
+    // с пометкой «не найдено». Нужно, чтобы убрать чужую деталь из накладной клиента.
+    const nfFindWaybill = (client, art) => {
+      const normName = (s) => String(s || "").trim().replace(/\s+/g, " ").toLowerCase();
+      const want = normName(client);
+      for (const rt of (Array.isArray(shipmentsCache) ? shipmentsCache : [])) {
+        const cli = rt.clients || [];
+        for (let i = 0; i < cli.length; i += 1) {
+          const c = cli[i];
+          if (!c) continue;
+          const name = normName(c.client || c.bundleName || "");
+          if (name !== want) continue;
+          const wb = rt.waybills && rt.waybills[i];
+          const items = wb && Array.isArray(wb.items) ? wb.items : [];
+          const hit = items.some((it) =>
+            String(it.art || "").trim().toLowerCase() === String(art || "").trim().toLowerCase() &&
+            ((Number(it.missingQty) || 0) > 0 || !!it.missing));
+          if (hit) return { routeId: rt.id, clientIndex: i };
+        }
+      }
+      return null;
+    };
+    const canDel = state.isAdmin === true;
+    const body = rows.map((r) => {
+      const st = nfLabel(r.status);
+      const checked = nfSelected.has(r.key) ? " checked" : "";
+      return `<tr data-nf-key="${escapeHtml(r.key)}" class="nf-row-click" title="Открыть детали позиции">
+        ${canDel ? `<td class="nf-cell-sm nf-check-cell"><input type="checkbox" class="nf-check" data-nf-check="${escapeHtml(r.key)}"${checked} name="nfchk" /></td>` : ""}
+        <td class="nf-cell-sm">${escapeHtml(r.date ? fmtDateTimeSec(r.date) : "")}</td>
+        <td>${escapeHtml(r.client)}</td>
+        <td class="nf-cell-sm"><span class="nf-art">${escapeHtml(r.art)}</span></td>
+        <td class="nf-cell-qty"><span class="nf-qty-val">${Number(r.qty) || 0}</span></td>
+        <td><span class="nf-status-badge st-${nfCls(st)}">${escapeHtml(st)}</span></td>
+      </tr>`;
+    }).join("");
+    wrap.innerHTML = `<table class="nf-table"><thead><tr>
+      ${canDel ? `<th class="nf-check-cell"></th>` : ""}<th>Дата</th><th>Клиент</th><th>Артикул</th><th>Кол-во</th><th>Статус</th>
+      </tr></thead><tbody>${body}</tbody></table>`;
+    // Клик по строке → модалка с деталями позиции и кнопкой-состоянием.
+    wrap.querySelectorAll("tr[data-nf-key]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const key = row.getAttribute("data-nf-key");
+        const r = rowsByKey.get(key);
+        if (!r || !el.nfdModal || !el.nfdModalBody) return;
+        const renderModal = () => {
+          const myName = (state.me && state.me.name) || (staffById(state.me.id) ? staffById(state.me.id).name : "");
+          const myComments = r.comments || [];
+          const cur = nfLabel(r.status);
+          const action = nfNextAction(cur);
+          // Кнопки продвижения/возврата статуса:
+          // «Взять в работу» (Новая проблема), «Отправить на проверку» (Выполняется),
+          // «Завершить» (Выполнено); «Вернуть в работу» — в Выполнено и Завершено.
+          const showAction = cur === "Новая проблема" || cur === "Выполняется" || cur === "Выполнено";
+          const showReturn = cur === "Выполнено" || cur === "Завершено";
+          el.nfdModalBody.innerHTML = `
+            <div class="nf-detail-info">
+              <div class="nf-detail-row"><span>Дата:</span> ${escapeHtml(r.date ? fmtDateTimeSec(r.date) : "—")}</div>
+              <div class="nf-detail-row"><span>Сборщик:</span> ${escapeHtml(r.user || "—")}</div>
+              <div class="nf-detail-row"><span>Клиент:</span> ${escapeHtml(r.client)}</div>
+              <div class="nf-detail-row"><span>Артикул:</span> ${escapeHtml(r.art)}</div>
+              <div class="nf-detail-row"><span>Кол-во:</span> ${Number(r.qty) || 0}</div>
+            </div>
+            <div class="nf-actions-row">
+              ${showAction ? `<button type="button" class="nfd-action-btn" id="nfdActionBtn">${escapeHtml(action)}</button>` : ""}
+              ${showReturn ? `<button type="button" class="nfd-action-btn nfd-btn-soft" id="nfdReturnBtn">Вернуть в работу</button>` : ""}
+            </div>
+            <div class="nf-chat">
+              ${myComments.map((c) => `
+                <div class="nf-msg">
+                  <div class="nf-msg-head"><span class="nf-msg-who">${escapeHtml(c.user || "—")}</span><span class="nf-msg-time">${c.at ? fmtDateTimeSec(c.at) : ""}</span></div>
+                  <div class="nf-msg-text">${escapeHtml(c.text)}</div>
+                </div>`).join("")}
+              <div class="nf-chat-empty"${myComments.length ? ' style="display:none"' : ""}>Комментариев пока нет</div>
+            </div>
+            <div class="nf-chat-input-row">
+              <input class="text-input nf-chat-input" id="nfdChatInput" placeholder="Комментарий..." autocomplete="off" />
+              <button type="button" class="nfd-send-btn" id="nfdChatSend">Отправить</button>
+            </div>`;
+          // Отправка комментария — лента «переписки».
+          const sendComment = async () => {
+            const inp = el.nfdModalBody.querySelector("#nfdChatInput");
+            const text = (inp && inp.value || "").trim();
+            if (!text) return;
+            await saveNotFound(key, { status: r.status || "Новая проблема", addComment: { text, user: myName || "—" } });
+            if (!r.comments) r.comments = [];
+            r.comments.push({ text, user: myName || "—", at: Date.now() });
+            renderModal();
+          };
+          const sendBtn = el.nfdModalBody.querySelector("#nfdChatSend");
+          if (sendBtn) sendBtn.addEventListener("click", sendComment);
+          const ci = el.nfdModalBody.querySelector("#nfdChatInput");
+          if (ci) ci.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); sendComment(); } });
+          // Кнопка-состояние: взять в работу / отправить на проверку / завершить.
+          const ab = el.nfdModalBody.querySelector("#nfdActionBtn");
+          if (ab) ab.addEventListener("click", async () => {
+            const next = nfActionResult(cur);
+            r.status = next;
+            await saveNotFound(key, { status: next, comment: r.comment || "" });
+            const badge = row.querySelector(".nf-status-badge");
+            if (badge) { badge.textContent = nfLabel(next); badge.className = "nf-status-badge st-" + nfCls(next); }
+            renderModal();
+            renderNotfound();
+          });
+          // «Вернуть в работу»: возвращаем заявку в «Проблемы» (статус «Возвращено»).
+          const rb = el.nfdModalBody.querySelector("#nfdReturnBtn");
+          if (rb) rb.addEventListener("click", async () => {
+            r.status = "Возвращено";
+            await saveNotFound(key, { status: "Возвращено", comment: r.comment || "" });
+            const badge = row.querySelector(".nf-status-badge");
+            if (badge) { badge.textContent = "Возвращено"; badge.className = "nf-status-badge st-ret"; }
+            renderModal();
+            renderNotfound();
+          });
+        };
+        renderModal();
+        try { el.nfdModal.showModal(); } catch { /* уже открыта */ }
+      });
+    });
+    // Чекбоксы выделения (админ) — вместо кнопки удаления в строке.
+    wrap.querySelectorAll("[data-nf-check]").forEach((cb) => {
+      cb.addEventListener("click", (ev) => ev.stopPropagation()); // не открывать модалку строки
+      cb.addEventListener("change", () => {
+        const key = cb.getAttribute("data-nf-check");
+        if (!key) return;
+        if (cb.checked) nfSelected.add(key); else nfSelected.delete(key);
+        if (el.nfDeleteSelected) el.nfDeleteSelected.disabled = nfSelected.size === 0;
+      });
+    });
+    // Вся ячейка галочки — отдельная зона: клик в любом её месте только
+    // переключает галочку и НЕ открывает модалку (промах мимо чекбокса больше
+    // не разворачивает детали). Сам чекбокс обрабатывается выше.
+    wrap.querySelectorAll("td.nf-check-cell").forEach((td) => {
+      td.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (ev.target && ev.target.closest && ev.target.closest("input[type=checkbox]")) return;
+        const cb = td.querySelector("input[data-nf-check]");
+        if (cb) {
+          cb.checked = !cb.checked;
+          cb.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+    });
+    // Кнопка «Удалить выбранные» в шапке — закреплена, видна админу.
+    if (el.nfDeleteSelected) {
+      el.nfDeleteSelected.hidden = !canDel;
+      el.nfDeleteSelected.disabled = nfSelected.size === 0;
+    }
+  }
+  async function saveNotFound(key, data) {
+    try { await api("/api/notfound", { method: "POST", body: JSON.stringify(Object.assign({ key }, data)) }); toast("Сохранено"); }
+    catch (e) { toast((e && e.message) || "Ошибка сохранения"); }
+  }
+  // Логи скана деталей при сборке (вкладка «Логи» у админа): шлём НЕУСПЕШНЫЕ сканы
+  // (ok:false), чтобы диспетчер видел, какие коды не находились/не принимались.
+  function logBarcodeScan(kind, code, ok, reason, partsticker, art) {
+    try {
+      api("/api/logs/barcode", { method: "POST", body: JSON.stringify({
+        kind: String(kind || "detail"),
+        code: String(code || ""),
+        ok: !!ok,
+        reason: String(reason || ""),
+        partsticker: String(partsticker || ""),
+        art: String(art || ""),
+        client: String(waybillClientName || ""),
+        box: String(waybillBox || ""),
+        routeId: String(waybillRouteId || ""),
+        clientIndex: waybillClientIdx != null ? Number(waybillClientIdx) : null,
+      }) }).catch(() => { /* потери лога не критичны */ });
+    } catch { /* ignore */ }
+  }
+  if (el.nfRefresh) el.nfRefresh.addEventListener("click", renderNotfound);
+  // Кнопка «Удалить выбранные» в шапке «Проблем» — админ, удаляет выделенные галочками.
+  if (el.nfDeleteSelected) {
+    el.nfDeleteSelected.addEventListener("click", async () => {
+      if (nfSelected.size === 0) return;
+      if (!confirm(`Удалить выбранные записи «Проблемы склада» (${nfSelected.size}) из отчёта?`)) return;
+      const keys = [...nfSelected];
+      let okN = 0, bad = 0;
+      for (const key of keys) {
+        try { await api("/api/notfound", { method: "POST", body: JSON.stringify({ action: "delete", key }) }); okN += 1; }
+        catch { bad += 1; }
+      }
+      nfSelected.clear();
+      toast(bad ? `Удалено ${okN}, ошибок ${bad}` : `Удалено: ${okN}`);
+      renderNotfound();
+    });
+  }
+  if (el.nfSearch) el.nfSearch.addEventListener("input", renderNotfound);
+  if (el.nfdModalClose && el.nfdModal) {
+    el.nfdModalClose.addEventListener("click", () => { try { el.nfdModal.close(); } catch { /* ignore */ } });
+  }
+  if (el.nfTabs) {
+    el.nfTabs.querySelectorAll(".nf-tab").forEach((b) =>
+      b.addEventListener("click", () => {
+        state.notfoundView = b.getAttribute("data-nf-view");
+        renderNotfound();
+      }));
   }
   // ---- Журнал: поиск по клиенту и выбор дат ----
   // Вкладки «Погрузка»/«Выгрузка»: поиск по клиенту общий, а дата меняется
@@ -9784,11 +13172,14 @@
   const todayKeyNow = dayKeyOf(Date.now());
   scanlogDateLoad = todayKeyNow;
   scanlogDateUnload = todayKeyNow;
+  scanlogDateWaybill = todayKeyNow;
   if (el.scanlogDateLoad) el.scanlogDateLoad.value = todayKeyNow;
   if (el.scanlogDateUnload) el.scanlogDateUnload.value = todayKeyNow;
+  if (el.scanlogDateWaybill) el.scanlogDateWaybill.value = todayKeyNow;
   // По умолчанию открыта «Погрузка»; согласуем видимость полей дат.
   if (el.scanlogLoadDateField) el.scanlogLoadDateField.hidden = scanlogFilterAction !== "load";
   if (el.scanlogUnloadDateField) el.scanlogUnloadDateField.hidden = scanlogFilterAction !== "unload";
+  if (el.scanlogWaybillDateField) el.scanlogWaybillDateField.hidden = scanlogFilterAction !== "waybill";
   if (el.scanlogDateLoad) {
     el.scanlogDateLoad.addEventListener("change", () => {
       scanlogDateLoad = el.scanlogDateLoad.value || "";
@@ -9799,6 +13190,77 @@
     el.scanlogDateUnload.addEventListener("change", () => {
       scanlogDateUnload = el.scanlogDateUnload.value || "";
       refreshScanlogView();
+    });
+  }
+  if (el.scanlogDateWaybill) {
+    el.scanlogDateWaybill.addEventListener("change", () => {
+      scanlogDateWaybill = el.scanlogDateWaybill.value || "";
+      refreshScanlogView();
+    });
+  }
+  // Под-вкладки «Все» / «Не собрано» в журнале «Сборка».
+  const setScanlogMissingOnly = (on) => {
+    scanlogMissingOnly = !!on;
+    if (el.scanlogWbAll) el.scanlogWbAll.classList.toggle("is-active", !scanlogMissingOnly);
+    if (el.scanlogWbMissing) el.scanlogWbMissing.classList.toggle("is-active", scanlogMissingOnly);
+    refreshScanlogView();
+  };
+  if (el.scanlogWbAll) el.scanlogWbAll.addEventListener("click", () => setScanlogMissingOnly(false));
+  if (el.scanlogWbMissing) el.scanlogWbMissing.addEventListener("click", () => setScanlogMissingOnly(true));
+  // Дерево «Сборки»: клиент → бокс → детали (раскрытие/сворачивание).
+  if (el.scanlogTable) {
+    // Фиксируем точку начала нажатия на таблице журнала (и на документе — скролл
+    // может начаться и вне таблицы, а click сработать внутри неё).
+    const recordStart = (e) => { _wbPointerStart = e && e.clientX != null ? { x: e.clientX, y: e.clientY } : null; };
+    el.scanlogTable.addEventListener("pointerdown", recordStart, true);
+    document.addEventListener("pointerdown", recordStart, true);
+    el.scanlogTable.addEventListener("click", (ev) => {
+      // Жест прокрутки: если между нажатием и «кликом» палец сместился — это скролл,
+      // а не тап по боксу. Такой «клик» игнорируем, чтобы бокс не схлопывался при
+      // попытке прокрутить его содержимое.
+      const start = _wbPointerStart;
+      _wbPointerStart = null;
+      if (start && ev.clientX != null && ev.clientY != null &&
+          (Math.abs(ev.clientX - start.x) + Math.abs(ev.clientY - start.y) > 8)) {
+        return;
+      }
+      // Клик/нажатие ВНУТРИ раскрытых деталей бокса (строки списка деталей, области
+      // прокрутки) НЕ должен сворачивать группу: детали рендерятся внутри клиента
+      // [data-wlc], но вне заголовка [data-wlb], и клик по ним «всплывал» к клиенту,
+      // схлопывая весь блок (и развёрнутый бокс) — казалось, что «сам сворачивается».
+      if (ev.target && ev.target.closest && ev.target.closest(".wb-log-details")) return;
+      // Бокс проверяем РАНЬШЕ клиента: строка бокса [data-wlb] вложена в клиента
+      // [data-wlc], и если проверять клиента первым, closest() находит клиента и
+      // клик по боксу сворачивал бы ВЕСЬ блок клиента (дерево: клиент → боксы →
+      // детали). От этого боксы «сами сворачивались» при попытке их раскрыть.
+      const wlb = ev.target.closest && ev.target.closest("[data-wlb]");
+      if (wlb) {
+        const next = document.getElementById("wdet-" + wlb.getAttribute("data-wlb"));
+        if (next) {
+          next.hidden = !next.hidden;
+          wlb.querySelector(".wbl-arrow").textContent = next.hidden ? "▸" : "▾";
+          // Ключ бокса формируем с клиентом, чтобы одинаковые коды у разных клиентов
+          // не перетирали друг друга.
+          const clientRow = wlb.closest("[data-wlc]");
+          const client = clientRow ? (clientRow.getAttribute("data-wlc-key") || "") : "";
+          const box = wlb.getAttribute("data-wlb-key") || "";
+          _wblogState.boxes[client + "::" + box] = !next.hidden;
+          try { localStorage.setItem("biotime_wblog_open", JSON.stringify(_wblogState)); } catch { /* ignore */ }
+        }
+        return;
+      }
+      const wlc = ev.target.closest && ev.target.closest("[data-wlc]");
+      if (wlc) {
+        const next = document.getElementById("wbox-" + wlc.getAttribute("data-wlc"));
+        if (next) {
+          next.hidden = !next.hidden;
+          wlc.querySelector(".wbl-arrow").textContent = next.hidden ? "▸" : "▾";
+          const client = wlc.getAttribute("data-wlc-key") || "";
+          _wblogState.clients[client] = !next.hidden;
+          try { localStorage.setItem("biotime_wblog_open", JSON.stringify(_wblogState)); } catch { /* ignore */ }
+        }
+        return;
+      }
     });
   }
   if (el.scanlogSearch) {
@@ -9954,7 +13416,7 @@
     // Вкладки, видимые ТОЛЬКО администраторам. Модератор входит только в свои
     // группы, поэтому управление группами/окладами/настройками/множителем и
     // списком админов — только для ADMIN. «Оклады» (salaries) уже здесь.
-    const adminOnlySubs = ["groups", "salaries", "settings", "admins", "multiplier"];
+    const adminOnlySubs = ["groups", "salaries", "settings", "admins", "multiplier", "access", "backup"];
     el.adminTabs.querySelectorAll(".atab").forEach((t) => {
       let visible;
       if (t.dataset.sub === "log") visible = state.isAdmin || state.isModerator;
@@ -9964,8 +13426,16 @@
     });
     // The "Отчёт" tab is visible to admins and moderators.
     el.tabs.querySelectorAll(".tab.admin-only").forEach((t) =>
-      t.classList.toggle("admin-visible", state.isAdmin || state.isModerator)
+      t.classList.toggle("admin-visible",
+        (t.id === "logsTab") ? canSeeLogs()
+          : (t.id === "reportsTab") ? canSeeReports()
+          : (t.id === "sverkiTab") ? canSeeSverki()
+          : (t.id === "procenkaTab") ? canSeeProcenka()
+          : (t.id === "parserTab") ? canSeeParser()
+          : (state.isAdmin || state.isModerator))
     );
+    // Вкладка «Отчёт не найдено» дополнительно доступна отмеченным сотрудникам.
+    if (el.notfoundTab) el.notfoundTab.classList.toggle("admin-visible", canSeeNotfound());
     // Show/hide the feature tabs (Мои маршруты / Маршрутизация) reactively.
     refreshNavTabs();
     // Предзагружаем Яндекс.Карты заранее (тем, кому доступна карта маршрутов),
@@ -10006,6 +13476,54 @@
     // версия выше установленной, показывает окно обновления.
     showAppVersion();
     checkForAppUpdate();
+    // ---- Автообновление ВЕБ-версии прямо после деплоя (без перезапуска) ----
+    // Сверяем сборку, с которой открыта страница (<meta app-version>), с текущей
+    // на сервере каждые ~25 с. Если сервер поднял новую версию (деплой) — сами
+    // перезагружаемся и подхватываем новый index.html/app.js/styles.css. Работает
+    // и в браузере, и в Electron/APK-оболочке (они грузят тот же адрес). Plain
+    // fetch без api(), чтобы фоновая проверка не показывала баннер «нет связи».
+    const _loadedWebVersion = (() => {
+      const m = document.querySelector('meta[name="app-version"]');
+      return m ? String(m.getAttribute("content") || "") : "";
+    })();
+    let _webRefreshLock = false;
+    let _webLastReload = 0;
+    const checkWebVersionRefresh = () => {
+      if (_webRefreshLock || !_loadedWebVersion) return;
+      const c = new AbortController();
+      const t = setTimeout(() => c.abort(), 8000);
+      fetch("/api/app/web-version", {
+        signal: c.signal,
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((r) => {
+          if (!_webRefreshLock && r && r.ok && r.version != null &&
+              String(r.version) !== String(_loadedWebVersion)) {
+            // Защита от «цикла перезагрузки»: если недавно уже перезагружались, а
+            // версия всё ещё расходится (например, регион/кэш шлюза) — пауза 60 с
+            // между срабатываниями, чтобы приложение не моргало бесконечно.
+            const now = Date.now();
+            if (now - _webLastReload < 60000) return;
+            _webLastReload = now;
+            _webRefreshLock = true;
+            try { toast("Доступна новая версия — обновляю…"); } catch { /* ignore */ }
+            setTimeout(() => { try { location.reload(); } catch { _webRefreshLock = false; } }, 800);
+          }
+        })
+        .catch(() => { /* нет сети/шлюз — тихо, следующая проверка позже */ })
+        .finally(() => clearTimeout(t));
+    };
+    checkWebVersionRefresh();
+    setInterval(checkWebVersionRefresh, 25000);
+    // Обновляемся сразу, когда ТСД/приложение возвращается на передний план
+    // (focus/visibility) — не ждём 25 с: вернулся к устройству → подтянулась новая версия.
+    const _onFront = () => {
+      if (!document.hidden) checkWebVersionRefresh();
+    };
+    document.addEventListener("visibilitychange", _onFront);
+    window.addEventListener("focus", _onFront);
     // Фоновая предзагрузка Яндекс.Карт для администраторов/модераторов: тяжёлый
     // JS API (~сотни КБ) грузится заранее, в фоне, чтобы при первом открытии
     // вкладки «Трекинг» карта появилась сразу, а не висело «Загрузка карты…»
@@ -10032,6 +13550,26 @@
     // Poll the server in the background so edits made elsewhere (by an admin in
     // "Дни сотрудников", or on another device) reach this timer live, no reload.
     setInterval(pollState, 8000);
+    // SSE-синхронизация: мгновенно узнаём об изменении данных (скан на другом
+    // устройстве, завершение маршрута) и сразу перечитываем актуальное состояние.
+    let sseLast = 0;
+    const onSseChanged = () => {
+      const now = Date.now();
+      if (now - sseLast < 250) return; // схлопываем пачку событий в одно обновление
+      sseLast = now;
+      if (el.waybillModal && el.waybillModal.open) refreshWaybillFromServer();
+      loadShipments();
+      // Реальное время в «Логи»: сканер сделал запись → сервер пушит changed →
+      // если вкладка «Логи» открыта, перерисовываем список сразу (без ожидания 5 с).
+      if (el.scansLogList && el.scansLogList.offsetParent !== null) renderScansLog();
+    };
+    try {
+      if ("EventSource" in window) {
+        const es = new EventSource("/api/events");
+        es.onmessage = onSseChanged;
+        es.onerror = () => { /* SSE упал — опрос остаётся страховкой */ };
+      }
+    } catch { /* без SSE работаем по опросу */ }
     // Автообновление разделов без ручных кнопок «Обновить». Единый дешёвый
     // таймер раз в 10 секунд тянет данные только для тех разделов, которые
     // сейчас реально открыты (не hidden) и у которых нет собственного таймера
@@ -10043,6 +13581,11 @@
       if (!el.pageScanlog.hidden) loadScanLog();
       // «Движение водителей» — подвкладка «Отчёт» раздела «Маршрутизация».
       if (!el.pageDrivers.hidden && el.routesubReport && !el.routesubReport.hidden) loadMotionReport();
+      // «Местоположение водителя» — подвкладка маршрутизации: автообновление,
+      // чтобы новые точки GPS подтягивались без клика «Показать»/F5.
+      if (!el.pageDrivers.hidden && el.routesubLocation && !el.routesubLocation.hidden) loadLocationReport();
+      // «Логи 1С» — подвкладка маршрутизации: живое обновление заборов.
+      if (!el.pageDrivers.hidden && el.routesub1cLog && !el.routesub1cLog.hidden) loadOnecLog();
     }, 10000);
 
     // Live ticking counter for the "Таймер" page. The worked/overtime figures are
@@ -10246,6 +13789,37 @@
         location.reload();
       });
     }
+    // Автоперезагрузка после деплоя: сервер отдаёт версию сборки, которая меняется
+    // при каждом обновлении. Если версия сменилась — обновляем Service Worker и
+    // перезагружаем страницу сами, без нажатий (браузер / мобильный / Electron).
+    let deployBaseline = null;
+    async function pollDeployVersion() {
+      let r = null;
+      // Тихий опрос (без баннера «Нет связи»): фоновая проверка не должна шуметь.
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 6000);
+        try {
+          const resp = await fetch("/api/version", { headers: { "Content-Type": "application/json" }, signal: ctrl.signal });
+          if (resp.ok) r = await resp.json();
+        } finally { clearTimeout(t); }
+      } catch (e) { return; }
+      const v = r && r.v;
+      if (!v) return;
+      if (deployBaseline === null) { deployBaseline = String(v); return; }
+      if (String(v) !== deployBaseline) {
+        deployBaseline = String(v);
+        try {
+          if (navigator.serviceWorker) {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg) await reg.update();
+          }
+        } catch (e) { /* если SW недоступен — всё равно перезагружаем */ }
+        location.reload();
+      }
+    }
+    setTimeout(pollDeployVersion, 4000);   // первый опрос после открытия страницы
+    setInterval(pollDeployVersion, 20000); // затем каждые 20 секунд
   });
 
   // Новый SW активировался и взял контроль. Второй и последующие заходы —

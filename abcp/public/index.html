@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Отчеты ПрофМаркет</title>
+  <link rel="stylesheet" href="style.css?v=20260929.112">
+</head>
+<body>
+  <header class="topbar">
+    <nav class="tabs">
+      <button class="tab is-active" data-tab="dashboard" type="button">Дашборд</button>
+      <button class="tab" data-tab="terms" type="button">Сроки по поставщикам</button>
+      <button class="tab" data-tab="pricing" type="button">Проценка</button>
+      <button class="tab" data-tab="report" type="button">Просрочка</button>
+      <button class="tab" data-tab="rejections" type="button">Отказы поставщики</button>
+      <button class="tab" data-tab="client-rejections" type="button">Отказ клиенты</button>
+<button class="tab" data-tab="client-analysis" type="button">Анализ заказов клиентов</button>
+<button class="tab" data-tab="europe" type="button">Отчет Европа</button>
+<button class="tab" data-tab="client-config" type="button">Конфигуратор сроков поставки</button>
+<button class="tab" data-tab="manual-automat" type="button">Ручной автомат</button>
+<button class="tab" data-tab="supplier-emails" type="button">Почты поставщиков</button>
+<button class="tab" data-tab="logs" type="button">Логи</button>
+      <button class="tab" data-tab="settings" type="button">Настройки</button>
+    </nav>
+    <div class="userbar" hidden>
+      <span id="avatar" class="avatar"></span>
+      <div class="user-meta">
+        <b id="current-user" class="current-user"></b>
+        <small id="user-role"></small>
+      </div>
+      <button id="btn-logout" class="tab logout-tab" type="button">Выйти</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Экран Дашборда -->
+    <section id="view-dashboard" class="view is-active">
+      <div class="toolbar">
+        <div class="filters">
+          <button id="dash-period-btn" class="btn" type="button">Период…</button>
+        </div>
+        <button id="btn-refresh-dash" class="btn btn-accent" type="button">Обновить данные</button>
+      </div>
+      <div id="dash-spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Загружаем данные из ABCP…</span></div>
+      <div id="dash-error" class="notice notice-error hidden"></div>
+
+      <div id="dash-body" class="hidden">
+        <div class="meta-line">
+          <span id="dash-meta"></span>
+          <span class="meta-dot">·</span>
+          <span id="dash-orders"></span>
+        </div>
+
+        <section class="dash-section">
+          <h2 class="dash-section-title">По сумме</h2>
+          <div class="dash-grid">
+            <div class="panel">
+              <div class="dash-panel-head">
+                <h2 class="panel-title">Все заказы</h2>
+                <div class="dash-toggle" id="toggle-sum-orders">
+                  <button class="dash-toggle-btn is-active" data-graph="day" type="button">Дни</button>
+                  <button class="dash-toggle-btn" data-graph="wk" type="button">Недели</button>
+                  <button class="dash-toggle-btn" data-graph="mth" type="button">Месяц</button>
+                  <button class="dash-toggle-btn" data-graph="yr" type="button">Год</button>
+                </div>
+              </div>
+              <div class="dash-metrics" id="m-sum-orders"></div>
+              <div class="dash-sub" id="sub-sum-orders"></div>
+              <div class="dbars" id="bars-sum-orders"></div>
+            </div>
+            <div class="panel">
+              <div class="dash-panel-head">
+                <h2 class="panel-title">Выдано (по дате выдачи)</h2>
+                <div class="dash-toggle" id="toggle-sum-issued">
+                  <button class="dash-toggle-btn is-active" data-graph="day" type="button">Дни</button>
+                  <button class="dash-toggle-btn" data-graph="wk" type="button">Недели</button>
+                  <button class="dash-toggle-btn" data-graph="mth" type="button">Месяц</button>
+                  <button class="dash-toggle-btn" data-graph="yr" type="button">Год</button>
+                </div>
+              </div>
+              <div class="dash-metrics" id="m-sum-issued"></div>
+              <div class="dash-sub" id="sub-sum-issued"></div>
+              <div class="dbars" id="bars-sum-issued"></div>
+            </div>
+            <div class="panel">
+              <div class="dash-panel-head">
+                <h2 class="panel-title">Отказы (по дате статуса)</h2>
+                <div class="dash-toggle" id="toggle-sum-refused">
+                  <button class="dash-toggle-btn is-active" data-graph="day" type="button">Дни</button>
+                  <button class="dash-toggle-btn" data-graph="wk" type="button">Недели</button>
+                  <button class="dash-toggle-btn" data-graph="mth" type="button">Месяц</button>
+                  <button class="dash-toggle-btn" data-graph="yr" type="button">Год</button>
+                </div>
+              </div>
+              <div class="dash-metrics" id="m-sum-refused"></div>
+              <div class="dash-sub" id="sub-sum-refused"></div>
+              <div class="dbars" id="bars-sum-refused"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="dash-section">
+          <h2 class="dash-section-title">По количеству</h2>
+          <div class="dash-grid">
+            <div class="panel">
+              <div class="dash-panel-head">
+                <h2 class="panel-title">Все заказы</h2>
+                <div class="dash-toggle" id="toggle-count-orders">
+                  <button class="dash-toggle-btn is-active" data-graph="day" type="button">Дни</button>
+                  <button class="dash-toggle-btn" data-graph="wk" type="button">Недели</button>
+                  <button class="dash-toggle-btn" data-graph="mth" type="button">Месяц</button>
+                  <button class="dash-toggle-btn" data-graph="yr" type="button">Год</button>
+                </div>
+              </div>
+              <div class="dash-metrics" id="m-count-orders"></div>
+              <div class="dash-sub" id="sub-count-orders"></div>
+              <div class="dbars" id="bars-count-orders"></div>
+            </div>
+            <div class="panel">
+              <div class="dash-panel-head">
+                <h2 class="panel-title">Выдано (по дате выдачи)</h2>
+                <div class="dash-toggle" id="toggle-count-issued">
+                  <button class="dash-toggle-btn is-active" data-graph="day" type="button">Дни</button>
+                  <button class="dash-toggle-btn" data-graph="wk" type="button">Недели</button>
+                  <button class="dash-toggle-btn" data-graph="mth" type="button">Месяц</button>
+                  <button class="dash-toggle-btn" data-graph="yr" type="button">Год</button>
+                </div>
+              </div>
+              <div class="dash-metrics" id="m-count-issued"></div>
+              <div class="dash-sub" id="sub-count-issued"></div>
+              <div class="dbars" id="bars-count-issued"></div>
+            </div>
+            <div class="panel">
+              <div class="dash-panel-head">
+                <h2 class="panel-title">Отказы (по дате статуса)</h2>
+                <div class="dash-toggle" id="toggle-count-refused">
+                  <button class="dash-toggle-btn is-active" data-graph="day" type="button">Дни</button>
+                  <button class="dash-toggle-btn" data-graph="wk" type="button">Недели</button>
+                  <button class="dash-toggle-btn" data-graph="mth" type="button">Месяц</button>
+                  <button class="dash-toggle-btn" data-graph="yr" type="button">Год</button>
+                </div>
+              </div>
+              <div class="dash-metrics" id="m-count-refused"></div>
+              <div class="dash-sub" id="sub-count-refused"></div>
+              <div class="dbars" id="bars-count-refused"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- Сроки по поставщикам -->
+    <section id="view-terms" class="view">
+      <div class="toolbar">
+        <button id="btn-refresh-terms" class="btn btn-accent" type="button">Обновить данные</button>
+        <button id="btn-clear-terms" class="btn" type="button">Очистить кэш сроков</button>
+        <button id="btn-update-all-terms" class="btn btn-accent" type="button">Обновить всем</button>
+        <span id="terms-action" class="field-hint"></span>
+      </div>
+      <div id="terms-spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Загружаем данные из ABCP…</span></div>
+      <div id="terms-error" class="notice notice-error hidden"></div>
+      <div id="ship-progress-wrap" class="hidden progress-wrap">
+        <div class="progress-label">Сбор реальных сроков… <span id="ship-percent">0%</span></div>
+        <div class="progress"><div id="ship-bar" class="progress-fill" style="width:0%"></div></div>
+      </div>
+      <div id="terms-route-note" class="notice hidden" style="margin-bottom:12px">Пересчитываем реальные сроки маршрутов из ABCP… обновим автоматически, как закончим.</div>
+
+      <details class="params" style="margin-bottom:16px">
+        <summary class="params-summary">Легенда — как считается реальный срок</summary>
+        <div class="params-body">
+          <ul class="info-list">
+            <li><strong>Срок мин / макс</strong> — заявленный поставщиком срок поставки в днях (план).</li>
+            <li><strong>Данные:</strong> всегда последние <strong>60 дней</strong> от текущей даты; отказы исключаются. Реальный срок позиции = время от статуса <strong>«Заказан»</strong> до <strong>«Отгружен поставщиком»</strong> (по истории статусов), в днях с округлением в большую сторону.</li>
+            <li><strong>Единичные экстремальные сроки (выбросы)</strong> отсекаются, чтобы один нетипично долгий заказ не искажал показатели поставщика.</li>
+            <li><strong>Реальный (80%)</strong> — срок, за который приходят <strong>80% успешных деталей</strong> (по объёму), после отсева выбросов. Это основная характеристика фактической скорости поставщика.</li>
+            <li><strong>Итог:</strong> <span class="term-fast">«быстрее»</span> (золотым), если «Реальный (80%)» быстрее мин. срока поставщика; <span class="term-ok">«укладывается»</span>, если «Реальный (80%)» ≤ «Срок макс»; иначе <span class="term-bad">«нарушает»</span>.</li>
+            <li><strong>Прочерки —</strong> за последние 60 дней у поставщика не было ни одной позиции «Отгружен поставщиком» после отсева выбросов — измерять нечего.</li>
+            <li><strong>Кнопки «Обновить срок» / «Обновить всем»</strong> — пишут реальный расчётный срок поставщика в <strong>максимальный срок</strong> ABCP (дни переводятся в часы: дни × 24). Кнопка у строки — точечно по одному поставщику, «Обновить всем» — по всем <strong>прайсовым</strong> поставщикам с реальным сроком. После записи сроки пересчитываются заново. У кого нет реального срока — обновить нельзя (прочерк).</li>
+            <li><strong>Онлайн-поставщики</strong> (заказ уходит через API) в колонке «Обновить» всегда имеют прочерк — их срок не меняем.</li>
+            <li><strong>Минимум не даём равным максимуму:</strong> если после обновления максимальный срок окажется равным минимальному (или меньше), к максимальному автоматически добавляется <strong>+24 часа</strong>, чтобы макс всегда был строго больше минимума.</li>
+          </ul>
+        </div>
+      </details>
+
+      <div id="terms-body" class="hidden">
+        <div class="meta-line"><span id="terms-meta"></span><span class="meta-dot">·</span><span id="terms-orders"></span></div>
+        <div class="terms-stats">
+          <div class="tstat" style="--sc:var(--gold)"><div class="n" id="t-stat-fast">0</div><div class="l">Быстрее плана</div></div>
+          <div class="tstat" style="--sc:var(--green)"><div class="n" id="t-stat-ok">0</div><div class="l">Укладывается</div></div>
+          <div class="tstat" style="--sc:var(--red)"><div class="n" id="t-stat-bad">0</div><div class="l">Нарушает</div></div>
+          <div class="tstat" style="--sc:var(--cyan)"><div class="n" id="t-stat-online">0</div><div class="l">Онлайн</div></div>
+        </div>
+        <div class="price-grid">
+          <section class="panel terms-block terms-block-wide">
+            <h2 class="panel-title">Нарушает</h2>
+            <div class="table-wrap">
+              <table class="table terms-table">
+                <thead>
+                  <tr>
+                    <th>Поставщик</th><th>Тип</th><th class="num">Срок мин</th><th class="num">Срок макс</th><th class="num">Реальный (80%)</th><th>Итог</th><th>Обновить</th>
+                  </tr>
+                </thead>
+                <tbody id="terms-bad-rows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel terms-block">
+            <h2 class="panel-title">Быстрее плана</h2>
+            <div class="table-wrap">
+              <table class="table terms-table">
+                <thead>
+                  <tr>
+                    <th>Поставщик</th><th>Тип</th><th class="num">Срок мин</th><th class="num">Срок макс</th><th class="num">Реальный (80%)</th><th>Итог</th><th>Обновить</th>
+                  </tr>
+                </thead>
+                <tbody id="terms-fast-rows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel terms-block">
+            <h2 class="panel-title">Укладывается</h2>
+            <div class="table-wrap">
+              <table class="table terms-table">
+                <thead>
+                  <tr>
+                    <th>Поставщик</th><th>Тип</th><th class="num">Срок мин</th><th class="num">Срок макс</th><th class="num">Реальный (80%)</th><th>Итог</th><th>Обновить</th>
+                  </tr>
+                </thead>
+                <tbody id="terms-ok-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="panel">
+          <h2 class="panel-title">Онлайн поставщики</h2>
+          <div class="table-wrap">
+            <table class="table terms-table">
+              <thead>
+                <tr>
+                  <th>Поставщик</th>
+                  <th>Тип</th>
+                  <th class="num">Срок мин</th>
+                  <th class="num">Срок макс</th>
+                  <th class="num">Реальный (80%)</th>
+                  <th>Итог</th>
+                  <th>Обновить</th>
+                </tr>
+              </thead>
+              <tbody id="terms-online-rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Проценка -->
+    <section id="view-pricing" class="view">
+      <div class="toolbar">
+        <div class="filters">
+          <label class="field inline">
+            <span class="field-label">Артикул</span>
+            <input id="pr-number" class="input" placeholder="например, 1AKR4010R">
+          </label>
+          <label class="field inline">
+            <span class="field-label">Бренд (необязательно)</span>
+            <input id="pr-brand" class="input" placeholder="например, ATB">
+          </label>
+          <button id="btn-choose-pr-suppliers" class="btn" type="button">Выбрать поставщиков</button>
+          <span id="pr-selected" class="field-hint"></span>
+        </div>
+        <button id="btn-refresh-pricing" class="btn btn-accent" type="button">Проценка</button>
+      </div>
+      <div id="pr-spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Ищем цены в ABCP…</span></div>
+      <div id="pr-error" class="notice notice-error hidden"></div>
+      <div id="pr-body" class="hidden">
+        <div class="meta-line"><span id="pr-meta"></span></div>
+        <div class="panel">
+          <h2 class="panel-title">Сравнение цен по артикулу (лучшее предложение у каждого поставщика)</h2>
+          <p class="field-hint" id="pr-recap"></p>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Артикул</th><th>Поставщик</th><th class="num">Лучшая цена</th><th class="num">Дешевле мин.</th><th class="num">Дороже мин.</th></tr></thead>
+              <tbody id="pr-articles"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Экран отчёта -->
+    <section id="view-report" class="view">
+      <div class="toolbar">
+        <div class="filters">
+            <input id="filter-search" class="input" type="search" placeholder="Поиск по номеру заказа">
+          <div class="sd" id="sd">
+            <button id="sd-btn" class="input sd-btn" type="button"><span id="sd-label">Все поставщики</span><span class="sd-chev">▾</span></button>
+            <div id="sd-menu" class="sd-menu hidden">
+              <input id="sd-search" class="input" placeholder="Поиск поставщика…" autocomplete="off">
+              <div id="sd-list" class="sd-list"></div>
+            </div>
+          </div>
+        </div>
+        <div class="filters">
+          <button id="btn-refresh" class="btn btn-accent" type="button">Обновить данные</button>
+        </div>
+      </div>
+
+      <details id="report-params" class="params">
+        <summary class="params-summary">Параметры отчёта</summary>
+        <div class="params-body">
+          <div class="field-row">
+              <label class="field">
+              <span class="field-label">Период</span>
+              <button id="rp-period-btn" class="btn" type="button" style="width:100%">Период…</button>
+            </label>
+          </div>
+
+          <h3 class="subtitle">Исключить поставщиков</h3>
+          <p class="field-hint">Поставщики из списка исключений не берутся в расчёт просрочки:
+            их позиции не показываются и не входят в счётчики.</p>
+          <div class="exclusion-row">
+            <button id="btn-add-exclusion" class="btn" type="button">Добавить исключение</button>
+            <span id="exclusion-note" class="field-hint">Загрузите отчёт, чтобы увидеть доступных поставщиков</span>
+          </div>
+          <div id="exclusion-tags" class="exclusion-tags"></div>
+
+          <div class="settings-actions">
+            <button id="btn-apply-params" class="btn btn-accent" type="button">Применить и обновить</button>
+            <span id="rp-msg" class="settings-msg"></span>
+          </div>
+        </div>
+      </details>
+
+      <div id="spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Загружаем данные из ABCP…</span></div>
+      <div id="error" class="notice notice-error hidden"></div>
+
+      <div id="report-body" class="hidden">
+        <div class="meta-line">
+          <span id="meta-generated"></span>
+          <span class="meta-dot">·</span>
+          <span id="meta-orders"></span>
+        </div>
+
+        <div class="cards">
+          <div class="card card-overdue">
+            <span class="card-label">Просроченных позиций</span>
+            <span class="card-value" id="stat-overdue">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Сумма просрочки, руб.</span>
+            <span class="card-value" id="stat-sum">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Поставщиков с просрочкой</span>
+            <span class="card-value" id="stat-distributors">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Максимальная просрочка, дн.</span>
+            <span class="card-value" id="stat-max-late">0</span>
+          </div>
+        </div>
+
+        <div class="columns">
+          <div class="panel">
+            <h2 class="panel-title">По поставщикам</h2>
+            <div id="distributors" class="distributors"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="panel-title">Просроченные позиции</h2>
+              <div class="panel-actions">
+                <button id="btn-refusal" class="btn btn-danger" type="button">Снять (отказ)</button>
+                <button id="btn-request-term" class="btn btn-accent" type="button">Запросить срок поставки</button>
+                <span id="refusal-info" class="field-hint"></span>
+              </div>
+            </div>
+            <div id="rp-status-filter" class="rp-filter hidden"></div>
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th class="num"><input type="checkbox" id="chk-all" title="Выбрать все"></th>
+                    <th>Дата заказа</th>
+                    <th>Заказ</th>
+                    <th>Клиент</th>
+                    <th>Поставщик</th>
+                    <th class="num">Кол-во</th>
+                    <th class="num">Сумма</th>
+                    <th>Статус</th>
+                    <th>Ожидается</th>
+                    <th class="num">Просрочка</th>
+                    <th class="num">Отправлено</th>
+                  </tr>
+                </thead>
+                <tbody id="rows"></tbody>
+              </table>
+            </div>
+            <div id="empty" class="empty hidden">Просроченных позиций нет за выбранный период.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Экран отчёта по отказам -->
+    <section id="view-rejections" class="view">
+      <div class="toolbar">
+        <div class="filters">
+          <button id="btn-rej-supplier" class="btn" type="button">Поставщик: Все</button>
+          <button id="rej-period-btn" class="btn" type="button">Период…</button>
+        </div>
+        <button id="btn-refresh-rej" class="btn btn-accent" type="button">Обновить данные</button>
+      </div>
+
+      <div id="rej-spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Загружаем данные из ABCP…</span></div>
+      <div id="rej-error" class="notice notice-error hidden"></div>
+
+      <div id="rej-body" class="hidden">
+        <div class="meta-line">
+          <span id="rej-meta"></span>
+          <span class="meta-dot">·</span>
+          <span id="rej-orders"></span>
+        </div>
+
+        <div class="cards">
+          <div class="card card-overdue">
+            <span class="card-label">Позиций с отказом</span>
+            <span class="card-value" id="rej-refusal">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Всего позиций</span>
+            <span class="card-value" id="rej-total">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Поставщиков с отказами</span>
+            <span class="card-value" id="rej-dists">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Средний % отказов</span>
+            <span class="card-value" id="rej-avg">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Сумма отказов, руб.</span>
+            <span class="card-value" id="rej-sum">0</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2 class="panel-title">Поставщики · % отказов</h2>
+          <div id="rej-distributors" class="distributors"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Экран отчёта по отказам по клиентам -->
+    <section id="view-client-rejections" class="view">
+      <div class="toolbar">
+        <div class="filters">
+          <button id="btn-crj-client" class="btn" type="button">Клиент: Все</button>
+          <button id="crj-period-btn" class="btn" type="button">Период…</button>
+        </div>
+        <button id="btn-refresh-crj" class="btn btn-accent" type="button">Обновить данные</button>
+      </div>
+
+      <div id="crj-spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Загружаем данные из ABCP…</span></div>
+      <div id="crj-error" class="notice notice-error hidden"></div>
+
+      <div id="crj-body" class="hidden">
+        <div class="meta-line">
+          <span id="crj-meta"></span>
+          <span class="meta-dot">·</span>
+          <span id="crj-orders"></span>
+        </div>
+
+        <div class="cards">
+          <div class="card card-overdue">
+            <span class="card-label">Позиций с отказом</span>
+            <span class="card-value" id="crj-refusal">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Всего позиций</span>
+            <span class="card-value" id="crj-total">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Клиентов с отказами</span>
+            <span class="card-value" id="crj-dists">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Средний % отказов</span>
+            <span class="card-value" id="crj-avg">0</span>
+          </div>
+          <div class="card">
+            <span class="card-label">Сумма отказов, руб.</span>
+            <span class="card-value" id="crj-sum">0</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2 class="panel-title">Клиенты · % отказов</h2>
+          <div id="crj-distributors" class="distributors"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Экран настроек -->
+    <section id="view-settings" class="view">
+      <div class="settings-layout">
+        <form id="settings-form" class="panel settings-panel" autocomplete="off">
+          <h2 class="panel-title">Подключение к ABCP</h2>
+          <p class="field-hint">Период и статусы «товар получен» настраиваются на вкладке «Отчёт».</p>
+
+          <label class="field">
+            <span class="field-label">Хост API</span>
+            <input id="set-host" class="input" type="text"
+                   placeholder="например id15752.public.api.abcp.ru">
+            <span class="field-hint">Из раздела «Настройка → Система → Данные для доступа к API»</span>
+          </label>
+
+          <label class="field">
+            <span class="field-label">API-администратор (логин)</span>
+            <input id="set-login" class="input" type="text"
+                   placeholder="например api@id15752">
+          </label>
+
+          <label class="field">
+            <span class="field-label">MD5-пароль</span>
+            <input id="set-password" class="input" type="password"
+                   placeholder="Строка из 32 символов — MD5-хеш пароля">
+            <span class="field-hint" id="password-hint"></span>
+          </label>
+
+          <div class="settings-actions">
+            <button id="btn-save" class="btn btn-accent" type="submit">Сохранить</button>
+            <span id="settings-msg" class="settings-msg"></span>
+          </div>
+          <div class="settings-actions" style="margin-top:8px; flex-wrap:wrap">
+            <button id="btn-show-ip" class="btn" type="button">Показать IP сервера для ABCP</button>
+            <span id="server-ip" class="settings-msg"></span>
+          </div>
+          <p class="field-hint">Это внешний IP сервера приложения — его нужно добавить в список разрешённых IP в настройках клиентского доступа ABCP, чтобы заработал живой поиск цен (Проценка).</p>
+          <h2 class="panel-title" style="margin-top:20px">Отправка писем поставщикам (SMTP)</h2>
+          <p class="field-hint">Настройки почтового ящика, с которого приложение шлёт поставщикам письма о снятии позиций. Сохраните после заполнения.</p>
+          <label class="field"><span class="field-label">SMTP-сервер</span><input id="smtp-host" class="input" type="text" placeholder="smtp.example.ru"></label>
+          <label class="field-row">
+            <label class="field inline"><span class="field-label">Порт</span><input id="smtp-port" class="input" type="number" placeholder="587"></label>
+            <label class="field inline" style="justify-content:flex-start"><input id="smtp-secure" type="checkbox" style="width:auto;margin:0 6px 0 0"><span class="field-label">TLS/SSL (465)</span></label>
+          </label>
+          <label class="field"><span class="field-label">Логин</span><input id="smtp-user" class="input" type="text" autocomplete="off"></label>
+          <label class="field"><span class="field-label">Пароль</span><input id="smtp-pass" class="input" type="password" autocomplete="new-password"></label>
+          <label class="field"><span class="field-label">Адрес отправителя (From)</span><input id="smtp-from" class="input" type="text" placeholder="manager@example.ru"></label>
+          <div class="settings-actions" style="margin-top:8px">
+            <button id="btn-save-smtp" class="btn" type="button">Сохранить SMTP</button>
+            <span id="smtp-msg" class="settings-msg"></span>
+          </div>
+        </form>
+
+        <aside class="panel info-panel">
+          <h2 class="panel-title">Как это работает</h2>
+          <ul class="info-list">
+            <li>Сервер обращается к <code>GET cp/orders</code> и забирает заказы за заданный период.</li>
+            <li>Плановая дата поставки = дата заказа + срок поставки (гарантированный, если он задан).</li>
+            <li>Позиция просрочена, если плановая дата уже прошла и её статус не выбран как «получен».</li>
+            <li>Логин и MD5-пароль хранятся на сервере и не попадают в браузер — в интерфейсе они маскируются.</li>
+          </ul>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <!-- Выбор поставщиков («Ручной автомат») -->
+  <div id="ma-suppliers-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Выбор поставщиков</span>
+        <button id="ma-suppliers-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <div class="ma-suppliers-search"><input id="ma-supplier-search" type="text" placeholder="Поиск поставщика…"></div>
+      <div id="ma-suppliers-list" class="exclusion-modal-body"></div>
+      <div class="ma-suppliers-foot">
+        <span id="ma-suppliers-count" class="ma-suppliers-count"></span>
+        <button id="ma-suppliers-save" class="btn btn-accent" type="button">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Заказы клиентов («Ручной автомат») -->
+  <div id="ma-clients-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Заказы клиентов</span>
+        <button id="ma-clients-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Клиент</th><th>Заказов</th><th>Штук</th><th>Сумма</th><th>Маржа</th><th>Маржа %</th>
+            </tr>
+          </thead>
+          <tbody id="ma-clients-rows"></tbody>
+          <tfoot>
+            <tr class="totals-row">
+              <td>Итог</td>
+              <td class="num" id="ma-clients-total-orders">0</td>
+              <td class="num" id="ma-clients-total-qty">0</td>
+              <td class="num" id="ma-clients-total-sum">0 ₽</td>
+              <td class="num" id="ma-clients-total-margin">0 ₽</td>
+              <td class="num" id="ma-clients-total-marginpct">0%</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Ручной автомат -->
+  <section id="view-manual-automat" class="view">
+    <div class="toolbar">
+      <button id="btn-ordered-all" class="btn btn-accent" type="button">Отметить все как Заказан</button>
+      <button id="btn-clients-ma" class="btn btn-accent" type="button">Заказы клиентов</button>
+      <button id="btn-refresh-ma" class="btn btn-accent" type="button">Обновить данные</button>
+    </div>
+    <div id="ma-spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Загружаем данные из ABCP…</span></div>
+    <div id="ma-error" class="notice notice-error hidden"></div>
+
+    <div id="ma-body" class="hidden">
+      <div class="meta-line">
+        <span id="ma-meta"></span>
+      </div>
+
+      <section class="panel">
+        <div class="panel-title">Отправлено (статистика)</div>
+        <div class="kpi-row" style="margin-bottom:10px">
+          <div class="kpi"><div class="kpi-label">Сегодня поз.</div><div class="kpi-value" id="ma-st-today-pos">0</div></div>
+          <div class="kpi"><div class="kpi-label">Сегодня шт.</div><div class="kpi-value" id="ma-st-today-qty">0</div></div>
+          <div class="kpi"><div class="kpi-label">Сегодня сумма</div><div class="kpi-value" id="ma-st-today-sum">0 ₽</div></div>
+          <div class="kpi"><div class="kpi-label">Сегодня заказов</div><div class="kpi-value" id="ma-st-today-orders">0</div></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Поставщики для сводки (статус «Принят»)</div>
+        <label class="checkbox-item" style="margin-bottom:10px">
+          <input id="ma-auto" type="checkbox"> Автоматически менять «Принят» → «Заказан»
+        </label>
+        <button id="ma-supplier-btn" class="btn" type="button">Выбрать поставщиков…</button>
+      </section>
+
+      <section class="panel">
+        <div class="table-wrap">
+          <table class="table eu-table">
+            <thead>
+              <tr>
+                <th>Заказ / дата</th>
+                <th>Клиент</th>
+                <th>Поставщик</th>
+                <th>Бренд / код</th>
+                <th>Описание</th>
+                <th>Штук</th>
+                <th>Цена</th>
+                <th>Цена поставщика</th>
+                <th>Маржа</th>
+                <th>Сумма</th>
+                <th>Сумма закупки</th>
+                <th>Статус</th>
+              </tr>
+            </thead>
+            <tbody id="ma-rows"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- Анализ заказов клиентов -->
+  <section id="view-client-analysis" class="view">
+    <div class="toolbar">
+      <div class="filters">
+        <button id="ca-period-btn" class="btn" type="button">Период…</button>
+      </div>
+      <button id="btn-refresh-ca" class="btn btn-accent" type="button">Обновить данные</button>
+    </div>
+    <div id="ca-spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Загружаем данные из ABCP…</span></div>
+    <div id="ca-error" class="notice notice-error hidden"></div>
+
+    <div id="ca-body" class="hidden">
+      <div class="meta-line">
+        <span id="ca-meta"></span>
+        <span class="meta-dot">·</span>
+        <span id="ca-summary"></span>
+      </div>
+
+      <section class="panel">
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Клиент</th>
+                <th>Сумма выданных</th>
+                <th>Закупочная по выданным</th>
+                <th>Маржа</th>
+                <th>Маржа, %</th>
+                <th>Заказов</th>
+                <th>Штук</th>
+              </tr>
+            </thead>
+            <tbody id="ca-rows"></tbody>
+            <tfoot id="ca-totals"></tfoot>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- Отчет Европа (поставщик EU) -->
+  <section id="view-europe" class="view">
+    <div class="toolbar">
+      <div class="filters">
+        <button id="eu-period-btn" class="btn" type="button">Период…</button>
+      </div>
+      <button id="btn-refresh-eu" class="btn btn-accent" type="button">Обновить данные</button>
+    </div>
+    <div id="eu-spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Загружаем данные из ABCP…</span></div>
+    <div id="eu-error" class="notice notice-error hidden"></div>
+
+    <div id="eu-body" class="hidden">
+      <div class="meta-line"><span id="eu-meta"></span><span class="meta-dot">·</span><span id="eu-summary"></span></div>
+      <details id="eu-legend" class="params" style="margin-bottom:16px">
+        <summary class="params-summary">Легенда — как читать «Отчет Европа»</summary>
+        <div class="params-body">
+          <ul class="info-list">
+            <li><strong>Бренд</strong> — производитель (марка) заказанной детали.</li>
+            <li><strong>Заказов</strong> — число уникальных заказов по бренду за период.</li>
+            <li><strong>Штук</strong> — суммарное количество заказанных деталей.</li>
+            <li><strong>Сумма</strong> — оборот по бренду (цена продажи × кол-во × курс).</li>
+            <li><strong>Сумма выданного</strong> — сумма позиций со статусом «Выдан» (фактически выданных деталей).</li>
+            <li><strong>Отказы (сумма, %)</strong> — доля отказанных позиций по сумме; «Отказ» и «Отказ по браку» считаются как один отказ.</li>
+            <li><strong>Отказы (₽)</strong> — сумма отказанных позиций в рублях по бренду.</li>
+            <li><strong>Отказы (кол-во, %)</strong> — доля отказов по количеству штук.</li>
+            <li><strong>Ср. срок до выдачи, дн.</strong> — средний срок от даты заказа до статуса «Выдан», взвешенный по количеству выданных деталей (по всем 100% выданных). Если за период нет выданных позиций — прочерк.</li>
+            <li><strong>Период</strong> — по умолчанию последние 90 дней, отчёт только по поставщику «EU».</li>
+          </ul>
+        </div>
+      </details>
+      <section class="panel">
+        <div class="table-wrap">
+          <table class="table eu-table">
+            <thead>
+              <tr>
+                <th>Бренд</th><th>Заказов</th><th>Штук</th><th>Сумма</th><th>Сумма выданного</th><th>Отказы (сумма, %)</th><th>Отказы (₽)</th><th>Отказы (кол-во, %)</th><th>Ср. срок до выдачи, дн.</th>
+              </tr>
+            </thead>
+            <tbody id="eu-rows"></tbody>
+            <tfoot id="eu-totals"></tfoot>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- Конфигуратор сроков поставки для клиента -->
+  <section id="view-client-config" class="view">
+    <div class="toolbar">
+      <div class="filters">
+        <button id="cc-suppliers-btn" class="btn" type="button">Поставщики…</button>
+      </div>
+      <button id="btn-refresh-cc" class="btn btn-accent" type="button">Обновить данные</button>
+    </div>
+    <div id="cc-spinner" class="spinner-wrap hidden"><div class="spinner"></div><span>Загружаем данные из ABCP…</span></div>
+    <div id="cc-error" class="notice notice-error hidden"></div>
+
+    <div id="cc-body" class="hidden">
+      <div class="meta-line"><span id="cc-meta"></span><span class="meta-dot">·</span><span id="cc-summary"></span></div>
+      <section class="panel">
+        <div class="table-wrap">
+          <table class="table eu-table">
+            <thead>
+              <tr>
+                <th>Поставщик</th><th>Заказов</th><th>Штук</th><th>Мин</th><th>Макс</th>
+              </tr>
+            </thead>
+            <tbody id="cc-rows"></tbody>
+            <tfoot id="cc-totals"></tfoot>
+          </table>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- Модалка выбора поставщиков (конфигуратор) -->
+  <div id="cc-suppliers-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Поставщики</span>
+        <div style="display:flex;gap:8px">
+          <button id="cc-select-all" class="btn btn-sm" type="button">Выбрать всех</button>
+          <button id="cc-select-none" class="btn btn-sm" type="button">Снять всех</button>
+          <button id="cc-modal-close" class="exclusion-close" type="button">×</button>
+        </div>
+      </div>
+      <div class="cc-toolbar">
+        <input id="cc-search" class="input" placeholder="Поиск по названию…" autocomplete="off">
+      </div>
+      <div class="table-wrap" style="max-height:52vh;overflow-y:auto">
+        <table class="table eu-table">
+          <thead>
+            <tr>
+              <th style="width:44px"></th>
+              <th style="text-align:left">Поставщик</th>
+            </tr>
+          </thead>
+          <tbody id="cc-list"></tbody>
+        </table>
+      </div>
+      <div class="exclusion-modal-foot">
+        <button id="cc-save" class="btn btn-accent" type="button">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Почты поставщиков -->
+  <section id="view-supplier-emails" class="view">
+    <div class="toolbar">
+      <div class="filters">
+        <span class="field-hint" id="se-status">загрузка…</span>
+        <span class="field-hint" id="se-progress" style="color:var(--accent)"></span>
+      </div>
+      <button id="se-fetch" class="btn" type="button">⬇ Заполнить почты из ABCP</button>
+    </div>
+    <div class="panel">
+      <h2 class="panel-title">Почты поставщиков</h2>
+      <div class="se-addbar">
+        <input id="se-new-name" class="input" type="text" placeholder="Название поставщика">
+        <input id="se-new-emails" class="input" type="text" placeholder="Почты через запятую">
+        <button id="se-add" class="btn btn-accent" type="button">Добавить</button>
+      </div>
+      <p class="field-hint" id="se-fetch-info"></p>
+      <div id="se-list" class="se-list"></div>
+      <div id="se-empty" class="empty hidden">Список пуст. Новые поставщики добавляются автоматически при обновлении данных.</div>
+    </div>
+  </section>
+
+  <!-- Логи -->
+  <section id="view-logs" class="view">
+    <div class="toolbar">
+      <div class="filters">
+        <div class="logtabs">
+          <button class="logtab is-active" data-logcat="mail" type="button">Почта</button>
+          <button class="logtab" data-logcat="abcp" type="button">ABCP</button>
+          <button class="logtab" data-logcat="term" type="button">Изменение срока</button>
+          <button class="logtab" data-logcat="automat" type="button">Автомат</button>
+        </div>
+        <input type="date" id="logs-date" class="input" title="Показать логи за выбранную дату">
+        <button id="btn-logs-today" class="btn" type="button">Сегодня</button>
+        <span class="field-hint" id="logs-hint"></span>
+      </div>
+      <div class="filters">
+        <button id="btn-refresh-logs" class="btn btn-accent" type="button">Обновить</button>
+        <button id="btn-clear-logs" class="btn" type="button">Очистить</button>
+      </div>
+    </div>
+    <div id="logs-err" class="notice notice-error hidden"></div>
+    <div class="panel">
+      <div id="logs-rows" class="logs-rows"></div>
+      <div id="logs-empty" class="empty hidden">Логи пока пусты.</div>
+    </div>
+  </section>
+
+  <!-- Пользователи -->
+  <section id="view-users" class="view">
+    <div class="toolbar">
+      <div class="filters">
+        <span class="field-hint" id="users-info">Управление пользователями доступно главному администратору.</span>
+      </div>
+      <button id="btn-refresh-users" class="btn btn-accent" type="button">Обновить</button>
+    </div>
+    <div id="users-error" class="notice notice-error hidden"></div>
+    <div class="panel">
+      <h2 class="panel-title">Список пользователей</h2>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Логин</th><th>Имя</th><th>Роль</th><th class="num">Разделы</th></tr></thead>
+          <tbody id="users-rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2 class="panel-title">Добавить пользователя</h2>
+      <div class="field-row">
+        <label class="field"><span class="field-label">Логин</span><input id="u-login" class="input" type="text"></label>
+        <label class="field"><span class="field-label">Имя</span><input id="u-name" class="input" type="text"></label>
+        <label class="field"><span class="field-label">Пароль</span><input id="u-password" class="input" type="password"></label>
+        <label class="field">
+          <span class="field-label">Роль</span>
+          <select id="u-role" class="input">
+            <option value="user">Пользователь</option>
+            <option value="admin">Администратор</option>
+          </select>
+        </label>
+      </div>
+      <div style="margin-top:12px">
+        <span class="field-hint" id="u-sections-hint">Разделы, доступные пользователю:</span>
+        <div id="u-sections" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px"></div>
+      </div>
+      <div class="settings-actions" style="margin-top:12px">
+        <button id="btn-add-user" class="btn btn-accent" type="button">Создать</button>
+        <span id="u-msg" class="settings-msg"></span>
+      </div>
+    </div>
+  </section>
+
+  <div id="us-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Разделы пользователя</span>
+        <button id="us-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <div id="us-list" style="padding:12px 16px"></div>
+      <div style="padding:12px 16px;border-top:1px solid var(--line)">
+        <button id="us-save" class="btn btn-accent" type="button">Сохранить</button>
+        <span id="us-msg" class="settings-msg"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Экран входа -->
+  <div id="login-screen" class="login-screen hidden">
+    <form id="login-form" class="login-card" autocomplete="off">
+      <h2 class="login-title">Вход в «Отчеты ПрофМаркет»</h2>
+      <div id="login-needs-setup" class="field-hint hidden">Приложение ещё не настроено. Создайте первого пользователя (главного администратора).</div>
+      <label class="field"><span class="field-label">Логин</span><input id="li-login" class="input" type="text" autocomplete="username"></label>
+      <label class="field"><span class="field-label">Пароль</span><input id="li-password" class="input" type="password" autocomplete="current-password"></label>
+      <div id="login-error" class="notice notice-error hidden"></div>
+      <button id="btn-login" class="btn btn-accent" type="submit">Войти</button>
+      <span id="login-setup-btn-wrap" class="hidden" style="margin-top:10px"><button id="btn-go-setup" class="btn" type="button">Создать первого администратора</button></span>
+    </form>
+  </div>
+
+  <div id="setup-screen" class="login-screen hidden">
+    <form id="setup-form" class="login-card" autocomplete="off">
+      <h2 class="login-title">Создание главного администратора</h2>
+      <label class="field"><span class="field-label">Логин</span><input id="su-login" class="input" type="text" autocomplete="off"></label>
+      <label class="field"><span class="field-label">Имя</span><input id="su-name" class="input" type="text" autocomplete="off"></label>
+      <label class="field"><span class="field-label">Пароль</span><input id="su-password" class="input" type="password" autocomplete="new-password"></label>
+      <div id="setup-error" class="notice notice-error hidden"></div>
+      <button class="btn btn-accent" type="submit">Создать и войти</button>
+    </form>
+  </div>
+
+  <div id="status-legend-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title" id="status-legend-title">История статусов</span>
+        <button id="status-legend-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <div id="status-legend-list" class="status-legend-list"></div>
+    </div>
+  </div>
+
+  <!-- Просрочка по поставщику -->
+  <div id="ovd-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card exclusion-modal-card-wide">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Просроченные позиции: <span id="ovd-title"></span></span>
+        <button id="ovd-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <div class="exclusion-modal-body" style="overflow:auto;max-height:60vh">
+        <div id="ovd-status-filter" class="rp-filter hidden"></div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th class="num"><input type="checkbox" id="ovd-check-all" aria-label="Выделить все" title="Выделить все"></th><th>Дата заказа</th><th>Заказ</th><th>Артикул</th><th>Клиент</th>
+              <th class="num">Кол-во</th><th class="num">Сумма</th><th>Статус</th><th>Ожидается</th><th class="num">Просрочка</th><th class="num">Отправлено</th>
+            </tr>
+          </thead>
+          <tbody id="ovd-rows"></tbody>
+        </table>
+      </div>
+      <div style="padding:12px 16px;border-top:1px solid var(--line)">
+        <div id="ovd-sent" class="field-hint"></div>
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button id="ovd-request" class="btn btn-accent" type="button">Запросить срок поставки</button>
+          <button id="ovd-refusal" class="btn btn-danger" type="button">Снять (отказ)</button>
+          <span id="ovd-info" class="field-hint"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="crj-client-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Выбор клиента</span>
+        <button id="crj-client-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <input id="crj-client-search" class="input" type="search" placeholder="Поиск клиента…">
+      <div id="crj-client-list" class="exclusion-list"></div>
+    </div>
+  </div>
+
+  <div id="crj-detail-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card crj-detail-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title" id="crj-detail-title">Детализация</span>
+        <div class="modal-actions">
+          <button id="crj-detail-export" class="btn btn-sm" type="button">Экспорт Excel</button>
+          <button id="crj-detail-close" class="exclusion-close" type="button">×</button>
+        </div>
+      </div>
+      <div id="crj-detail-list" class="crj-detail-list"></div>
+      <div id="crj-detail-total" class="crj-detail-total"></div>
+    </div>
+  </div>
+
+  <div id="rej-clients-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card crj-detail-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title" id="rej-clients-title">Клиенты поставщика</span>
+        <div class="modal-actions">
+          <button id="rej-clients-export" class="btn btn-sm" type="button">Экспорт Excel</button>
+          <button id="rej-clients-close" class="exclusion-close" type="button">×</button>
+        </div>
+      </div>
+      <div id="rej-clients-wrap" class="rej-clients-wrap"></div>
+      <div id="rej-clients-total" class="rej-clients-total"></div>
+    </div>
+  </div>
+
+  <div id="wh-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card crj-detail-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title" id="wh-title">Склады</span>
+        <div class="modal-actions">
+          <button id="wh-export" class="btn btn-sm" type="button">Экспорт Excel</button>
+          <button id="wh-close" class="exclusion-close" type="button">×</button>
+        </div>
+      </div>
+      <div id="wh-wrap" class="rej-clients-wrap"></div>
+      <div id="wh-total" class="rej-clients-total"></div>
+    </div>
+  </div>
+
+  <div id="pr-supplier-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Выбор поставщиков</span>
+        <button id="pr-supplier-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <input id="pr-supplier-search" class="input" type="search" placeholder="Поиск поставщика…">
+      <div id="pr-supplier-list" class="exclusion-list"></div>
+      <div style="padding:12px 16px;border-top:1px solid var(--line)">
+        <button id="pr-supplier-apply" class="btn btn-accent" type="button">Сравнить выбранных</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="rej-supplier-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Выбор поставщика</span>
+        <button id="rej-supplier-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <input id="rej-supplier-search" class="input" type="search" placeholder="Поиск поставщика…">
+      <div id="rej-supplier-list" class="exclusion-list"></div>
+    </div>
+  </div>
+
+  <div id="exclusion-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Добавить исключение</span>
+        <button id="exclusion-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <input id="exclusion-search" class="input" type="search" placeholder="Поиск поставщика…">
+      <div id="exclusion-list" class="exclusion-list"></div>
+    </div>
+  </div>
+
+  <!-- Универсальный выбор периода -->
+  <div id="period-modal" class="exclusion-modal hidden">
+    <div class="exclusion-modal-card period-modal-card">
+      <div class="exclusion-modal-head">
+        <span class="exclusion-modal-title">Выбор периода</span>
+        <button id="period-close" class="exclusion-close" type="button">×</button>
+      </div>
+      <div class="period-modal-body">
+        <div class="period-presets">
+          <span class="field-label">Быстрый выбор</span>
+          <button class="btn preset-btn" data-preset="today" type="button">Сегодня</button>
+          <button class="btn preset-btn" data-preset="yesterday" type="button">Вчера</button>
+          <button class="btn preset-btn" data-preset="7" type="button">За 7 дней</button>
+          <button class="btn preset-btn" data-preset="10" type="button">За 10 дней</button>
+          <button class="btn preset-btn" data-preset="30" type="button">За 30 дней</button>
+          <button class="btn preset-btn" data-preset="6m" type="button">За 6 месяцев</button>
+          <button class="btn preset-btn" data-preset="12m" type="button">За 12 месяцев</button>
+          <button class="btn preset-btn" data-preset="thisMonth" type="button">За этот месяц</button>
+          <button class="btn preset-btn" data-preset="thisYear" type="button">За этот год</button>
+          <button class="btn preset-btn" data-preset="prevMonth" type="button">Предыдущий месяц</button>
+        </div>
+        <div class="period-cals">
+          <div class="period-cal">
+            <div class="field-label pc-range-label">С: <span id="pc-start-label"></span></div>
+            <div id="pc-cal-start" class="pc"></div>
+          </div>
+          <div class="period-cal">
+            <div class="field-label pc-range-label">По: <span id="pc-end-label"></span></div>
+            <div id="pc-cal-end" class="pc"></div>
+          </div>
+        </div>
+      </div>
+      <div style="padding:12px 16px;border-top:1px solid var(--line);text-align:right">
+        <button id="period-ok" class="btn btn-accent" type="button">OK</button>
+      </div>
+    </div>
+  </div>
+
+<script src="app.js?v=20260929.114"></script>
+</body>
+</html>
