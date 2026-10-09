@@ -10375,10 +10375,16 @@
     }
     container.innerHTML = filtered.map((s) => {
       const checked = sel.some((x) => String(x) === String(s.id)) ? "checked" : "";
+      const sec = (state.params && state.params.reportsSections) || {};
+      const checks = REPORTS_SECTIONS.map(([key, name]) => {
+        const on = (sec[key] || []).some((x) => String(x) === String(s.id));
+        return `<label class="rs-check" title="${escapeHtml(name)}"><input type="checkbox" data-rs-user="${escapeHtml(String(s.id))}" data-rs-key="${key}" ${on ? "checked" : ""} /><span>${escapeHtml(String(name).slice(0, 4))}.</span></label>`;
+      }).join("");
       return `<label class="group-check">
         <input type="checkbox" value="${escapeHtml(String(s.id))}" ${checked} />
         <span>${escapeHtml(s.name)}</span>
-      </label>`;
+      </label>
+      <div class="rs-row rs-inline"><div class="rs-checks">${checks}</div></div>`;
     }).join("");
     container.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
       cb.addEventListener("change", () => applyParams());
