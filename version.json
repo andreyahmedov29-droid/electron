@@ -1,5 +1,5 @@
 {
-  "versionCode": 33,
-  "versionName": "1.1.39",
-  "notes": "Принудительный запуск Windows-сборки (версия выше установленной 1.1.x)"
+  "versionCode": 34,
+  "versionName": "1.1.40",
+  "notes": "Запуск Windows-сборки без skip-ci"
 }
